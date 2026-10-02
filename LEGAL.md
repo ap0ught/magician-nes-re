@@ -2,9 +2,15 @@
 
 ## The cartridge is never committed
 
-`roms/` is git-ignored, `.gitattributes` marks `*.nes` binary, and no test, fixture or golden
-file in this repository contains cartridge bytes. The ROM is read in place from the path in
-`README.md` or from `$MAG_ROM`.
+`roms/` is git-ignored (and does not exist), and `.gitignore` excludes `*.nes`
+repository-wide, so no test, fixture or golden file can pick up cartridge bytes by
+accident. There is no `.gitattributes`; an earlier version of this file claimed one
+marked `*.nes` binary, which was not true.
+
+The ROM is read in place from the path recorded in `README.md`, which is
+`asm/build.py --cart` with that value as its default. **There is no `$MAG_ROM`
+environment variable** — an earlier version of this file mentioned one and no code
+in this repository reads it.
 
 The cartridge is the user's own. It stays on this machine.
 
