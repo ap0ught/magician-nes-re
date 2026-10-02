@@ -735,6 +735,15 @@ class Assembler:
         # x7's `if 0=1` level-table branch. See the module docstring: it holds
         # 27 640 bytes of real data and the cartridge was built with it on.
         self.force_conditions: dict[str, bool] = {}
+        # Symbols whose assignment also switches the output slot. See
+        # maybe_prebank(): x7's `memchk c000,b` banks the *next* group.
+        self.prebank_symbols: frozenset[str] = frozenset()
+        self.prebank_log: list[tuple[str, int, int]] = []
+        # Bytes a module wrote past its slot window where the next window is a
+        # different slot, so no file offset can be chosen for them. See
+        # prg_offset(): folding them back over the module's own start is what
+        # silently destroyed X5's `sql` table.
+        self.overflow: list[tuple[str, int, int]] = []
         self.report: list[str] = []
 
         self.cond: list[bool] = []
@@ -839,8 +848,49 @@ class Assembler:
         return 0x8000 + (slot & 3) * 0x2000
 
     def prg_offset(self, phys: int | None = None) -> int:
+        """Where a byte at physical address `phys` goes in the PRG image.
+
+        A byte belongs to the 8 KiB *window* its address falls in -- `$8000`,
+        `$A000`, `$C000` or `$E000` -- and takes the offset within that window.
+        Which slot supplies the window is `self.slot`, set by `bank`.
+
+        Two things about this source make the obvious implementation wrong, and
+        both were measured against the cartridge rather than reasoned about:
+
+        * **`$8000` means "the start of the current bank", not "the `$8000`
+          window".** Every level-data group opens with `load 10.blk,$8000,$a000`
+          and its bank counter `b = $8` / `$9` / … `$d` names the *slot*, so
+          physical `$8000` has to land at offset 0 of slot 8, 9, … `$d`. A window
+          table taken from `slot_origin` would put `$8000` at offset 0 of slot 8
+          but at offset `-0x2000` of slot `$d`, dropping the whole group. This is
+          also what the source itself means: `load mus.mus,$8000` is commented
+          "org must = $8000!".
+
+        * **The MMC3 fixed window is contiguous, and a module may run past it.**
+          X5 is `org $c000` in slot 14 and runs to `$E4DB` -- 9 227 bytes into an
+          8 KiB window. Subtracting a hardcoded `$8000` and masking with `& 0x1FFF`
+          folded those 1 035 bytes back onto `0x1C000`, overwriting the
+          `sql`/`sqh`/`cos` tables X5 had emitted there ten lines earlier, so the
+          `sql` table -- which the cartridge carries byte-identically at file
+          `0x1C000` *and* `0x1C080` -- was missing from all 131 072 bytes of the
+          rebuild. `$E000` in slot 14 is genuinely slot 15, and that is where the
+          cartridge has it.
+
+        So the window is `$8000 + ((p - $8000) & $6000)`, the offset is `p`
+        within it, and slot 14 hands `$E000`-`$FFFF` to slot 15. Beyond that the
+        address cannot be placed without a `bank` directive saying which slot is
+        there, so the byte is dropped and recorded in `overflow` rather than
+        folded.
+        """
         p = self.phys if phys is None else phys
-        return self.slot * self.SLOT + ((p - 0x8000) & 0x1FFF)
+        if not 0x8000 <= p < 0x10000:
+            self.overflow.append((self.here.name, p & 0xFFFF, self.slot))
+            return -1
+        win = 0x8000 + ((p - 0x8000) & 0x6000)
+        slot = self.slot
+        if win >= 0xE000 and slot == 14:
+            slot = 15                      # `$C000`-`$DFFF` is 14, `$E000`- is 15
+        return slot * self.SLOT + (p - win)
 
     def emit(self, byte: int):
         off = self.prg_offset()
@@ -895,7 +945,7 @@ class Assembler:
                 "redef": set(self.redefinable), "const": set(self.constants),
                 "pre": set(self.preexisting), "data": set(self.data_offsets),
                 "slot": self.slot, "phys": self.phys, "log": self.log,
-                "star": self.star}
+                "star": self.star, "prebank": list(self.prebank_log)}
 
     def restore(self, snap: dict):
         self.sym = dict(snap["sym"])
@@ -906,6 +956,7 @@ class Assembler:
         self.data_offsets = set(snap["data"])
         self.slot = snap["slot"]
         self.phys, self.log, self.star = snap["phys"], snap["log"], snap["star"]
+        self.prebank_log = list(snap["prebank"])
 
     def prescan(self, paths: list[pathlib.Path]):
         """Collect macro names up front: x1-x7 use macros that x0 defines, and a
@@ -1002,6 +1053,7 @@ class Assembler:
             self.emitted = {}
             self.data_offsets = set()
             self.unresolved = {}
+            self.overflow = []
             self.cond = []
             self.cond_taken = []
             self.scope = ""
@@ -1075,7 +1127,7 @@ class Assembler:
         if not self.active():
             # Keep the conditional stack balanced across a skipped block.
             if ln.op in ("if", "ifs"):
-                forced = self.force_conditions.get(ln.raw.strip().replace(" ", ""))
+                forced = self.forced_condition(ln)
                 self.cond.append(bool(forced))
                 self.cond_taken.append(bool(forced))
             elif ln.op == "else":
@@ -1094,7 +1146,9 @@ class Assembler:
                             constant=True)
                 return
             if ln.op == "=":
-                self.define(ln.label, self.value(ln.operands), ln.where, redefinable=True)
+                value = self.value(ln.operands)
+                self.define(ln.label, value, ln.where, redefinable=True)
+                self.maybe_prebank(ln.label, value)
                 return
             if ln.op == "macro":
                 return
@@ -1116,6 +1170,49 @@ class Assembler:
 
     def split_macro_args(self, operands: str) -> list[str]:
         return split_operands(operands) if operands.strip() else []
+
+    def maybe_prebank(self, name: str, value: int):
+        """Bank-switch when a *bank counter* symbol is assigned.
+
+        X7's data section is laid out as a run of groups, each opened by a
+        counter and closed by a check:
+
+            b  = $8              ;current bank
+            load 10.blk,$8000,$a000,,l10b
+            ...
+            memchk c000,b
+
+        `memchk` is `if *>$@1 error` then `bank @2` -- so it issues `bank b`
+        *after* the group it belongs to. Assembled literally, every group
+        therefore lands one 8 KiB slot below the bank its own `b` names, and the
+        run is off by one from end to end. Measured against the cartridge, that
+        is exactly what happens: `10.blk`, which `b = $8` says belongs in slot 8,
+        is found at file `0x0C000` = slot 6, `50.blk` (`b = $9`) at `0x10000` =
+        slot 8, and so on to `70.blk` (`b = $d`) at `0x18000` = slot 12.
+
+        The cartridge has them where `b` says: `10.blk`'s block data at
+        `0x1027C`-relative `l10m` = `$A27C` in slot 8, `l50m` = `$A26C` in slot 9,
+        `l70m` = `$A270` in slot 13 -- every level-data label's logical address
+        already agrees with the cartridge, so only the slot was wrong.
+
+        Banking on the counter assignment instead puts every group in the slot
+        its own `b` names, and takes the rebuilt PRG from 6.40% of the cartridge
+        to 28.83%: banks 4, 5 and 6 (the level data) go from 4.34/6.15/3.31% to
+        58.99/79.93/51.15%. See PROVENANCE.md.
+
+        Only symbols named in `prebank_symbols` are affected, and only when the
+        new value is a valid slot -- so this cannot fire on an ordinary counter.
+        Set `prebank_symbols = ()` to switch it off and get the literal reading
+        of the released source.
+        """
+        if not self.prebank_symbols:
+            return
+        if name.lower() not in self.prebank_symbols:
+            return
+        slot = value & 0x0F
+        if slot != self.slot:
+            self.slot = slot
+            self.prebank_log.append((self.here.name, self.star, slot))
 
     def expand_macro(self, macro: Macro, args: list[str], at: Line):
         binding = (args + [""] * 10)[:10]
@@ -1156,7 +1253,7 @@ class Assembler:
     def exec_directive(self, ln: Line, operands: str):
         op = ln.op
         if op == "if":
-            forced = self.force_conditions.get(ln.raw.strip().replace(" ", ""))
+            forced = self.forced_condition(ln)
             state = self.truth(operands) if forced is None else forced
             self.cond.append(state)
             self.cond_taken.append(state)
@@ -1189,6 +1286,25 @@ class Assembler:
             # `dc` is `db` under its own name: "define character".
             width = {"db": 1, "dc": 1, "dw": 2, "dh": 2, "dl": 4}[op]
             for item in split_operands(operands):
+                # `db "ABC"` emits one byte per character, not one byte per
+                # string. `Expr.string_value` folds a string into a little-endian
+                # integer and the `& 0xFF` below kept only the low byte, so
+                # `db "MAGIC1+"` emitted `4D` -- a single `M` -- and the cartridge's
+                # `4D 41 47 49 43 2D 2A 20 10 90` at file `0x1FFF0` became
+                # `4D 25 02 90`. It also collapses tables that are *indexed*:
+                # `x6.PDS:186`'s `slet1 db "    AIIAIXLUATAA ",qu` is read by
+                # `ldx slet1,y` and `sta slet1,x` (`x6.PDS:234`, `:467`), so the
+                # two bytes this emitted instead of eighteen silently moved every
+                # following address.
+                #
+                # Only `db`/`dc` are byte-per-character. A string is not a number,
+                # so `dw "AB"` has no defined width here; the source never writes
+                # one, and it still folds as before rather than inventing a width.
+                if width == 1 and item[:1] == '"' and len(item) >= 2 \
+                        and item[-1:] == '"':
+                    for ch in item[1:-1]:
+                        self.emit(ord(ch) & 0xFF)
+                    continue
                 v = self.value_or_defer(item, ln.where)
                 for k in range(width):
                     self.emit((v >> (8 * k)) & 0xFF)
@@ -1214,6 +1330,31 @@ class Assembler:
 
     def truth(self, text: str) -> bool:
         return self.value(text) != 0
+
+    def forced_condition(self, ln: Line) -> bool | None:
+        """An override for this statement's conditional, or None if there is none.
+
+        `force_conditions` is keyed by the *condition text* -- `{"0=1": True}` for
+        x7's level-table branch -- so the key has to be built from the statement's
+        operands, not from its raw text. It used to be
+        `ln.raw.strip().replace(" ", "")`, which keeps the keyword: the statement
+        is `\tif 0=1`, so the key that was looked up was `if0=1` and never matched
+        `0=1`. The override therefore never fired, `truth("0=1")` decided the
+        branch instead, and the branch was false -- so `--x7-level-table on` and
+        `off` produced byte-identical PRGs and 27 640 bytes of real level data were
+        skipped. `if 0=1` also carries a leading tab, so stripping spaces is not
+        enough on its own.
+        """
+        if not self.force_conditions:
+            return None
+        text = ln.raw.strip()
+        for kw in ("if ", "ifs ", "if\t", "ifs\t"):
+            if text.lower().startswith(kw):
+                text = text[len(kw):]
+                break
+        else:
+            return None
+        return self.force_conditions.get("".join(text.split()).lower())
 
     def ifs_args(self, operands: str):
         """`ifs [@2] []` -- compare a parameter's *text* with a literal."""

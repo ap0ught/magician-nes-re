@@ -121,11 +121,23 @@ def match_score(image: bytearray, cart: bytes, offsets) -> tuple[int, int]:
 
 
 def assemble_prg(cart_prg: bytes, verbose: bool,
-                  x7_table: bool = True, assume_banks: bool = True
+                  x7_table: bool = True, assume_banks: bool = True,
+                  bank_groups: bool = True, asm_cls=None
                   ) -> tuple[bytearray, Assembler, list[str], list[str]]:
+    # `asm_cls` exists so tools/whowrote.py can subclass the Assembler and keep a
+    # per-module footprint of which PRG offsets each bank wrote. The build itself
+    # always uses the real class.
+    #
+    # `bank_groups` compensates for x7's `memchk c000,b` banking the group *after*
+    # the one it closes -- see `Assembler.maybe_prebank`, which carries the
+    # measurement. With it on, x7's level data lands in the slots its own `b`
+    # counters name, which is where the cartridge has it.
+    cls = asm_cls or Assembler
+    banks = frozenset({"b"}) if bank_groups else frozenset()
     image = bytearray(PRG_SIZE)
-    asm = Assembler(image, SRC, [SRC], verbose=verbose)
+    asm = cls(image, SRC, [SRC], verbose=verbose)
     asm.force_conditions = {"0=1": x7_table}
+    asm.prebank_symbols = banks
     asm.prescan(ALL_SOURCES)
     asm.collect_macros(ALL_SOURCES)
     log: list[str] = []
@@ -232,8 +244,9 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     # take part -- an unplaced one would need a slot to have been found for it,
     # and inventing one is what this build stopped doing.
     image = bytearray(PRG_SIZE)
-    asm = Assembler(image, SRC, [SRC], verbose=verbose)
+    asm = cls(image, SRC, [SRC], verbose=verbose)
     asm.force_conditions = {"0=1": x7_table}
+    asm.prebank_symbols = banks
     asm.prescan(ALL_SOURCES)
     asm.collect_macros(ALL_SOURCES)
     placed = [(m, s) for m, s in zip(MODULES, slots) if s is not None]
@@ -312,6 +325,13 @@ def main() -> int:
                     help="x7's `if 0=1` branch. On by default: it holds 27640 bytes "
                          "of real level data and the cartridge was built with it "
                          "enabled. Off reproduces the development-build layout.")
+    ap.add_argument("--x7-bank-groups", choices=("on", "off"), default="on",
+                    help="bank each x7 data group when its `b = $N` counter is "
+                         "assigned, rather than at the `memchk c000,b` that closes "
+                         "it. On by default: it is what puts the level data in the "
+                         "slots the cartridge has it in (6.4%% -> 28.8%% of the "
+                         "cartridge matched). Off is the literal reading of the "
+                         "released source.")
     ap.add_argument("--no-assume-banks", action="store_true",
                     help="refuse to place a module whose slot the search could "
                          "not determine, instead of using ASSUMED_SLOTS")
@@ -325,7 +345,8 @@ def main() -> int:
     prg, asm, prg_log, unplaced = assemble_prg(
         cart_prg, args.verbose,
         x7_table=(args.x7_level_table == "on"),
-        assume_banks=not args.no_assume_banks)
+        assume_banks=not args.no_assume_banks,
+        bank_groups=(args.x7_bank_groups == "on"))
     chr_rom, chr_log = build_chr(cart_chr, args.verbose)
 
     (OUT / "prg.bin").write_bytes(bytes(prg))
@@ -376,6 +397,31 @@ def main() -> int:
         print("  These are a gap in the 2012 release, not an assembler fault. Any "
               "byte difference")
         print("  they cause is expected and must not be counted as a match.")
+
+    if asm.prebank_log:
+        banks_used = sorted({(f, s) for f, _, s in asm.prebank_log})
+        print(f"\nbank groups: {len(banks_used)} `b = $N` counter(s) banked on "
+              f"assignment (memchk banks the group after it, not its own):")
+        for fname, slotno in banks_used:
+            print(f"  {fname:<22} -> 8 KiB slot {slotno:>2}")
+        print("  with --x7-bank-groups off this is fewer bank switches and the "
+              "level data")
+        print("  lands one 8 KiB slot low; see Assembler.maybe_prebank.")
+
+    if asm.overflow:
+        by_file: dict[str, list[int]] = {}
+        for f, p, s in asm.overflow:
+            by_file.setdefault(f, []).append(p)
+        print(f"\n*** SLOT OVERFLOW: {len(asm.overflow)} byte(s) written past a "
+              f"module's 8 KiB window with no `bank` to say which slot is there. "
+              f"They are NOT in the image:")
+        for f, ps in sorted(by_file.items()):
+            lo, hi = min(ps), max(ps)
+            print(f"***   {f:<12} {len(ps):5d} byte(s), ${lo:04X}-${hi:04X}")
+        print("***   This is a hole that prints. Folding them back over the "
+              "module's own start is what")
+        print("***   silently destroyed X5's `sql` table; see "
+              "Assembler.prg_offset.")
 
     print(f"\nscanner report: {len(asm.report)} entries, {len(seen)} distinct")
     for entry, count in sorted(seen.items(), key=lambda kv: -kv[1])[:40]:
