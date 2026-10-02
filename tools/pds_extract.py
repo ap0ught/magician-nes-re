@@ -29,21 +29,34 @@ import sys
 # byte from here to the closing footer is text (no other control characters).
 BODY_OFFSET = 0x200
 
-# Every file ends with a short binary footer after the final source line.
-FOOTER_LEN = 2
+# Bytes the source text is allowed to contain: tab, CR, LF and printable ASCII.
+TEXT_BYTES = set(b"\t\r\n") | set(range(0x20, 0x7F))
 
 
 def decode(container: bytes) -> str:
-    """Return the plain-text source held by one PDS container."""
+    """Return the plain-text source held by one PDS container.
+
+    The text is a run of ``CR NUL``-terminated lines starting at
+    :data:`BODY_OFFSET`. A few lines carry a one-byte prefix that is not text
+    (``0x9c`` before x0's ``org $8000``, ``0x93`` before its trailer), so each
+    line's leading non-text bytes are dropped. Decoding then stops at the first
+    line that still contains non-text: past that point the container is keeping
+    a binary trailer whose own ``CR NUL`` pairs would otherwise decode into
+    garbage.
+    """
     body = container[BODY_OFFSET:]
-    if body.endswith(b"\x00" * FOOTER_LEN):
-        body = body[:-FOOTER_LEN]
-    text = body.decode("latin-1")
-    # CR NUL is this toolchain's line terminator.
-    text = text.replace("\r\x00", "\n")
-    stray = [i for i, ch in enumerate(text) if ch == "\x00"]
-    if stray:
-        raise ValueError(f"{len(stray)} stray NUL byte(s) in body, first at {stray[0]}")
+    chunks: list[str] = []
+    for chunk in body.split(b"\r\x00"):
+        start = 0
+        while start < len(chunk) and chunk[start] not in TEXT_BYTES:
+            start += 1
+        chunk = chunk[start:]
+        if any(b not in TEXT_BYTES for b in chunk):
+            break
+        chunks.append(chunk.decode("latin-1"))
+    text = "\n".join(chunks)
+    if "\x00" in text:
+        raise ValueError("NUL survived the line split")
     return text
 
 

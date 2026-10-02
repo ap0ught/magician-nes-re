@@ -18,8 +18,8 @@ Three goals, in the order they pay off:
 
 ## The cartridge this is built against
 
-Exactly one dump, pinned by digest in `crates/mag-core/src/rom.rs` next to every address that
-depends on it:
+Exactly one dump, pinned by digest. **Not yet enforced in code** — the pin is recorded here and
+in `PROVENANCE.md`, and `asm/build.py` is the place it belongs once `crates/` exists:
 
 | | |
 |---|---|
@@ -47,7 +47,7 @@ and the CHR artwork.
 
 The `.PDS` files are binary containers produced by the 1989 Atari ST toolchain PDS 1.26.
 `tools/pds_extract.py` decodes them to plain text into `pds-text/` (git-ignored, regenerated).
-13 104 lines of source, with every routine, RAM variable, macro and data format named.
+6 351 lines of source, with every routine, RAM variable, macro and data format named.
 
 ## Layout
 
@@ -56,7 +56,7 @@ vendor/Magician-NES/   upstream source (submodule)
 tools/pds_extract.py   PDS container -> plain text
 tools/                 build and analysis helpers
 asm/                   PDS-compatible assembler + cartridge build
-crates/                the Rust machine and front ends
+crates/                the Rust machine and front ends (not started yet)
 pds-text/              extracted source (generated)
 roms/                  the cartridge (git-ignored, never committed)
 ```
@@ -64,7 +64,21 @@ roms/                  the cartridge (git-ignored, never committed)
 ## Build
 
 ```sh
-python3 tools/pds_extract.py          # decode the PDS containers
 make -C asm                           # assemble the cartridge from source
-cargo build                           # the Rust machine
+make -C asm check                     # the same, failing if the output moved
+make -C asm verbose                   # per-file incbin trace
+make -C asm extract                   # decode the PDS containers into pds-text/
 ```
+
+The cartridge is read, never written, and never committed. The build reports how much of the
+rebuilt image agrees with it rather than failing on the difference: this source is a February 1990
+development build and the cartridge is a later one, so exact agreement is not the target — a
+characterised difference is. See `PROVENANCE.md` sections 3 and 6 for what currently matches, what
+does not, and the measurements behind both.
+
+## Status
+
+The rebuild works: all eight modules assemble, and `asm/` recovers 3 028 symbol names, which is
+the basis for every hack and for the moddable core. It is **not** yet a faithful cartridge — see
+`PROVENANCE.md` section 6 for the measured shortfall and the three open problems. `crates/` has not
+been started.

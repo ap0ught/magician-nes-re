@@ -20,3 +20,7 @@ asm/out/
 # Captured reference frames and scratch
 shots/
 out/
+
+# Python
+__pycache__/
+*.pyc
