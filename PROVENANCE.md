@@ -182,6 +182,38 @@ agreement was never the target — a *characterised* difference is. Current meas
 3. `exitm` is called from the `st` macro (`X0.PDS:34`) and defined nowhere. It currently assembles
    as a no-op label, which is byte-neutral, but it is an unverified reading.
 
+### Does the rebuilt ROM run?
+
+`asm/mkrom.py` joins the two images behind the cartridge's own iNES header (PROVENANCE section 1)
+into `asm/out/magician-rebuilt.nes`, 262 160 bytes with a byte-identical header. Verified in
+BizHawk 2.11.1 under Mono: it loads and the core reports `Mapper #4 "mmc3"`,
+`BoardID: "mmc3"`, with the BootGod hash matching the rebuilt body.
+
+**It does not boot to the title screen, and the reset vector says why:**
+
+| | rebuilt | cartridge |
+|---|---|---|
+| `nmi` | `$E882` | `$F9AB` |
+| `reset` | `$E89B` | `$F9C1` |
+| `irq` | `$E88D` | `$F9B3` |
+
+X7's slot is pinned to 15 from this vector evidence rather than searched (see
+`asm/build.py: PINNED_SLOTS`) — it is the only slot whose `org $fffa` reaches file `0x1FFFA`. Before
+that pin, x7 was assembled at slot 12, `org $fffa` landed at file `0x19FFA`, and the rebuilt ROM's
+reset vector was `$8681`, pointing into a different bank entirely.
+
+Pinning it fixed the bank but not the offset: the vectors are now in slot 15, `$1126` below the
+cartridge's. The relative spacing is preserved — `reset`-`nmi` is 25 bytes against the cartridge's
+22 — so 3 bytes are emitted too many in one small span, and the remaining gap is accumulated
+earlier in X7. That gap is open problem (1) in substance: until it closes, the CPU is sent to the
+wrong address and nothing else matters.
+
+Two things could not be measured on this machine, rather than not measured: BizHawk's Mono build
+needs a GL context to run a core, and there is no Xvfb here, so PNG frame dumping produces nothing
+and a Lua RAM probe dies at `client.cpu` because the client loop never starts. `--chromeless`
+still constructs the OpenGL control. Confirming "it reaches the title screen" needs either Xvfb or
+a headless NES core; neither is installed.
+
 The circularity in (1) is the thing to break next. The cart's reset vector is a known 2-byte
 value, and `start` is the first routine in X0.PDS:602, so placing X0 by matching `start` against
 the vector is a way in; the search has to score code with the *other* banks held fixed, iterating

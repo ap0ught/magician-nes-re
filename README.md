@@ -65,6 +65,7 @@ roms/                  the cartridge (git-ignored, never committed)
 
 ```sh
 make -C asm                           # assemble the cartridge from source
+make -C asm rom                       # wrap the result in an iNES header
 make -C asm check                     # the same, failing if the output moved
 make -C asm verbose                   # per-file incbin trace
 make -C asm extract                   # decode the PDS containers into pds-text/
@@ -82,3 +83,7 @@ The rebuild works: all eight modules assemble, and `asm/` recovers 3 028 symbol 
 the basis for every hack and for the moddable core. It is **not** yet a faithful cartridge — see
 `PROVENANCE.md` section 6 for the measured shortfall and the three open problems. `crates/` has not
 been started.
+
+`asm/out/magician-rebuilt.nes` loads in BizHawk and reports mapper 4, but does not boot: its reset
+vector is `$E89B` where the cartridge's is `$F9C1`. The vectors are the clearest single measurement
+of how far the rebuild is from the shipped build.

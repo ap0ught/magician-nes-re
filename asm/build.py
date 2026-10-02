@@ -42,6 +42,18 @@ CHR_SIZE = 128 * 1024
 
 MODULES = [f"X{i}.PDS" for i in range(8)]
 
+# Modules whose 8 KiB slot is *known* rather than searched, with the evidence.
+#
+# The search scores the bytes that came out of a `DAT` file, and x7's own data
+# does not discriminate: 6.0% at slot 12 against 5.1% at slot 9, with no winner.
+# But the cartridge's reset vector is ground truth and it settles the question.
+# `reset` and `nmi` are defined in X7.PDS (lines 922 and 903) and the vectors at
+# file 0x1FFFA read `nmi=$F9AB irq=$F9B3 reset=$F9C1`, all inside slot 15's
+# $E000-$FFFF window. X7's `org $fffa` reaches file 0x1FFFA only from slot 15 --
+# from slot 12 it lands at 0x19FFA, which is why the rebuilt ROM's reset vector
+# came out as $8681 and could not boot.
+PINNED_SLOTS = {"X7.PDS": 15}
+
 # The CHR image, in the order `SENDG` sends it to the development system, with
 # the 8 KiB slot each file occupies as written there. Only the order matters for
 # packing; the slot column is what the cartridge is checked against.
@@ -105,6 +117,17 @@ def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, 
     for module in MODULES:
         path = SRC / module
         snap = asm.snapshot()
+        if module in PINNED_SLOTS:
+            slot = PINNED_SLOTS[module]
+            asm.restore(snap)
+            asm.emitted = {}
+            asm.data_offsets = set()
+            asm.run_file(path, slot=slot)
+            slots.append(slot)
+            hits, total = match_score(image, cart_prg, asm.data_offsets)
+            log.append(f"{module}: 8 KiB slot {slot:2d}  PINNED by the cartridge's "
+                       f"reset vector (not searched)")
+            continue
         best = None
         # Why each slot was rejected. Without this the search silently discards
         # the reason and a module that fails at *every* slot looks like one that

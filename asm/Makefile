@@ -1,6 +1,7 @@
 # Assemble the cartridge from Eurocom's source.
 #
 #   make            build, and report how much of it matches the cartridge
+#   make rom        wrap the result in an iNES header
 #   make check      the same, but fail if the output moved
 #   make verbose    per-file incbin trace
 #   make extract    decode the PDS containers into pds-text/ first
@@ -11,12 +12,17 @@
 PYTHON ?= python3
 ROOT   := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
-.PHONY: all check verbose extract clean
+.PHONY: all rom check verbose extract clean
 
 all: $(ROOT)/asm/out/prg.bin
 
 $(ROOT)/asm/out/prg.bin: $(ROOT)/tools/pds_extract.py $(ROOT)/asm/build.py $(ROOT)/asm/pds6502.py
 	$(PYTHON) $(ROOT)/asm/build.py
+
+rom: $(ROOT)/asm/out/magician-rebuilt.nes
+
+$(ROOT)/asm/out/magician-rebuilt.nes: $(ROOT)/asm/out/prg.bin $(ROOT)/asm/mkrom.py
+	$(PYTHON) $(ROOT)/asm/mkrom.py
 
 verbose:
 	$(PYTHON) $(ROOT)/asm/build.py --verbose
