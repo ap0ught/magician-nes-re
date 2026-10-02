@@ -1,0 +1,3 @@
+[submodule "vendor/Magician-NES"]
+	path = vendor/Magician-NES
+	url = https://github.com/ap0ught/Magician-NES.git

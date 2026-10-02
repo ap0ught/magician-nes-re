@@ -1,0 +1,22 @@
+# The cartridge is the user's own and is never committed.
+roms/
+*.nes
+*.unif
+*.unl
+
+# Generated from the submodule's binary PDS containers by tools/pds_extract.py
+pds-text/
+
+# Assembler / build output
+asm/out/
+*.lst
+*.sym
+*.bin
+
+# Rust
+/target
+**/*.rs.bk
+
+# Captured reference frames and scratch
+shots/
+out/
