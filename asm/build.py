@@ -57,6 +57,20 @@ ALL_SOURCES = [SRC / m for m in MODULES] + sorted(SRC.glob("*.SRC"))
 # came out as $8681 and could not boot.
 PINNED_SLOTS = {"X7.PDS": 15}
 
+# Placement for the modules the search cannot decide, used when --assume-banks is
+# on (the default). This is a *hypothesis*, not a measurement, and it is labelled
+# as one in the output. What supports it: X5 (slot 14) and X7 (slot 15) together
+# fill bank 7 as the MMC3 fixed window, which leaves banks 0-6 for the other six
+# modules, and X6's only DAT evidence puts it in bank 6. What argues against it:
+# assembling all eight this way scores 9.7% against 11.4% for the two-module
+# build, and bank 5 comes out empty while the cartridge has 13 720 bytes there.
+# So the ordering is unproven -- but refusing to build at all is strictly less
+# useful, and an assumption printed in capitals is worth more than a refusal.
+ASSUMED_SLOTS = {
+    "X0.PDS": 0, "X1.PDS": 2, "X2.PDS": 4, "X3.PDS": 6,
+    "X4.PDS": 8, "X6.PDS": 12, "X5.PDS": 14, "X7.PDS": 15,
+}
+
 # The CHR image, in the order `SENDG` sends it to the development system, with
 # the 8 KiB slot each file occupies as written there. Only the order matters for
 # packing; the slot column is what the cartridge is checked against.
@@ -106,9 +120,12 @@ def match_score(image: bytearray, cart: bytes, offsets) -> tuple[int, int]:
     return hits, total
 
 
-def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, list[str], list[str]]:
+def assemble_prg(cart_prg: bytes, verbose: bool,
+                  x7_table: bool = True, assume_banks: bool = True
+                  ) -> tuple[bytearray, Assembler, list[str], list[str]]:
     image = bytearray(PRG_SIZE)
     asm = Assembler(image, SRC, [SRC], verbose=verbose)
+    asm.force_conditions = {"0=1": x7_table}
     asm.prescan(ALL_SOURCES)
     asm.collect_macros(ALL_SOURCES)
     log: list[str] = []
@@ -174,6 +191,23 @@ def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, 
             # modules were all assembled at whatever slot the search happened to
             # end on and overwrote each other in one 8 KiB window. So the module
             # is left out and the build says so, loudly, and exits non-zero.
+            if assume_banks and module in ASSUMED_SLOTS:
+                slot = ASSUMED_SLOTS[module]
+                asm.restore(snap)
+                asm.emitted = {}
+                asm.data_offsets = set()
+                try:
+                    asm.run_file(path, slot=slot)
+                except Exception as exc:                # noqa: BLE001
+                    log.append(f"{module}: ASSUMED slot {slot:2d} DID NOT "
+                               f"ASSEMBLE: {type(exc).__name__}: {exc}")
+                    unplaced.append(module)
+                    slots.append(None)
+                    continue
+                slots.append(slot)
+                log.append(f"{module}: 8 KiB slot {slot:2d}  *** ASSUMED, NOT "
+                           f"MEASURED *** (search found no winner)")
+                continue
             log.append(f"{module}: *** SLOT NOT DETERMINED - not assembled ***")
             unplaced.append(module)
             slots.append(None)
@@ -199,6 +233,7 @@ def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, 
     # and inventing one is what this build stopped doing.
     image = bytearray(PRG_SIZE)
     asm = Assembler(image, SRC, [SRC], verbose=verbose)
+    asm.force_conditions = {"0=1": x7_table}
     asm.prescan(ALL_SOURCES)
     asm.collect_macros(ALL_SOURCES)
     placed = [(m, s) for m, s in zip(MODULES, slots) if s is not None]
@@ -273,6 +308,13 @@ def main() -> int:
     ap.add_argument("--cart", type=pathlib.Path,
                     default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--x7-level-table", choices=("on", "off"), default="on",
+                    help="x7's `if 0=1` branch. On by default: it holds 27640 bytes "
+                         "of real level data and the cartridge was built with it "
+                         "enabled. Off reproduces the development-build layout.")
+    ap.add_argument("--no-assume-banks", action="store_true",
+                    help="refuse to place a module whose slot the search could "
+                         "not determine, instead of using ASSUMED_SLOTS")
     ap.add_argument("--allow-incomplete", action="store_true",
                     help="exit 0 even though some modules have no determined slot")
     args = ap.parse_args()
@@ -280,7 +322,10 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     cart_prg, cart_chr = read_cart(args.cart)
 
-    prg, asm, prg_log, unplaced = assemble_prg(cart_prg, args.verbose)
+    prg, asm, prg_log, unplaced = assemble_prg(
+        cart_prg, args.verbose,
+        x7_table=(args.x7_level_table == "on"),
+        assume_banks=not args.no_assume_banks)
     chr_rom, chr_log = build_chr(cart_chr, args.verbose)
 
     (OUT / "prg.bin").write_bytes(bytes(prg))
@@ -295,6 +340,11 @@ def main() -> int:
     print(f"\nPRG: {hits}/{len(prg)} bytes identical to the cartridge "
           f"({100.0 * hits / len(prg):.1f}%)")
     print(f"symbols: {len(asm.sym)}  ->  {OUT / 'mag.sym'}")
+    if any("ASSUMED" in line for line in prg_log):
+        print("\n*** PLACEMENT ASSUMED, NOT MEASURED: the slot search found no "
+              "winner for the modules marked ASSUMED above. ***")
+        print("*** Byte-match numbers below therefore say as much about the "
+              "placement as about the code. ***")
     print(f"rebuilt prg sha256 {hashlib.sha256(bytes(prg)).hexdigest()[:16]}  "
           f"chr sha256 {hashlib.sha256(bytes(chr_rom)).hexdigest()[:16]}")
 

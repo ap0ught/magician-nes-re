@@ -44,8 +44,19 @@ The dialect, as measured from the source
   `dl` (4 bytes), `dh` (2 bytes), `ds n,f`, `incbin`, `include`, `error`,
   `end`, and the no-ops `send`, `option`, `radix`.
 
-`if 0=1` in x7 wraps an obsolete hand-written address table; the live branch
-packs the data files sequentially, which is what this assembler reproduces.
+`if 0=1` in x7 (lines 1005-1147) was long assumed to be dead -- an obsolete
+hand-written address table, with the live branch packing the data files
+sequentially. **That assumption is wrong, and measuring it is what showed it.**
+Forcing the branch true takes the rebuilt PRG from 32 719 non-zero bytes to
+60 359 -- 27 640 bytes of real level data that was being skipped entirely. The
+byte *match* falls (9.7% to 6.4%) only because those bytes land in the wrong
+banks while slot placement is still unproven, so a worse score here does not
+mean the branch is dead.
+
+So `0=1` is an author-level switch, not dead code, and the cartridge was built
+with it enabled. Which branch is live is now a build-time option
+(`asm/build.py --x7-level-table {on,off}`), on by default, rather than a belief
+baked into the parser.
 """
 
 from __future__ import annotations
@@ -721,6 +732,9 @@ class Assembler:
         self.unresolved: dict[str, str] = {}
         # Symbols in SOURCE_GAPS that were actually referenced; see value_or_defer.
         self.gaps_used: dict[str, str] = {}
+        # x7's `if 0=1` level-table branch. See the module docstring: it holds
+        # 27 640 bytes of real data and the cartridge was built with it on.
+        self.force_conditions: dict[str, bool] = {}
         self.report: list[str] = []
 
         self.cond: list[bool] = []
@@ -1061,8 +1075,9 @@ class Assembler:
         if not self.active():
             # Keep the conditional stack balanced across a skipped block.
             if ln.op in ("if", "ifs"):
-                self.cond.append(False)
-                self.cond_taken.append(False)
+                forced = self.force_conditions.get(ln.raw.strip().replace(" ", ""))
+                self.cond.append(bool(forced))
+                self.cond_taken.append(bool(forced))
             elif ln.op == "else":
                 if self.cond:
                     self.cond_taken[-1] = not self.cond_taken[-1]
@@ -1141,7 +1156,8 @@ class Assembler:
     def exec_directive(self, ln: Line, operands: str):
         op = ln.op
         if op == "if":
-            state = self.truth(operands)
+            forced = self.force_conditions.get(ln.raw.strip().replace(" ", ""))
+            state = self.truth(operands) if forced is None else forced
             self.cond.append(state)
             self.cond_taken.append(state)
         elif op == "ifs":
