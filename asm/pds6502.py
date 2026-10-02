@@ -419,9 +419,7 @@ class Word:
 # `db "WHO",app,"S WHO",qu+$80` is too -- both are one `db`, and cutting either
 # in two silently shifts every address after it. The first branch is what makes
 # the string win over `\S+`, which would otherwise swallow the opening quote
-# and leave the rest of the string to be torn apart. The last branch only fires
-# on an unbalanced quote (x7's `error ">$FB80!`), where the old glue-to-the-next-
-# whitespace behaviour is what PDS itself did.
+# and leave the rest of the string to be torn apart.
 WORD_RE = re.compile(r'(?:"[^"]*"|[^\s"])+|\S+')
 
 
@@ -433,15 +431,38 @@ def words_of(line: str, lineno: int = 0) -> list[Word]:
     with a label. So the column has to survive the rejoin: x5's `sql` table and
     the `sqh` and `cos` labels that follow it are all one logical line, and only
     the column marks where one statement ends and the next begins.
+
+    A segment with an *odd* number of `"` ends inside a string, and the rest of
+    that segment is string text. Two places in this source do this -- `memchk`'s
+    `error "** exceeded $@1` and x7's `error ">$FB80!` -- and in both the rest of
+    the segment is the message. Treating it as words is not cosmetic: it left
+    `$@1` bare, the scanner read it as an instruction and took the next token,
+    `endif`, as its operand, so `memchk` never closed its conditional and the
+    whole rest of x7 assembled inside a false `if`. That is how `btit` and `bpw`
+    came out undefined. Judged per segment, which is right because the editor's
+    soft wrap already ends the logical line there.
     """
     out: list[Word] = []
     for seg in line.split("\r"):
-        col0 = seg[:1] not in (" ", "\t")
         body = strip_comment(seg).strip()
         if not body:
             continue
-        for m in WORD_RE.finditer(body):
-            out.append(Word(m.group(), col0, lineno))
+        head, tail = body, ""
+        if body.count('"') % 2:
+            cut = body.rfind('"')
+            head, tail = body[:cut], body[cut:]
+        # Column 0 means *this token* is the first on a physical line that starts
+        # in column 0 -- not merely that its segment did. x7's
+        # `onechr<tab>swapstk 0,1` is one segment beginning in column 0, and `0,1`
+        # is `swapstk`'s operand; x4's `pca0 hex f7 / done / pca1 hex 0f` puts
+        # `pca1` at the head of a later segment, and it is a label. Only the first
+        # token of a column-0 segment can begin a statement.
+        first = True
+        for m in WORD_RE.finditer(head):
+            out.append(Word(m.group(), first and seg[:1] not in (" ", "\t"), lineno))
+            first = False
+        if tail:
+            out.append(Word(tail, first and seg[:1] not in (" ", "\t"), lineno))
     return out
 
 
@@ -535,10 +556,17 @@ def scan_statements(words: list[Word], keywords: set[str], where: str,
             continue
         if macro_names is not None and low in macro_names:
             # A macro may take no operand at all -- `done` is written as a bare
-            # word next to a `hex` directive -- so one is only taken when the
-            # next token is not itself the start of a statement. Instructions
-            # always take exactly one.
-            if i < n and not is_keyword(words[i].text, keywords):
+            # word next to a `hex` directive -- so one is only taken when the next
+            # token is not itself the start of a statement. Instructions always
+            # take exactly one.
+            #
+            # "Start of a statement" is decided by *column*, not by the keyword
+            # list. x4's `pca0 hex f7 / done / pca1 hex 0f` put the next label at
+            # column 0 after the soft wrap, and `pca1` is in no keyword list, so
+            # the old test read it as an argument to `done`, which then emitted
+            # `db a_done` and left `pca1` and `pca2` undefined.
+            if i < n and not is_keyword(words[i].text, keywords) \
+                    and not words[i].col0:
                 i += 1
                 while i < n and words[i].text.startswith(","):
                     i += 1
@@ -636,6 +664,27 @@ class Fixup:
         self.expr, self.where, self.scope = expr, where, scope
 
 
+# Tables the released source reads but never defines.
+#
+# ANIM.SRC:289-312 indexes eight of them (`lda cpltab,x` and friends) to build
+# the sprite frame pointers, and DISP.SRC:422-445 has the same eight in the same
+# order. Neither name is defined in any of the eight `X?.PDS` banks, in any
+# `.SRC` include, or under `DAT/`. So the source as released cannot fully
+# assemble: this is a gap in the 2012 release, not a fault in this assembler, and
+# no amount of reading the source will produce the values.
+#
+# They are almost certainly the per-level sprite pointer triples laid down by the
+# level-data `load` machinery from `DAT/*.blk` by some build step that was not
+# shipped. That is a guess, so it is not treated as one: they assemble as zero,
+# every use is recorded, and `asm/build.py` prints the list. A rebuild that
+# differs from the cartridge here is *expected* and must not be read as an
+# assembler error -- nor quietly used to claim a better match than it has.
+SOURCE_GAPS = frozenset({
+    "cphtab", "cpltab", "dphtab", "dpltab",
+    "xphtab", "xpltab", "yphtab", "ypltab",
+})
+
+
 class Assembler:
     SLOT = 0x2000
     MAX_PASSES = 6
@@ -657,6 +706,8 @@ class Assembler:
 
         self.macros: dict[str, Macro] = {}
         self.defining: str | None = None
+        # Set only during collect_macros(); see line().
+        self.collecting = False
 
         self.slot = 0
         self.phys = 0x8000
@@ -668,6 +719,8 @@ class Assembler:
         # PRG offsets filled from a `DAT` file, not assembled. See do_incbin.
         self.data_offsets: set[int] = set()
         self.unresolved: dict[str, str] = {}
+        # Symbols in SOURCE_GAPS that were actually referenced; see value_or_defer.
+        self.gaps_used: dict[str, str] = {}
         self.report: list[str] = []
 
         self.cond: list[bool] = []
@@ -800,6 +853,10 @@ class Assembler:
             if "undefined symbol" not in e.raw:
                 raise
             name = e.raw.split("'")[1]
+            if name.lower() in SOURCE_GAPS:
+                # See SOURCE_GAPS: defined nowhere in the released source.
+                self.gaps_used.setdefault(name.lower(), where)
+                return 0
             self.unresolved.setdefault(name, where)
             return 0
 
@@ -814,9 +871,17 @@ class Assembler:
         return data.decode("latin-1")
 
     def snapshot(self) -> dict:
+        # Everything a run mutates. Leaving the slot and the address counters out
+        # of this was not a shortcut: the 16-slot search in build.py ends on slot
+        # 15, and a restore that did not put the slot back meant every module
+        # whose slot the search could not determine was then assembled at slot
+        # 15 -- six modules stacked into one 8 KiB window, overwriting each
+        # other, and a ROM that looked plausible and booted to a black screen.
         return {"sym": dict(self.sym), "where": dict(self.sym_where),
                 "redef": set(self.redefinable), "const": set(self.constants),
-                "pre": set(self.preexisting), "data": set(self.data_offsets)}
+                "pre": set(self.preexisting), "data": set(self.data_offsets),
+                "slot": self.slot, "phys": self.phys, "log": self.log,
+                "star": self.star}
 
     def restore(self, snap: dict):
         self.sym = dict(snap["sym"])
@@ -825,6 +890,8 @@ class Assembler:
         self.constants = set(snap["const"])
         self.preexisting = set(snap["pre"])
         self.data_offsets = set(snap["data"])
+        self.slot = snap["slot"]
+        self.phys, self.log, self.star = snap["phys"], snap["log"], snap["star"]
 
     def prescan(self, paths: list[pathlib.Path]):
         """Collect macro names up front: x1-x7 use macros that x0 defines, and a
@@ -840,6 +907,27 @@ class Assembler:
                                  text.replace("\r", " ")):
                 self.keywords.add(m.group(1).lower())
                 self.macro_names.add(m.group(1).lower())
+
+    def collect_macros(self, paths: list[pathlib.Path]):
+        """Register every macro *body* up front, not just its name.
+
+        All 40 macros are defined in X0.PDS, so without this every other module
+        could only be assembled after X0 had run -- which makes a module
+        impossible to score on its own, and scoring modules one at a time is how
+        the slot search works. This pass reads the definitions and nothing else,
+        following `include` so a macro defined in an include is found too.
+        """
+        self.collecting = True
+        try:
+            for path in paths:
+                self.process(logical_lines(self.read_source(path), str(path),
+                                           self.keywords, self.report,
+                                           self.macro_names))
+        finally:
+            self.collecting = False
+            self.defining = None
+            self.cond, self.cond_taken = [], []
+            self.scope = ""
 
     def run_all(self, paths: list[pathlib.Path], slots: list[int]):
         """Assemble every module in order, repeating until nothing moves.
@@ -961,6 +1049,13 @@ class Assembler:
             for part in scan_statements(words_of(ln.raw), self.keywords,
                                          ln.where, self.report, self.macro_names):
                 self.macros[self.defining].lines.append(part)
+            return
+
+        # Macro-collection pass: `macro`/`endm` were handled above, so everything
+        # else here is a statement we only want the *names* of.
+        if self.collecting:
+            if ln.op == "include":
+                self.do_include(ln, ln.operands)
             return
 
         if not self.active():
@@ -1244,6 +1339,12 @@ class Assembler:
                 if mode in ("imp", "acc"):
                     return code, mode
             raise AsmError(f"{mnemonic} needs an operand", ln.where)
+        if operand.strip().lower() in ("a", "acc") and any(m == "acc" for _, m in modes):
+            # `asl a` is the accumulator, written as the pseudo-register `a`. It
+            # is not a symbol: without this, `asl a` at X0.PDS:659 was resolved as
+            # a reference and reported `undefined symbol 'a'`, which stopped the
+            # whole project pass over a spelling of the accumulator.
+            return next((c, m) for c, m in modes if m == "acc")
         if mnemonic in BRANCHES:
             return modes[0]
         imm = operand.startswith("#")

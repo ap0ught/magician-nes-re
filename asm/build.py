@@ -31,7 +31,7 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from pds6502 import Assembler  # noqa: E402
+from pds6502 import SOURCE_GAPS, Assembler  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "vendor" / "Magician-NES"
@@ -41,6 +41,9 @@ PRG_SIZE = 128 * 1024
 CHR_SIZE = 128 * 1024
 
 MODULES = [f"X{i}.PDS" for i in range(8)]
+# Every file a macro can be defined in. All 40 macros are in X0.PDS, but the
+# collection pass follows `include` anyway so this is not load-bearing.
+ALL_SOURCES = [SRC / m for m in MODULES] + sorted(SRC.glob("*.SRC"))
 
 # Modules whose 8 KiB slot is *known* rather than searched, with the evidence.
 #
@@ -103,17 +106,19 @@ def match_score(image: bytearray, cart: bytes, offsets) -> tuple[int, int]:
     return hits, total
 
 
-def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, list[str]]:
+def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, list[str], list[str]]:
     image = bytearray(PRG_SIZE)
     asm = Assembler(image, SRC, [SRC], verbose=verbose)
-    asm.prescan([SRC / m for m in MODULES])
+    asm.prescan(ALL_SOURCES)
+    asm.collect_macros(ALL_SOURCES)
     log: list[str] = []
 
     # Pass 1: find each module's initial slot by matching its output against the
     # cartridge. The data files in the source are byte-identical to the ones in
     # the cart, so the right slot matches thousands of bytes.
     asm.tolerate = True
-    slots: list[int] = []
+    slots: list[int | None] = []
+    unplaced: list[str] = []
     for module in MODULES:
         path = SRC / module
         snap = asm.snapshot()
@@ -122,11 +127,23 @@ def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, 
             asm.restore(snap)
             asm.emitted = {}
             asm.data_offsets = set()
-            asm.run_file(path, slot=slot)
+            # Guarded like the searched path. A pinned module that will not
+            # assemble must be reported, not raised: an exception here escapes
+            # before the INCOMPLETE BUILD summary prints, so `make` dies with a
+            # traceback and never says which modules are missing.
+            try:
+                asm.run_file(path, slot=slot)
+            except Exception as exc:                    # noqa: BLE001
+                log.append(f"{module}: slot {slot:2d} (pinned) DID NOT ASSEMBLE: "
+                           f"{type(exc).__name__}: {exc}")
+                unplaced.append(module)
+                slots.append(None)
+                continue
             slots.append(slot)
             hits, total = match_score(image, cart_prg, asm.data_offsets)
-            log.append(f"{module}: 8 KiB slot {slot:2d}  PINNED by the cartridge's "
-                       f"reset vector (not searched)")
+            log.append(f"{module}: 8 KiB slot {slot:2d}  {hits:6d}/{total:6d} DAT "
+                       f"bytes match ({100.0 * hits / total if total else 0.0:5.1f}%)"
+                       f"  PINNED by the cartridge's reset vector (not searched)")
             continue
         best = None
         # Why each slot was rejected. Without this the search silently discards
@@ -152,15 +169,14 @@ def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, 
             for reason, bad in sorted(rejected.items(), key=lambda kv: -len(kv[1])):
                 log.append(f"{module}: slot {bad[0]:2d} rejected: {reason}"
                            + (f"  (and {len(bad) - 1} more)" if len(bad) > 1 else ""))
-            asm.restore(snap)
-            try:
-                asm.run_file(path)
-                slots.append(asm.slot)
-                log.append(f"{module}: slot not determined (assembled at slot {asm.slot})")
-            except Exception as exc:                    # noqa: BLE001
-                slots.append(asm.slot)
-                log.append(f"{module}: DID NOT ASSEMBLE: "
-                           f"{type(exc).__name__}: {exc}")
+            # An undetermined slot is a hole, not a detail to paper over. Guessing
+            # here is what produced a ROM that booted to a black screen: six
+            # modules were all assembled at whatever slot the search happened to
+            # end on and overwrote each other in one 8 KiB window. So the module
+            # is left out and the build says so, loudly, and exits non-zero.
+            log.append(f"{module}: *** SLOT NOT DETERMINED - not assembled ***")
+            unplaced.append(module)
+            slots.append(None)
             continue
         hits, total, slot = best
         asm.restore(snap)
@@ -178,17 +194,21 @@ def assemble_prg(cart_prg: bytes, verbose: bool) -> tuple[bytearray, Assembler, 
             log.append(f"{module}:   rejected slots {bad}: {reason}")
 
     # Pass 2: the banks are one program, so references across them only resolve
-    # once every module has been assembled at least once.
+    # once every module has been assembled at least once. Only the placed modules
+    # take part -- an unplaced one would need a slot to have been found for it,
+    # and inventing one is what this build stopped doing.
     image = bytearray(PRG_SIZE)
     asm = Assembler(image, SRC, [SRC], verbose=verbose)
-    asm.prescan([SRC / m for m in MODULES])
+    asm.prescan(ALL_SOURCES)
+    asm.collect_macros(ALL_SOURCES)
+    placed = [(m, s) for m, s in zip(MODULES, slots) if s is not None]
     try:
-        asm.run_all([SRC / m for m in MODULES], slots)
+        asm.run_all([SRC / m for m, _ in placed], [s for _, s in placed])
     except Exception as exc:                            # noqa: BLE001
         # Report rather than traceback: the per-module slot log above is the
         # context that makes this failure legible, and a traceback buries it.
         log.append(f"project pass failed: {type(exc).__name__}: {exc}")
-    return image, asm, log
+    return image, asm, log, unplaced
 
 
 def dat_file(name: str) -> pathlib.Path:
@@ -253,12 +273,14 @@ def main() -> int:
     ap.add_argument("--cart", type=pathlib.Path,
                     default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--allow-incomplete", action="store_true",
+                    help="exit 0 even though some modules have no determined slot")
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
     cart_prg, cart_chr = read_cart(args.cart)
 
-    prg, asm, prg_log = assemble_prg(cart_prg, args.verbose)
+    prg, asm, prg_log, unplaced = assemble_prg(cart_prg, args.verbose)
     chr_rom, chr_log = build_chr(cart_chr, args.verbose)
 
     (OUT / "prg.bin").write_bytes(bytes(prg))
@@ -285,6 +307,26 @@ def main() -> int:
     seen: dict[str, int] = {}
     for entry in asm.report:
         seen[entry] = seen.get(entry, 0) + 1
+    if unplaced and not args.allow_incomplete:
+        print(f"\n*** INCOMPLETE BUILD: {len(unplaced)} of {len(MODULES)} modules have "
+              f"no determined 8 KiB slot and were NOT assembled:")
+        print(f"***   {', '.join(unplaced)}")
+        print("***   The PRG above is missing them. Pass --allow-incomplete to exit 0 "
+              "anyway.")
+        return 1
+    if unplaced:
+        print(f"\n*** INCOMPLETE BUILD: {len(unplaced)} module(s) not assembled: "
+              f"{', '.join(unplaced)}")
+
+    if asm.gaps_used:
+        print(f"\nsource gaps: {len(asm.gaps_used)} of {len(SOURCE_GAPS)} tables the "
+              f"released source reads but never defines, assembled as zero:")
+        for name, where in sorted(asm.gaps_used.items()):
+            print(f"  {name:10s} first read at {where}")
+        print("  These are a gap in the 2012 release, not an assembler fault. Any "
+              "byte difference")
+        print("  they cause is expected and must not be counted as a match.")
+
     print(f"\nscanner report: {len(asm.report)} entries, {len(seen)} distinct")
     for entry, count in sorted(seen.items(), key=lambda kv: -kv[1])[:40]:
         print(f"  {count:5d}x {entry}")
