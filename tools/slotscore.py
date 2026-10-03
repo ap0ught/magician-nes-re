@@ -60,8 +60,9 @@ class Footprint(pds6502.Assembler):
         self.order: list[str] = []
         self.slotof: dict[str, int] = {}
 
-    def run_file(self, path, slot=None):
-        super().run_file(path, slot=slot)
+    def run_file(self, path, slot=None, origin=None, window_slots=None):
+        super().run_file(path, slot=slot, origin=origin,
+                         window_slots=window_slots)
         if not self.trace:
             return None
         name = pathlib.Path(path).name

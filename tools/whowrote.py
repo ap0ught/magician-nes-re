@@ -33,8 +33,9 @@ class Traced(pds6502.Assembler):
     order: list = []                  # modules in assembly order
     tracing = False
 
-    def run_file(self, path, slot=None):
-        super().run_file(path, slot=slot)
+    def run_file(self, path, slot=None, origin=None, window_slots=None):
+        super().run_file(path, slot=slot, origin=origin,
+                         window_slots=window_slots)
         if not self.tracing:
             # Pass 1 assembles every module at all sixteen slots as a search, so
             # recording there unions 16 attempts and reports a module as having
@@ -70,12 +71,32 @@ def main() -> int:
     Traced.owner, Traced.bymodule, Traced.order = {}, {}, []
     asm = Traced(image, B.SRC, [B.SRC])
     asm.force_conditions = {"0=1": True}
+    asm.prebank_symbols = frozenset({"b"})
+    asm.prebank_split = True
+    asm.demo_errors = B.X7_DEMO_ERRORS
     asm.prescan(B.ALL_SOURCES)
     asm.collect_macros(B.ALL_SOURCES)
-    placed = [(B.SRC / m, B.ASSUMED_SLOTS[m]) for m in B.MODULES]
+    # The same placement the build uses: `CHAINED` modules continue from the
+    # previous one, `SEQ.SRC` is appended at its own origin and window map, and
+    # X7 is anchored so `reset` lands on the cartridge's reset vector -- which is
+    # what `build.py` computes in two passes, so it is measured the same way.
+    chained = set(B.CHAINED)
+    placed = [(B.SRC / m, None if m in chained else B.ASSUMED_SLOTS[m])
+              for m in B.MODULES]
+    placed += [(B.SRC / m, s) for m, s in B.SEQ_MODULES]
     Traced.tracing = True
+    x7_base = None
     try:
-        asm.run_all([p for p, _ in placed], [s for _, s in placed])
+        for attempt in range(2):
+            asm.run_all([p for p, _ in placed], [s for _, s in placed],
+                        {"SEQ.SRC": B.SEQ_ORIGIN,
+                         **({"X7.PDS": x7_base} if x7_base else {})},
+                        {"SEQ.SRC": B.SEQ_WINDOW_SLOTS})
+            reset = asm.sym.get("reset")
+            if reset is None or x7_base is not None:
+                break
+            x7_base = (cart_prg[0x1FFFC] | (cart_prg[0x1FFFD] << 8)) - (
+                reset - pds6502.Assembler.slot_origin(B.PINNED_SLOTS["X7.PDS"]))
     finally:
         Traced.tracing = False
     prg = image
