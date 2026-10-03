@@ -176,25 +176,72 @@ the bug.
 
 ## Status
 
-**The rebuild assembles, loads and runs, and still shows a black screen.** The
-tracer's verdict (`tools/nestrace.py`), not an emulator's: the framebuffer is one
-flat colour. Reproduce with
+**The rebuild shows a picture.** Not a black screen and not one flat colour. In
+BizHawk 2.11.1's quickerNES at frame 60, unattended, with `NES/SaveRAM/` cleared:
 
-    python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 300 --png out.png
+| | cartridge | rebuild |
+|---|---|---|
+| screenshot | 256 x 224 | 256 x 224 |
+| distinct colours | 10 | 10 |
+| max luminance | 216 | 207 |
+| mean luminance | 51.91 | 54.07 |
+| non-zero pixels | 20 807 / 57 344 | 21 580 / 57 344 |
 
-**Where it dies, precisely.** Not at a palette and not in the boot path. At frame
-14, cycle 439 272, the `rts` at `$9D6C` pops a destroyed return address and jumps
-to `$0000`, which is `brk`, which vectors to `$F9B3` -- the *IRQ* handler -- and
-runs it with A=`$FF`. `$FF` written to `$E001` sets bit 7 and **disables the MMC3
-IRQ**, which is why the rebuild then takes 1 077 scanline IRQs where the cartridge
-takes 8 107, and why `sta $2001` happens 12 times instead of 198. The handler's
-`jmp $000B` then lands mid-instruction; by frame 194 the rebuild is executing
-animation tables at `$FFC0` in the fixed bank, where there is no `jsr $FFC0`
-anywhere in its PRG and no symbol at all, and halts on `$52` at `$FFCA` (a
-genuine 6502 freeze). **That one `rts` is the whole remaining bug.** Trace it with
+The rebuild's top ~40% is correct -- brick background, the whole `MAGICIAN` logo,
+the skeleton's head and shoulders. The lower ~60% is scrambled: tiles drawn with
+the wrong pattern or the wrong indices. Reproduce with
+
+    make rom
+    python3 tools/bizhawk/capture.py /tmp/opencode/biz 60
+
+That corrects a claim three sessions of this project got wrong. "The rebuild's
+frame is flat colour, max luminance 0.0, 0 non-zero pixels" came from
+`tools/nestrace.py` -- a second NES emulator written for this project -- and not
+from an emulator whose correctness had been established. **Every conclusion in
+this repository that rests on a `nestrace.py` framebuffer is withdrawn as
+evidence about the ROM**, including `PPUMASK=$FE`, "all 32 palette entries `$0F`"
+and "659/2048 nametable bytes non-zero". `nestrace.py` is still a legitimate
+instrument for *where execution goes*; its framebuffer is not evidence about
+whether a ROM works. `journal/05-bizhawk-is-the-instrument.md` has the numbers and
+the two harness traps that produce confident nonsense.
+
+BizHawk *is* drivable here, headfully on the live display -- no Xvfb was installed
+and the session was not modified. `EmuHawkMono.sh --help` documents
+`--lua <path>`, which implies `--luaconsole` and runs a script inside the
+emulator: `emu.frameadvance()` is frame-exact, `client.screenshot(path)` writes the
+core's own video buffer, and `client.exit()` closes the session so the next launch
+is not swallowed by the single-instance pipe. `tools/bizhawk/run.sh` wraps one
+such session. Two traps are documented there and in `journal/05`: the ROM path
+must be absolute (`EmuHawkMono.sh` cds to its own directory, and a relative path
+hangs with nothing in the log, which looks exactly like "BizHawk will not start"),
+and `memory.read_u8(addr, domain)` silently falls back to the default domain when
+the name is wrong, which fabricates a register dump.
+
+**Where the rebuild is still wrong.** The corruption is in the picture, so the
+remaining bug is a statement about VRAM rather than about control flow.
+`tools/bizhawk/dump.lua` writes VRAM, CHR-RAM, OAM, work RAM and the palette from
+both images at the same frame so the divergence is a byte range.
+
+**What the tracer says, and how much of it survives.** `tools/nestrace.py` reports
+that at frame 14, cycle 439 272, the `rts` at `$9D6C` pops a destroyed return
+address and jumps to `$0000`, which is `brk`, which vectors through `$FFFE` to
+`$F9B3` -- the *IRQ* handler -- with `A=$FF`, and `$FF` to `$E001` sets bit 7,
+disabling the MMC3 IRQ. That may well be a real defect. It is no longer measured
+against an instrument of unknown correctness: BizHawk's Lua exposes
+`emu.registerafter`/`emu.registerbefore` with `client.cpu` resolving inside the
+callbacks, which is a core-native instruction trace. Trace the tracer's claim with
 
     python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 300 \
         --halt-at 0xFFCA --last 40
+
+**That one `rts` is not the whole remaining bug, and the claim is withdrawn as
+stated.** `tools/nestrace.py` further reports 1 077 scanline IRQs in the rebuild
+against the cartridge's 8 107, `sta $2001` 12 times against 198, and a genuine
+6502 freeze on `$52` at `$FFCA` by frame 194 while executing animation tables at
+`$FFC0` in the fixed bank. A ROM that freezes at `$FFCA` on frame 194 does not
+draw a title screen on frame 60 in a correct emulator, so at least one link in
+that chain belongs to the tracer. The specific `rts` is re-testable now and is not
+re-tested here; the number to beat is the cartridge's own.
 
 The stack was already 144 bytes deep at the bad `rts`, which matters because
 `initdma` parks the DMA queue at `$7E` -- the queue and the main stack share page
@@ -264,21 +311,27 @@ February 1990 source and the cartridge are much closer on the boot path than a
 
 Note that the cartridge has battery-backed PRG RAM, so any "does it boot"
 comparison must clear `NES/SaveRAM/` on both sides or BizHawk resumes a stale save
-and shows you last session's game. And unattended, the cartridge does *not* reach
-the GAME RESTORE SCREEN: it goes title -> attract demo. Reaching the restore screen
-needs a button press, and BizHawk here takes input from SDL with no way for the
-harness to inject one -- so "does it boot" is currently measurable only as "does it
-reach the title screen unattended".
+and shows you last session's game; `tools/bizhawk/run.sh` does this on every run.
+And unattended, the cartridge does *not* reach the GAME RESTORE SCREEN: it goes
+title -> attract demo. Reaching the restore screen needs a button press. The
+earlier claim that no harness could inject one was an artifact of driving BizHawk
+by window-scraping; `joypad.*` is on the Lua surface and is the next thing to
+close, but it is not needed to answer "does it draw a picture".
 
 `crates/` has not been started, and nothing in this repository depends on it.
 
 ## Tracer conformance
 
-`tools/nestrace.py` is the only NES instrument on this machine (no emulator is
-installed, and BizHawk cannot run headless without Xvfb), so it is measured
-against koute's `nes-testsuite` rather than trusted. `--testsuite DIR` runs every
-testcase, **refuses to run a ROM whose md5 does not match the testcase**, and
-compares the md5 of the 256x240 greyscale framebuffer against the reference.
+`tools/nestrace.py` was, until this session, the only NES instrument wired up on
+this machine -- BizHawk is installed at
+`$HOME/code/games/aibeatszelda/BizHawk-2.11.1-win-x64` but nothing could drive it,
+because nobody had found `--lua`. That is now corrected above, and the tracer is
+demoted rather than deleted: it remains a precise instrument for *where execution
+diverges*, and it is no longer the instrument for *whether a ROM works*. It is
+measured against koute's `nes-testsuite` rather than trusted. `--testsuite DIR`
+runs every testcase, **refuses to run a ROM whose md5 does not match the
+testcase**, and compares the md5 of the 256x240 greyscale framebuffer against the
+reference.
 
     make testsuite                      # TS=/path/to/nes-testsuite
 

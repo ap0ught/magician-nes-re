@@ -24,3 +24,7 @@ out/
 # Python
 __pycache__/
 *.pyc
+
+# BizHawk capture output: screenshots contain cartridge-derived imagery and the
+# memory dumps are large and reproducible. Never committed.
+tools/bizhawk/out/
