@@ -308,13 +308,16 @@ draw a title screen on frame 60 in a correct emulator, so at least one link in
 that chain belongs to the tracer. The specific `rts` is re-testable now and is not
 re-tested here; the number to beat is the cartridge's own.
 
-The stack was already 144 bytes deep at the bad `rts`, which matters because
-`initdma` parks the DMA queue at `$7E` -- the queue and the main stack share page
-1, and the main stack has only `$FF`-`$80` before they meet.
+Also the tracer's, and equally withdrawn: the stack was 144 bytes deep at the bad
+`rts`, and `initdma` parks the DMA queue at `$7E`, so the queue and the main stack
+would share page 1 with only `$FF`-`$80` of stack between them. Worth keeping in
+mind if a stack fault ever does turn up, but it is not evidence of one.
 
-**The cartridge is not the control it was assumed to be.** Three claims this file
-used to make are refuted by measurement, all of it after the tracer gained MMC3
-interrupts, CHR banking and correct CHR-RAM writes:
+**The tracer is not the control, and three claims this file used to make about the
+*cartridge* are refuted by measurement** -- all of it from the tracer, all of it
+after the tracer gained MMC3 interrupts, CHR banking and correct CHR-RAM writes.
+Every number in this subsection comes from `tools/nestrace.py` and is superseded by
+the BizHawk measurements above; none of it is evidence about either ROM.
 
 * It is not true that both images "end spinning at `$8382: jsr rn / lda $40 /
   bne $8382`". `$8382` is `ptlr`, a player-animation table inside X4
@@ -325,12 +328,14 @@ interrupts, CHR banking and correct CHR-RAM writes:
   `0F 28 38 30 0F 2A 3A 30 0F 17 27 38 0F 21 31 30` -- `TIT.PAL` with `$0F` in
   the four backdrop slots `movepal` forces. The palette pipeline works end to end.
 * It is therefore also not true that an all-`$0F` palette on the cartridge is
-  evidence about anything. **The cartridge is black in this instrument too**
-  (55/2048 nametable bytes nonzero, `$2007` only ever aimed at `$3F00` and at
-  sixteen bytes per nametable block). Something is still missing from the tracer
-  on the graphics side. The two candidates the measurements point at: there is no
-  APU at all, and `tick` advances the PPU once per instruction so vblank is seen
-  up to seven CPU cycles late and sprite-0 hit has no dot. Neither is implemented.
+  evidence about anything. **The cartridge renders no picture in the tracer
+  either** (55/2048 nametable bytes nonzero, `$2007` only ever aimed at `$3F00`
+  and at sixteen bytes per nametable block) -- while in BizHawk the same cartridge
+  draws a complete title screen at 20 807 non-zero pixels. Something is missing
+  from the tracer on the graphics side. The two candidates the measurements point
+  at: there is no APU at all, and `tick` advances the PPU once per instruction so
+  vblank is seen up to seven CPU cycles late and sprite-0 hit has no dot. Neither
+  is implemented.
 * It is not true that the palette being `$0F` is why the screen is black, in the
   sense that fixing the palette would fix the screen. The palette reaches the PPU
   correctly and the nametable is empty.
@@ -362,9 +367,13 @@ Corrections to what this file used to claim, with the measurements:
   `nmi0` pushes `curchrpal-$60 .. curchrpal` to `$3F00-$3F60`, and `curchrpal`
   aliases `$3F00` because `$3F60 & $1F == 0`. Copying the release's addresses
   would be matching the cartridge, not fixing the build.
-* `PPUMASK` is `$FE`, not `$00` -- background and sprites are enabled with the
-  leftmost column masked. The screen is black because the palette is `$0F`, not
-  because rendering is off.
+* `PPUMASK` is `$FE`, not `$00`, in the tracer's reading -- background and sprites
+  enabled with the leftmost column masked. Withdrawn with the rest of the tracer's
+  framebuffer: BizHawk's `nes.getdispbackground()` and `nes.getdispsprites()` are
+  both true in **both** images, so rendering is on in both, and neither image has
+  an all-`$0F` palette. `PALRAM` in the cartridge and the rebuild is
+  `0F 28 38 30 0F 2A 3A 30 0F 17 27 38 0F 21 31 30 00 28 38 30 ...`, and those
+  first sixteen bytes are identical in both.
 
 What is *not* the reason any more, having been the reason once: the reset vector
 used to read `$E84D/$E85D/$E842` against the cartridge's `$F9C1/$F9B3/$F9AB`. The
