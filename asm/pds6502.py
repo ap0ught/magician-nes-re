@@ -1731,9 +1731,20 @@ class Assembler:
         imm = operand.startswith("#")
         # `(zp,x` and `(zp),y` are one operand each; which one depends on the
         # closing bracket, not on the leading one.
+        #
+        # `operand[close:]` starts *at* the ')' and so reads "),y", which is
+        # not an index at all: every `(zp),y` in the source therefore
+        # selected `indx` and assembled to $A1/$81/$91's siblings -- `lda (t0),y`
+        # became `lda (t0,x)`. That is `$B1` vs `$A1` on 54 statements across
+        # all eight modules, including x0's `moveb2` level decompressor and
+        # x7's `movepal`, and it is invisible in a listing: both forms are a
+        # legal operand spelling. Whitespace is removed rather than trimmed,
+        # because the statement splitter rejoins tokens with spaces and
+        # `(t0) , y` has to read the same as `(t0),y`.
         close = operand.find(")")
         indirect = operand.lstrip().startswith("(") and close > 0
-        indexed_y = indirect and operand[close:].lower().lstrip() in (",y", ", w", ",w")
+        tail = operand[close + 1:].lower().replace(" ", "") if indirect else ""
+        indexed_y = tail in (",y", ",w")
         if mnemonic in FORCE_ABS:
             if indirect and any(m == "ind" for _, m in modes):
                 return next((c, m) for c, m in modes if m == "ind")
@@ -1811,6 +1822,19 @@ class Assembler:
             signed = delta - 0x10000 if delta > 0x7F else delta
             if not -128 <= signed <= 127:
                 raise AsmError(f"branch out of range to ${target:04X}", f.where)
+            # The same bounds test `emit` makes. `prg_offset` answers -1 for a
+            # byte at or above `addr_ceiling`, which is how a module that runs
+            # past its slot's share of the PRG is stopped: `emit` drops those
+            # bytes, and every displacement byte among them lands on offset -1.
+            # Writing it unguarded does not fail -- `self.prg[-1]` is a valid
+            # index -- it overwrites the IRQ vector's high byte at file offset
+            # $1FFFF, and because fixups resolve in list order the last dropped
+            # branch to resolve is the one that wins, so which branch corrupts
+            # the vector depends on how many modules ran before it.
+            if not 0 <= f.offset < len(self.prg):
+                self.overflow.append(
+                    (self.here.name, f.after & 0xFFFF, self.slot))
+                continue
             self.prg[f.offset] = signed & 0xFF
             self.emitted[f.offset] = signed & 0xFF
         self.scope = saved

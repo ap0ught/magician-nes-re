@@ -483,24 +483,41 @@ class Bus:
         self.ppu_write_log: list[tuple[int, int, int]] = []
         self.ppu7: list[tuple[int, int, int]] = []
         self.ppu7_targets: collections.Counter = collections.Counter()
+        # Which instruction performed each PPU register write. `w:2007` is how
+        # you find out who is responsible for the palette being all $0F: the
+        # register write alone cannot tell you whether the value came from a
+        # palette table in ROM, from RAM the fade routine owns, or from the
+        # black fill in `initcols`.
+        self.reg_writes: dict[int, list[tuple[int, int, int, int]]] = {}
+        self.cur_pc = 0
         self.nmi_count = 0
         self.irq_count = 0
         self.dma_pending = 0
         self.halted = ""
 
     # -- PRG mapping. MMC3 8 KiB slots: 16 of them in 128 KiB.
+    #
+    # PRG mode 0 is $8000=R6, $A000=R7, $C000=slot 14, $E000=slot 15; mode 1
+    # swaps R6 and R7 in the first two windows and leaves the fixed pair alone.
+    # The fixed pair staying fixed in both modes is the load-bearing part: in
+    # mode 1 the cartridge's own reset does `lda #$40 / sta $A001`, which is a
+    # *data* write to whichever register is selected -- not a mode write -- and
+    # a model that takes the PRG mode bit from there sends $E000-$FFFF to R7.
+    # The reset and IRQ vectors live in the fixed window, so they then read as
+    # whatever the banked window holds, BRK vectors through garbage, and the
+    # cartridge spins on BRK at $1000 instead of booting.
     def _prg_offset(self, cpu: int) -> int:
         n = len(self.prg) // 0x2000          # number of 8 KiB slots
         if cpu < 0x8000:
             return None
         if cpu < 0xA000:
-            slot = self.regs[6] & 0x0F
+            slot = self.regs[7] & 0x0F if self.prg_mode else self.regs[6] & 0x0F
         elif cpu < 0xC000:
-            slot = self.regs[7] & 0x0F
+            slot = self.regs[6] & 0x0F if self.prg_mode else self.regs[7] & 0x0F
         elif cpu < 0xE000:
-            slot = (n - 2) if not self.prg_mode else self.regs[5] & 0x0F
+            slot = n - 2
         else:
-            slot = (n - 1) if not self.prg_mode else self.regs[7] & 0x0F
+            slot = n - 1
         return (slot % n) * 0x2000 + (cpu & 0x1FFF)
 
     def read(self, a: int) -> int:
@@ -537,6 +554,13 @@ class Bus:
             return 0
         if a < 0x8000:
             return self.prgram[a - 0x6000]
+        # MMC3: reading the R6 data port returns the scanline counter and
+        # acknowledges a pending IRQ. Without this a poll of $8006 sees PRG
+        # bytes instead, and the cartridge -- which does poll it -- never
+        # reaches its main loop.
+        if self.bankreg == 6 and (a & 0x1FFF) in (0x0006, 0x2006):
+            self.irq_pending = False
+            return self.scanline
         off = self._prg_offset(a)
         if off is None:
             return 0xFF
@@ -581,6 +605,8 @@ class Bus:
                     self.v = self.t
                     self.w = 0
             elif r == 7:
+                self.reg_writes.setdefault(r, []).append(
+                    (self.cycles, self.cur_pc, self.v & 0x3FFF, v))
                 if self.ppu_writes[7] <= 64:
                     self.ppu7.append((self.cycles, self.v & 0x3FFF, v))
                 self.ppu7_targets[self.v & 0x3FFF] += 1
@@ -599,40 +625,38 @@ class Bus:
         if a < 0x8000:
             self.prgram[a - 0x6000] = v
             return
-        if a < 0xA000:
-            k = a & 7
-            if k == 0:
-                self.bankreg = v & 7
-                self.irq_reload = bool(v & 0x04)
-                self.irq_enabled = bool(v & 0x40)
-                self.irq_pending = False
-            elif k == 1:
-                self.regs[self.bankreg] = v
-            elif k == 6:
-                if v & 0x80:
-                    self.prgram[(v & 0x1F) * 0x200 + (a & 0x1FF)] ^= 0xFF
-            return
         if a < 0xC000:
-            if (a & 7) == 0:
+            # $8000/$A000 even: bank select (bits 0-2), PRG mode (bit 6),
+            # IRQ latch reload (bit 7). $8001/$A001 odd: data for the selected
+            # register. Both windows select the same register -- that is the
+            # chip. PRG mode does NOT come from the odd port.
+            if (a & 1) == 0:
                 self.bankreg = v & 7
-                self.irq_reload = bool(v & 0x04)
-                self.irq_enabled = bool(v & 0x40)
-                self.irq_pending = False
-            elif (a & 7) == 1:
+                self.prg_mode = (v >> 6) & 1
+                self.irq_reload = bool(v & 0x80)
+            else:
                 self.regs[self.bankreg] = v
-                if self.bankreg == 6:
-                    self.prg_mode = (v >> 6) & 1
-            elif (a & 7) == 6:
-                self.prgram[(v & 0x1F) * 0x200 + (a & 0x1FF)] ^= 0xFF
             return
         if (a & 0xFFF0) == 0xC000:
-            self.irq_latch = v
+            if (a & 1) == 0:
+                self.irq_latch = v
+            else:
+                self.irq_cycles = 0
+                self.scanline = 0
+                self.irq_reload = True
             return
-        if (a & 0xFFF0) == 0xC001:
-            self.irq_cycles = 0
-            self.scanline = 0
-            self.irq_pending = self.irq_enabled
-            return
+        # $E000 even: bits 0-1 = PRG mode. $E001 odd: bit 6 = PRG mode, bit 7
+        # disables IRQ and WRAM. Neither is the cartridge's `sta $A001`, which
+        # is a plain data write to whichever register is selected.
+        if (a & 1) == 0:
+            self.prg_mode = (v >> 6) & 1
+        else:
+            if v & 0x40:
+                self.prg_mode = 1
+            self.irq_enabled = not (v & 0x80)
+            if v & 0x80:
+                self.irq_pending = False
+        return
 
     def _oam_dma(self, page):
         for i in range(256):
@@ -826,14 +850,46 @@ def load_rom(path: pathlib.Path):
     return prg, chr_, mapper, vertical
 
 
+def load_syms(rom: pathlib.Path) -> dict[str, int]:
+    """Symbols the assembler wrote next to the ROM, for `--where label`.
+
+    A missing or unreadable mag.sym is not an error: numeric addresses still
+    work, and the tracer's job is to work on a ROM with no build tree beside
+    it at all.
+    """
+    out: dict[str, int] = {}
+    path = rom.parent / "mag.sym"
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        name, _, val = line.partition("=")
+        val = val.strip()
+        if val.startswith("$"):
+            try:
+                out[name.strip()] = int(val[1:], 16)
+            except ValueError:
+                pass
+    return out
+
+
+def resolve(s: str, syms: dict[str, int]) -> int:
+    """`$F5D4`, `0xF5D4`, `62932` or `movepal` -> a PC."""
+    t = s.strip()
+    if t in syms:
+        return syms[t]
+    if "|" in t and t.split("|", 1)[0] in syms:
+        return syms[t.split("|", 1)[0]]
+    return int(t, 0)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rom", type=pathlib.Path, required=True)
     ap.add_argument("--frames", type=float, default=10.0, help="frames of CPU to run")
     ap.add_argument("--trace", type=int, default=0, help="print the first N instructions")
-    ap.add_argument("--trace-from", type=lambda s: int(s, 0), default=None,
-                    help="only trace once PC reaches this address")
+    ap.add_argument("--trace-from", default=None,
+                    help="only trace once PC reaches this address or label")
     ap.add_argument("--where", action="append", default=[],
                     help="report when execution reaches PC=LABEL, or w:REG for a PPU write")
     ap.add_argument("--png", type=pathlib.Path)
@@ -841,6 +897,15 @@ def main() -> int:
                     help="capture this frame number instead of the first one that "
                          "has been drawn")
     ap.add_argument("--max-cycles", type=int, default=60_000_000)
+    ap.add_argument("--halt-at", action="append", default=[],
+                    help="stop when PC reaches this address or label. Combine with "
+                         "--last: a program that has fallen into a loop will "
+                         "otherwise overwrite the ring buffer with the loop")
+    ap.add_argument("--halt-below", type=lambda s: int(s, 0), default=None,
+                    help="stop the first time PC drops below this address. RAM is "
+                         "$0000-$1FFF, so --halt-below 0x2000 is 'first time it "
+                         "left ROM', which is the question a bad return address "
+                         "on the stack actually asks")
     ap.add_argument("--ram", type=lambda s: int(s, 0), nargs=2, metavar=("LO", "HI"),
                     help="hex-dump CPU RAM over [lo,hi) at the end")
     ap.add_argument("--vram", type=lambda s: int(s, 0), nargs=2, metavar=("LO", "HI"),
@@ -851,8 +916,11 @@ def main() -> int:
     args = ap.parse_args()
 
     prg, chr_, mapper, vertical = load_rom(args.rom)
+    syms = load_syms(args.rom)
     print(f"mapper {mapper}  {'vertical' if vertical else 'horizontal'} mirroring  "
           f"PRG {len(prg)} bytes ({len(prg)//8192} x 8 KiB)  CHR {len(chr_)} bytes")
+    if syms:
+        print(f"symbols: {len(syms)} from {args.rom.parent / 'mag.sym'}")
     bus = Bus(prg, chr_, mapper, vertical)
     cpu = CPU(bus)
     bus.cpu = cpu
@@ -865,12 +933,16 @@ def main() -> int:
     watch: dict = {}
     for w in args.where:
         if w.startswith("w:"):
-            watch.setdefault(("w", int(w[2:], 0)), 0)
+            # `w:2007` names a CPU-visible PPU register; key on its
+            # index within the $2000 window, which is what reg_writes uses.
+            watch.setdefault(("w", int(w[2:], 0) & 7), 0)
         else:
-            watch.setdefault(("p", int(w, 0)), 0)
+            watch.setdefault(("p", resolve(w, syms)), 0)
     halt = ""
     ring: collections.deque = collections.deque(maxlen=args.last or 1)
-    armed = args.trace_from is None
+    halt_at = {resolve(h, syms) for h in args.halt_at}
+    trace_from = None if args.trace_from is None else resolve(args.trace_from, syms)
+    armed = trace_from is None
     frames_wanted = {}
     if args.png:
         want = args.png_frame or int(args.frames)
@@ -895,12 +967,19 @@ def main() -> int:
                       f" S={cpu.sp:02X} P={_flags(cpu)}")
                 traced += 1
             step_pc = cpu.pc
+            bus.cur_pc = step_pc
             if args.last:
                 op = bus.read(step_pc)
                 ent = OPS.get(op)
                 ring.append((cpu.cycles, step_pc, op, ent[0] if ent else f".{op:02X}",
                              ent[1] if ent else "?", cpu.a, cpu.x, cpu.y, cpu.sp))
-            if not armed and step_pc == args.trace_from:
+            if args.halt_below is not None and step_pc < args.halt_below:
+                halt = f"PC fell to ${step_pc:04X}, below ${args.halt_below:04X}"
+                break
+            if step_pc in halt_at:
+                halt = f"reached ${step_pc:04X} (--halt-at)"
+                break
+            if not armed and step_pc == trace_from:
                 armed = True
             cpu.step()
             bus.tick(cpu.cycles)
@@ -938,6 +1017,21 @@ def main() -> int:
     print("vram nonzero per 256-byte block: " + ", ".join(
         f"${b:04X}={sum(1 for v in bus.vram[b:b+256] if v)}" for b in range(0, 0x800, 256)))
     print("hottest: " + ", ".join(f"${a:04X}x{n}" for a, n in seen.most_common(14)))
+    for k in sorted(watch):
+        if k[0] != "w":
+            continue
+        rows = bus.reg_writes.get(k[1], [])
+        print(f"\nPPU register $200{k[1]} writes: {len(rows)}")
+        bypc: collections.Counter = collections.Counter()
+        for _, pc, _, _ in rows:
+            bypc[pc] += 1
+        for pc, n in bypc.most_common(8):
+            ex = [f"${va:04X}=${v:02X}" for _, p2, va, v in rows if p2 == pc][:6]
+            print(f"  ${pc:04X} x{n:<7} e.g. " + ", ".join(ex))
+        pal = [(pc, va, v) for _, pc, va, v in rows if 0x3F00 <= va < 0x3F20 and v != 0x0F]
+        print(f"  non-$0F writes into $3F00-$3F1F: {len(pal)}"
+              + ("  e.g. " + ", ".join(f"${pc:04X}->${va:04X}=${v:02X}"
+                                       for pc, va, v in pal[:8]) if pal else ""))
     if args.vram:
         lo, hi = args.vram
         print(f"VRAM ${lo:04X}-${hi:04X} (nametable RAM is 2 KiB, $2000 -> [0]):")
@@ -954,11 +1048,14 @@ def main() -> int:
             print(f"  ${a:04X}  " + " ".join(f"{v:02X}" for v in row))
     if halt:
         print(f"HALT: {halt}")
-        if args.last:
-            print(f"last {args.last} instructions:")
-            for cy, pc, op, mn, md, a, x, y, sp in ring:
-                print(f"  {cy:>9}  {pc:04X}: {mn:<4}{md:<5} A={a:02X} X={x:02X} "
-                      f"Y={y:02X} S={sp:02X}")
+    # Printed whenever --last was asked for, not only on a Halt: a run that
+    # simply runs out of cycles is exactly the case where the last few
+    # instructions are the interesting ones.
+    if args.last:
+        print(f"last {args.last} instructions:")
+        for cy, pc, op, mn, md, a, x, y, sp in ring:
+            print(f"  {cy:>9}  {pc:04X}: {mn:<4}{md:<5} A={a:02X} X={x:02X} "
+                  f"Y={y:02X} S={sp:02X}")
 
     if args.png:
         try:
