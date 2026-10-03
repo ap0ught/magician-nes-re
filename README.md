@@ -185,8 +185,13 @@ frame for this state is reproducible with
 
 The cartridge does **not** boot in the tracer either, which is the important
 caveat: the tracer is a diagnostic, not an acceptance test, and "the rebuild is
-black" is not yet a statement about the rebuild. What is sound is the comparison
-between the two under the same instrument.
+black" is not yet a statement about the rebuild. Both images now run 600 frames
+without halting and both end in the same place -- the cartridge in
+`$8382: jsr rn / lda $40 / bne $8382`, waiting on a zero-page flag that exactly
+one `sta $40` in the cartridge can clear, with an all-`$0F` palette. Since the
+cartridge demonstrably works on hardware, the palette is not yet evidence about
+the rebuild either. What *is* sound is the comparison between the two under the
+same instrument, and that comparison is what `journal/03-...md` records.
 
 Byte-match against the release is **39 832 / 131 072 (30.4%)**, of which
 **38 982 (29.7%) is source-only** and 864 bytes (0.7%) come from the one

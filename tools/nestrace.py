@@ -456,6 +456,10 @@ class Bus:
         self.bankreg = 6
         self.regs = [0, 0, 0, 0, 0, 0, 0x0E, 0x0F]
         self.prg_mode = 0
+        # Where PRG mode was last changed, and by what. PRG mode swaps the R6 and
+        # R7 windows, so knowing *who* set it is the difference between reading a
+        # disassembly of the right module and reading the wrong one.
+        self.prg_mode_from: tuple[int, int, int] | None = None
         self.irq_latch = 0
         self.irq_reload = False
         self.irq_pending = False
@@ -632,7 +636,9 @@ class Bus:
             # chip. PRG mode does NOT come from the odd port.
             if (a & 1) == 0:
                 self.bankreg = v & 7
-                self.prg_mode = (v >> 6) & 1
+                if ((v >> 6) & 1) != self.prg_mode:
+                    self.prg_mode = (v >> 6) & 1
+                    self.prg_mode_from = (a, self.cur_pc, v)
                 self.irq_reload = bool(v & 0x80)
             else:
                 self.regs[self.bankreg] = v
@@ -645,14 +651,19 @@ class Bus:
                 self.scanline = 0
                 self.irq_reload = True
             return
-        # $E000 even: bits 0-1 = PRG mode. $E001 odd: bit 6 = PRG mode, bit 7
-        # disables IRQ and WRAM. Neither is the cartridge's `sta $A001`, which
-        # is a plain data write to whichever register is selected.
-        if (a & 1) == 0:
-            self.prg_mode = (v >> 6) & 1
-        else:
-            if v & 0x40:
-                self.prg_mode = 1
+        # $E000 even / $E001 odd: the MMC3 interrupt controls. $E001 bit 7
+        # disables the IRQ.
+        #
+        # PRG mode is deliberately NOT taken from here. NESdev lists bit 6 of
+        # $E001 as PRG mode on MMC3, and honouring it made *both* ROMs swap R6
+        # and R7 part way through: this game's IRQ handler is
+        # `sta $e000 / sta $e001` with A = Y ("clear MMC3 IRQ"), so the mode
+        # would flip on Y alone, and `reset` -- which sets up `bnk 6,#$0` and
+        # `bnk 7,#$1` and then `jmp start` -- needs mode 0 to keep its own main
+        # loop at $8000. The source therefore settles it: the only place this
+        # game ever writes a mode bit is `stx $8000` with a value of 0-7, inside
+        # the `bnk` macro (`x0.pds:188`). Mode is read from there alone.
+        if (a & 1) == 1:
             self.irq_enabled = not (v & 0x80)
             if v & 0x80:
                 self.irq_pending = False
@@ -999,6 +1010,17 @@ def main() -> int:
 
     print(f"\nran {cpu.cycles} cycles = {cpu.cycles / 29780.5:.1f} frames;"
           f" final PC=${cpu.pc:04X} A={cpu.a:02X} X={cpu.x:02X} Y={cpu.y:02X}")
+    # The bank map, because "which bytes were at $8008" is unanswerable without
+    # it: eight modules are all nominally at $8000 and only R6/R7 say which one
+    # is on screen. Printed on every run -- it is three lines.
+    print(f"MMC3 bankreg={bus.bankreg} R6=${bus.regs[6]:02X} R7=${bus.regs[7]:02X}"
+          f" prg_mode={bus.prg_mode} irq_latch=${bus.irq_latch:02X}"
+          f" irq_en={int(bus.irq_enabled)} scanline={bus.scanline}"
+          f"  => $8000 window = slot {bus.regs[7] if bus.prg_mode else bus.regs[6]}"
+          f", $A000 window = slot {bus.regs[6] if bus.prg_mode else bus.regs[7]}"
+          + (f"; mode last set by ${bus.prg_mode_from[1]:04X} writing "
+             f"${bus.prg_mode_from[2]:02X} to ${bus.prg_mode_from[0]:04X}"
+             if bus.prg_mode_from else "; mode never changed"))
     print(f"PPU ctrl=${bus.ctrl:02X} mask=${bus.mask:02X} status=${bus.status:02X}"
           f" frames elapsed={bus.frame}  NMI enabled={bool(bus.ctrl & 0x80)}")
     print("PPU writes: " + " ".join(f"${r:04X}={c}" for r, c in sorted(bus.ppu_writes.items())))

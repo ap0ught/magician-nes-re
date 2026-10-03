@@ -99,6 +99,46 @@ index, which both `IndexError`s above 8 KiB and has no business corrupting
 So "the rebuild is black" is not yet a statement about the rebuild. What *is*
 sound is the tracer-vs-tracer comparison, and the structural findings below.
 
+### 3a. PRG mode must not be read from `$E000`/`$E001` -- and that one was worth both ROMs
+
+With the mode bit read from `$8000` alone (see §3b) both images run 120 frames
+without halting. Before it, both halted inside frame 4 with R6 and R7 swapped.
+
+### 3b. PRG mode comes from `$8000` bit 6, and the source proves it
+
+NESdev lists bit 6 of `$E001` as PRG mode on MMC3, and the tracer was honouring
+it. This game's IRQ handler is
+
+    irq     pha / txa / pha / tya / pha / sta $e000 / sta $e001   ; "clear MMC3 IRQ"
+
+with A = Y, so under that reading the bank windows swap on Y alone -- and
+`reset` needs mode 0, because it sets `bnk 6,#$0` / `bnk 7,#$1` and then
+`jmp start`, which puts its own main loop at `$8000`. A game that broke itself
+every other interrupt is not what ships.
+
+The source settles it without appeal to a datasheet: the only place this game
+ever writes a mode bit is `stx $8000` with a value of 0-7, inside the `bnk`
+macro (`x0.pds:188` -> `setbank`, `x7.pds:793`). So the mode bit is read from
+`$8000`/`$A000` even ports and nowhere else. `$E000`/`$E001` are the interrupt
+controls, and `$E001` bit 7 disables the IRQ.
+
+Measured, 600 frames, `--where w:2007`:
+
+| | before | after |
+|---|---|---|
+| cartridge | HALT `illegal opcode $12 at $841A`, 3.6 frames | 600 frames, no halt |
+| rebuild | HALT `illegal opcode $7A at $010A`, 3.6 frames | 600 frames, no halt |
+
+Both still have an all-`$0F` palette and both still spin in a wait loop, so
+neither is fixed -- but "runs 600 frames" and "vectored through garbage at
+frame 1" are very different places to be debugging from.
+
+**A trap worth recording.** `tools/dis6502.py --cart --from 0x8378` reported
+`AA AA AA 2A AA` at `$8380`, and the cartridge's own code at `$8382` is
+`20 25 F8` = `jsr rn`. I spent a step believing the cartridge was executing a
+data table. The raw bytes (`slot0 $0380 = CD E2 20 25 F8 A5 40 D0 F9`) are the
+authority; do not trust a disassembly whose bank you have not checked.
+
 ---
 
 ## 4. `resolve()` wrote `self.prg[-1]` -- the IRQ vector's high byte
