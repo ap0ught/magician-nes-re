@@ -594,8 +594,11 @@ def report(write: bool, want_probe: bool, want_boot: bool,
     L.append("## Per module")
     L.append("")
     L.append("`slot` is where the bytes are filed, `origin` the CPU address the "
-             "module is assembled at. They are different questions and only four "
-             "slots can have an origin at all.")
+             "module is assembled at. They are different questions. A module gets "
+             "an origin from its own `org`, from `MODULE_ORIGINS` when the "
+             "hardware cannot use `slot_origin`, or from `slot_origin(slot)` -- "
+             "and `MODULE_ORIGINS` has entries, so it is not the case that only "
+             "four slots can have one.")
     L.append("")
     L.append("| module | bytes | slot | origin | pinned? | "
              + " | ".join(f"{n} match" for n in carts) + " |")
@@ -618,11 +621,16 @@ def report(write: bool, want_probe: bool, want_boot: bool,
             row += f" {hit} ({100.0 * hit / max(len(offs), 1):.1f}%) |"
         L.append(row)
     L.append("")
-    L.append("A module with no `origin` of its own inherits `slot_origin(slot)`, "
-             "which is only a true statement about the hardware for slots 0, 1, 14 "
-             "and 15. `X6.PDS` has no `org` and was in slot 3, so it inherited "
-             "`$E000` -- the window MMC3 fixes to slot 15. That was a real bug and "
-             "is fixed; see `MODULE_ORIGINS`.")
+    L.append("A module with no `origin` of its own and no `MODULE_ORIGINS` entry "
+             "inherits `slot_origin(slot)`, which is only a true statement about "
+             "the hardware for slots 0, 1, 14 and 15 -- MMC3 presents those two "
+             "fixed windows at `$C000`/`$E000` and the two switchable ones at "
+             "`$8000`/`$A000`. `X6.PDS` is the case that needed saying out loud: "
+             "it has no `org`, and when it sat in slot 3 it inherited `$E000`, "
+             "which MMC3 fixes to slot 15, so `reset`'s `jsr initcols` read a "
+             "hole. It is now pinned to slot 15 with `MODULE_ORIGINS` putting it "
+             "at `$E605`; the *slot* comes from the call target being in the "
+             "fixed window, and the *origin* from X5's ceiling.")
     L.append("")
 
     # ------------------------------------------------------------ the clusters

@@ -134,10 +134,17 @@ MODULE_NOTES = {
                "claims slot 5, which SEQ.SRC's tables also hold. UNRESOLVED."),
     "X5.PDS": ("slot 14", "X5.PDS:4 `org $c000`, and the cartridge has its `sql` "
                "table byte-identically at file $0C000+$10000."),
-    "X6.PDS": ("slot 3, by elimination", "no `org`. The search's 16/64 DAT hit at "
-               "slot 12 is a false positive -- slot 12 is level 5's slot by X7's "
-               "own `b = $c`, and the 64 bytes are inv.col, which the cartridge "
-               "does not contain. Slot 3 is the only slot nothing else claims."),
+    # Slot 15, pinned -- not slot 3 by elimination. This string said slot 3
+    # while PINNED_SLOTS["X6.PDS"] was 15, so every build log contradicted
+    # itself: the placement line said 15 and this note said 3.
+    "X6.PDS": ("slot 15, pinned", "no `org` of its own. `reset` does `jsr "
+               "initcols`, and `initcols` is in X6; in the cartridge that call "
+               "target is $F04A and in this source's build $EFEE, both inside "
+               "the fixed $E000 window, which MMC3 gives to slot 15 whatever the "
+               "registers say. Elimination over the free slots is not evidence: "
+               "the search's only hit was a false positive (slot 12 is level "
+               "5's slot by X7's own `b = $c`, and the 64 bytes are inv.col, "
+               "which the cartridge does not contain). See PINNED_SLOTS."),
     "X7.PDS": ("slot 15", "the cartridge's vectors read nmi=$F9AB irq=$F9B3 "
                "reset=$F9C1 and `reset`/`nmi`/`irq` are X7.PDS:922/903/914."),
 }
@@ -229,73 +236,48 @@ MODULE_WINDOW_SLOTS = {"X4.PDS": X4_WINDOW_SLOTS}
 
 # Slot 15 has 8 KiB and three modules want to be in it, and they do not fit.
 #
-# Measured sizes, from `tools/modrange.py` on this source:
+# Nothing in this comment is a number the build does not print. The byte counts
+# come from `Assembler.ceiling_drops`, which `prg_offset` fills one entry per
+# *distinct* byte address the source assembles at or above a module's ceiling,
+# and which the build log prints as "CEILING DROPS" immediately above the byte
+# accounting. At the time of writing, with the ceilings set as below:
 #
-#     X5's spill  $E000-$E808   2 057 bytes   (X5 is `org $c000` and emits 10 249)
-#     X6          $E809-$F3FF   3 063 bytes
-#     X7          origin..last  2 602 bytes   (`last` is X7's own label)
-#     SAM.SAM     $FB80          864 bytes   (X7.PDS:997)
-#                             -------
-#                              8 586 bytes   against 8 192
+#     X5.PDS    517 byte(s), $E605-$E809
+#     X6.PDS    150 byte(s), $F166-$F1FB
+#     total     667 byte(s)
 #
-# The 394-byte over-subscription is not a rounding error and it is not fixable
-# by rearranging: X5's spill *starts* at $E000 because that is where X5's own
-# bytes land once it runs past $DFFF, X6 has no `org` so it follows X5, and X7's
-# address is pinned by the cartridge's reset vector. The release does not have
-# this problem, and the reason is measurable: in the cartridge, slot 15 is
-# X6 at $E000-$F165 and X7 at $F166 (its `initcols` is at $F04A and its `reset`
-# at $F9C1), so the release's X5 fits inside slot 14. This source's X5 does not --
-# its MISC.SRC tail runs 2 057 bytes past $DFFF. That is a difference between
-# the February 1990 source and the later revision the cartridge was built from,
-# not something the assembler can invent a fix for.
+# `tools/modrange.py` reports the other half: X5 assembles $C000-$E809 (10 250
+# bytes, so 2 058 of them past the end of slot 14), X6 assembles $E605-$F1FB
+# (3 063), and X7's own `last` plus SAM.SAM want the rest of the window.
 #
-# So the shortfall is taken out of X6, at its *end*, and reported. X6's tail is
-# the display layer -- `getdir`, `printchr`, `dnum`, `btod8/16`, `setxy`,
-# `waitjoy`, `addcrs` -- which is not on the path from `reset` to the title
-# screen. `initcols`, `initspr`, `newlev`, `setfade`, `pstring`, `addaxy` and
-# everything X6 contributes before $F166 are all kept. The bytes are dropped to
-# `overflow` and counted in the build log rather than silently overwritten by X7:
-# with the ceiling absent they land on top of X7's `setbank`, `farjsr67`,
-# `initdma` and `reset`, and the ROM then jumps through whatever of them
-# survives, which is how a build can look assembled and still not boot.
+# Why a ceiling at all, and why these two. `initcols` is at $EFEE in this build
+# and at $F04A in the cartridge, and it is on the path from `reset` to anything
+# visible -- `reset` calls it. X6 is pinned to slot 15 because that call is a
+# jump into the fixed $E000 window. X6 has no `org` of its own, so it starts
+# wherever X5 stops, and X5 has no choice either: its MISC.SRC tail runs 2 058
+# bytes past $DFFF. X7's start is pinned by the cartridge's reset vector
+# ($F9C1 => $F166). Three modules, 8 KiB.
 #
-# The arithmetic that fixes the split, and it is worth writing out because the
-# first attempt at it was off by one routine and produced a ROM that reached the
-# title loop and drew nothing.
+# So the shortfall is taken out of the two modules' *tails*, and the split is
+# chosen so that `initcols` survives whole: X6 must be able to emit through
+# $F165, immediately below X7, and with MODULE_ORIGINS putting X6 at X5's
+# ceiling that fixes X5_CEILING at $E605. The cost of that choice is the 667
+# bytes printed above, which is larger than the raw over-subscription because
+# the ceilings are a judgement about which code matters, not a division of a
+# shortfall. Adding a ceiling to make the number smaller would move the loss
+# somewhere that runs.
 #
-# `initcols` is 2 537 bytes into X6 and is **36 bytes long** (`tools/modrange.py`
-# and the cartridge both show `initcols` as $F04A-$F06D in the release, i.e.
-# `ldy #$3f / sty $2006 / lda #0 / sta $2006 / lda #$0f / ldx #$20` then 32
-# iterations of `sta $2007 / sta curchrhal-1,x / dex / bne`, then four
-# `sta $2006` and an `rts`). So X6 has to be able to emit through offset
-# $9E9+$24 = $A0D and its last byte has to land at $F165, immediately below X7's
-# $F166. X6 starts where X5 stops, so:
+# What the loss costs at run time is a separate question, and `tools/nestrace.py`
+# answers it rather than this comment. Measured with the ceilings as they stand:
+# `reset` -> `initdma` -> `initcols` -> `dotitle` -> `unrunscn` -> `jsr initspr`
+# are all reached, and `initspr` assembles at $F033 -- 307 bytes *below* X6's
+# ceiling -- so `jsr initspr` lands in X6's own code and not in X7's. What is
+# never reached is `im` (X5.PDS:319, the orgchrpal -> curchrpal copy) and
+# `nmi0` (X5.PDS:167, the per-frame palette push), because execution leaves the
+# program's own code first: at cycle 98674 `addmsg`'s `rts` at $F1A5 finds an
+# empty stack and returns into RAM at $0F10. That is a lost stack frame, not a
+# missing routine, and it is the next thing to fix.
 #
-#     X5 ceiling <= $F166 - $A0D = $E759
-#
-# $E77C -- the first value tried -- is $E7C too high. It puts `initcols`'s first
-# byte at $F165 and drops the other 35, and execution falls straight through into
-# X7. Measured: `sta $2007` wrote $0E to $3F00-$3F1F instead of $0F, the palette
-# stayed black, and the hot loop was `X0.PDS`'s `!f lda second / bne !f` waiting
-# for an NMI that never came because the NMI vector was fine and the picture was
-# not. A one-byte ceiling error, found by the framebuffer.
-#
-# With $E759, X6 keeps offsets $0000-$A0C -- `pper`, `levind`, `helind`,
-# `ratind`, `showinv`, `getdesc1/2`, `doauto`, `ispell`, `showspell`,
-# `setspell`, `pulse`, `actob`, `wipeobs`, `wipebuls`, `imap`, `mapsp`,
-# `mapmsg`, `mtab`, `pstring`, `arrows`, `sprblok`, `xtab`, `ytab`, `invcol`,
-# `addaxy`, `addspr`, `setpxy`, and `initcols` complete. It loses `wipescns`,
-# `initspr`, `pnum8/16`, `dnum`, `btod8/16`, `printchr`, `setxy`, `setfade`,
-# `dofade`, `newlev`, `convcur`, `convind`, `joykey`, `getdir`, `addcrs`,
-# `waitjoy`, `wipejoy`. **Of those `initspr` is on the title-screen path**
-# (`X0.PDS:637 jsr initspr`), so the rebuilt ROM draws the title screen's
-# background and not its sprites; the rest is menu/inventory text and the
-# level-load path. X5 gives up its last 176 bytes: the tail of MISC.SRC after
-# `sclrp1` (`ststp`, `movepw` and the last palette-reset helpers).
-#
-# Total given up: 666 bytes, which is exactly the over-subscription computed
-# above, spent on X6's tail rather than X5's because X6's early code is the
-# inventory/spell machinery and X5's tail is shop and palette housekeeping.
 X5_CEILING = 0xE605
 X6_CEILING = 0xF166
 MODULE_CEILINGS = {"X5.PDS": X5_CEILING, "X6.PDS": X6_CEILING}
@@ -364,8 +346,11 @@ MODULE_ORIGINS: dict[str, int] = {"X2.PDS": 0xA000, "X6.PDS": X5_CEILING}
 ORIGIN_WHY = {
     "X2.PDS": "$A000 from `X4.PDS:452-455`: farjsr67(X=$00,Y=$01) to `firespell`, "
               "so X2 is in register 7's window",
-    "X6.PDS": "$E77C: where X5's slot-15 spill has to stop so that X6's "
-              "`initcols`, 2 537 bytes into X6, lands below X7's $F166. See "
+    # $E605, not $E77C: this string said $E77C for several builds and that
+    # value appears nowhere else in the tree. It is X5_CEILING, and the reason
+    # is the ceiling comment above.
+    "X6.PDS": "$E605 = X5_CEILING: where X5's slot-15 spill has to stop so that "
+              "X6's `initcols` (at $EFEE here) lands below X7's $F166. See "
               "X5_CEILING.",
 }
 
@@ -660,6 +645,7 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     # internal layout moves, the anchor moves with it.
     chained = set(CHAINED)
     x7_off = x7_base = None
+    project_error: Exception | None = None
     for attempt in range(2 if x7_vector else 1):
         image = bytearray(PRG_SIZE)
         asm = cls(image, SRC, [SRC], verbose=verbose)
@@ -685,7 +671,6 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
         ceilings = dict(MODULE_CEILINGS)
         if x7_base is not None:
             origins["X7.PDS"] = x7_base
-        project_error: Exception | None = None
         try:
             asm.run_all([SRC / m for m, _ in placed], [s for _, s in placed],
                         origins, window_slots, ceilings)
@@ -733,6 +718,33 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                        f"`if last>$fb80 / error`")
             log.append(f"         guard says code must stop, so SAM.SAM at $FB80 "
                        f"overwrites ${last - 0xFB80} byte(s) of it. ***")
+
+    # What the ceilings cost, counted by the assembler rather than asserted in a
+    # comment. `overflow` is cleared per file, which is why the numbers in the
+    # ceiling comment above used to disagree with each other: nothing printed
+    # them. These are *distinct* addresses, so the several passes `run_all` makes
+    # before the symbols settle do not multiply the count.
+    drops: dict[str, list[int]] = {}
+    for name, p, _slot in sorted(asm.ceiling_drops):
+        drops.setdefault(name, []).append(p)
+    if drops:
+        log.append("")
+        log.append("CEILING DROPS: bytes the source assembles that are not in the "
+                   "image, because the")
+        log.append("module ran past MODULE_CEILINGS. Counted by "
+                   "Assembler.prg_offset, not asserted:")
+        total = 0
+        for name, ps in sorted(drops.items()):
+            lo, hi = min(ps), max(ps)
+            log.append(f"  {name:<22} {len(ps):5d} byte(s), ${lo:04X}-${hi:04X}")
+            total += len(ps)
+        log.append(f"  {'total':<22} {total:5d} byte(s)")
+        log.append("  Every one of these is reachable from `reset` in principle; "
+                   "GAPMAP.md names which")
+        log.append("  of them the tracer actually reaches. Do not add a ceiling "
+                   "to make this smaller:")
+        log.append("  the shortfall is three modules competing for slot 15's8 KiB.")
+
     # After the loop, not inside it: the handler above `break`s, so a check
     # written there is never reached by the one case it exists for.
     if project_error is not None:

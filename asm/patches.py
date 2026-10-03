@@ -95,6 +95,11 @@ CLASSES = {
 
 MANIFEST = pathlib.Path(__file__).resolve().parent / "patches.manifest"
 
+# The only class `apply` will fill. Named here rather than written as the literal
+# "b" at the two places that need it, so that adding a class to CLASSES cannot
+# quietly make it fillable.
+FILLABLE = "b"
+
 
 class PatchError(Exception):
     """Anything that makes the manifest untrustworthy. Never downgraded."""
@@ -201,6 +206,20 @@ def parse(text: str) -> list[Region]:
         if cur.klass not in CLASSES:
             raise PatchError(f"region {cur.name}: class {cur.klass!r} is not one of "
                              f"{', '.join(sorted(CLASSES))}")
+        if cur.klass != FILLABLE:
+            # The class rule, enforced. `CLASSES` says only b may be filled, and
+            # GAPMAP.md repeats it as a fact about this file, but nothing here
+            # checked: a class-a region parsed cleanly and `apply` filled it, so
+            # the one control the manifest has is a comment.
+            #
+            # Rejecting it at parse time rather than at apply time is deliberate.
+            # A class-a region is a *placement* bug, and the fill would be wrong
+            # even if the address were right; it must never reach an image.
+            raise PatchError(
+                f"region {cur.name}: class {cur.klass!r} is "
+                f"{CLASSES[cur.klass]} -- only class {FILLABLE!r} may be filled "
+                f"from a cartridge. Fix the slot or the assembler; do not carry "
+                f"the bytes.")
         if cur.cart not in CARTS:
             raise PatchError(f"region {cur.name}: cart {cur.cart!r} is not a known "
                              f"dump ({', '.join(sorted(CARTS))})")
@@ -351,6 +370,14 @@ def apply(image: bytearray, cart: bytes, regions: list[Region],
     resolved = verify(regions, cart_dir)
     report = Report(cart_dir=cart_dir)
     for region in regions:
+        # Belt and braces: `parse` already refuses a non-b class, but `apply`
+        # is the thing that writes, so it checks the class it is about to act on
+        # rather than trusting its caller to have gone through `parse`.
+        if region.klass != FILLABLE:
+            raise PatchError(
+                f"region {region.name}: refusing to fill class {region.klass!r} "
+                f"({CLASSES.get(region.klass, 'unknown class')}); only class "
+                f"{FILLABLE!r} may be filled from a cartridge")
         if region.end > len(image):
             raise PatchError(f"region {region.name}: ${region.offset:05X}+"
                              f"{region.length} runs past the end of the "

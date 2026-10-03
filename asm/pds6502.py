@@ -764,6 +764,17 @@ class Assembler:
         # prg_offset(): folding them back over the module's own start is what
         # silently destroyed X5's `sql` table.
         self.overflow: list[tuple[str, int, int]] = []
+        # Bytes dropped because the module ran past `addr_ceiling`. Kept apart
+        # from `overflow` because the two mean different things -- a ceiling is a
+        # decision, an overflow is a hole -- and because `overflow` is cleared
+        # between files so that its report names one module.
+        #
+        # A *set* of (file, address, slot), because the question the build asks
+        # is "how many distinct bytes did this module assemble and not emit", and
+        # `run_all` runs each module several times before the symbols settle. As
+        # a list the same address is counted once per attempt, which reported
+        # 1096 dropped bytes for X5 where there are 517.
+        self.ceiling_drops: set[tuple[str, int, int]] = set()
         self.report: list[str] = []
         # Window base address -> 8 KiB slot, for a module whose logical span
         # crosses a window boundary and so needs a *different* slot in each. The
@@ -959,7 +970,11 @@ class Assembler:
             self.overflow.append((self.here.name, p & 0xFFFF, self.slot))
             return -1
         if self.addr_ceiling is not None and p >= self.addr_ceiling:
-            self.overflow.append((self.here.name, p & 0xFFFF, self.slot))
+            # Counted separately from `overflow`. `overflow` is reset per file,
+            # so the ceiling drops of every module but the last one never reach
+            # the build log -- which is why the byte totals for the ceilings in
+            # build.py were prose rather than a measurement.
+            self.ceiling_drops.add((self.here.name, p & 0xFFFF, self.slot))
             return -1
         win = 0x8000 + ((p - 0x8000) & 0x6000)
         slot = self.slot
@@ -1128,6 +1143,7 @@ class Assembler:
         self.tolerate = False
         # One last clean pass, with the now-known symbols, so the emitted bytes
         # come from a run in which every reference resolved.
+        #
         for path, slot in zip(paths, slots):
             self.run_file(path, slot=slot, origin=origins.get(path.name),
                           window_slots=window_slots.get(path.name),
