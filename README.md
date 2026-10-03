@@ -175,38 +175,71 @@ the bug.
 
 ## Status
 
-**The rebuild assembles, loads, and runs, and shows a black screen.** The
-cartridge cold-booted on the same machine, same emulator, same moment, shows the
-title screen and then an attract demo.
+**The rebuild assembles, loads and runs, and still shows a black screen.** No
+emulator has been run since BizHawk was found to be unusable here, so this is the
+tracer's verdict (`tools/nestrace.py`), not an emulator's: max luminance over the
+256x240 picture area is 0, and the frame is uniformly black. The captured
+frame for this state is reproducible with
 
-`asm/out/magician-rebuilt.nes` loads in BizHawk 2.11.1 under Mono (`--gdi`), the
-core reports mapper 4, and the frame is not merely dark: maximum luminance across
-the whole 256×240 picture area is 0, which is what a `PPUMASK` of `$00` looks
-like. `reset` writes `stx $2001` with `$00` and the only `lda #$fe / sta $2001`
-in the source is `X0.PDS:771`.
+    python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 120 --png out.png
 
-**The black screen is not fixed, and no emulator was run this session.** Two bugs
-that are certainly wrong were found and fixed — every relative branch landed one
-byte late, and `SAM.SAM` overwrote 16 bytes of X7's own code — and neither is the
-cause. `reset` still calls `initcols` at an address whose 8 KiB slot is known to
-be wrong (`journal/02-...md` §5), and the zero-page/RAM allocation map has drifted
-so that operands like `curchrpal-1,x` encode `$04D3` where the cartridge has
-`$017F`.
+The cartridge does **not** boot in the tracer either, which is the important
+caveat: the tracer is a diagnostic, not an acceptance test, and "the rebuild is
+black" is not yet a statement about the rebuild. What is sound is the comparison
+between the two under the same instrument.
+
+Byte-match against the release is **39 832 / 131 072 (30.4%)**, of which
+**38 982 (29.7%) is source-only** and 864 bytes (0.7%) come from the one
+class-b manifest region. That number went *down* from 29.9%'s 39 204 in the last
+round of fixes, and that is the right outcome: byte-match against a later release
+rewards a wrong-but-self-consistent build, and the fix that lowered it
+(`lda (zp),y` was being assembled as `lda (zp,x)`, 54 statements in all eight
+modules) is confirmed by the cartridge's own opcode at file `$1F772`.
+
+What the tracer now shows the rebuild doing, in order, with `--where`:
+
+    reset -> initdma -> initcols -> setchr/setspr/movepal -> dotitle
+          -> unrunscn -> jsr initspr -> NMI -> tnmi
+
+and then, at cycle 98674, `addmsg`'s `rts` at `$F1A5` finds an empty stack and
+returns into RAM at `$0F10`. **That is the remaining bug: a lost stack frame**,
+not a missing routine and not the slot-15 ceilings. `im` (`X5.PDS:319`, the
+`orgchrpal -> curchrpal` copy) and `nmi0` (`X5.PDS:167`, the per-frame palette
+push) are never reached because of it, which is why every one of the 32 palette
+entries is still `$0F`. `journal/03-...md` has the trace and the dead ends.
+
+Corrections to what this file used to claim, with the measurements:
+
+* `initcols`'s slot is not wrong. X6 is pinned to slot 15 because `reset`'s
+  `jsr initcols` targets the fixed `$E000` window, and the tracer reaches
+  `initcols`. (`journal/02-...md` §5.)
+* `initspr` is not dropped by the ceiling. It assembles at `$F033`, 307 bytes
+  *below* `X6_CEILING = $F166`, so `jsr initspr` lands in X6's own code.
+* The zero-page/RAM map differs from the release (`t0` is `$13` here, `$11`
+  there; `curchrpal` is `$04D4` here, `$0180` there) and that is **not** a bug.
+  Both maps come from the same `zp`/`ram` declarations in `X0.PDS:363+`, every
+  module reads the same symbols, and the palette path works under either:
+  `nmi0` pushes `curchrpal-$60 .. curchrpal` to `$3F00-$3F60`, and `curchrpal`
+  aliases `$3F00` because `$3F60 & $1F == 0`. Copying the release's addresses
+  would be matching the cartridge, not fixing the build.
+* `PPUMASK` is `$FE`, not `$00` -- background and sprites are enabled with the
+  leftmost column masked. The screen is black because the palette is `$0F`, not
+  because rendering is off.
 
 What is *not* the reason any more, having been the reason once: the reset vector
 used to read `$E84D/$E85D/$E842` against the cartridge's `$F9C1/$F9B3/$F9AB`. The
-vectors now match. The boot path is now readable side by side, and the release's
-`reset` turns out to be **this source's `reset` plus ten bytes** — two small
-insertions — after which the two are instruction for instruction identical. So the
+vectors now match. The boot path is readable side by side, and the release's
+`reset` turns out to be **this source's `reset` plus ten bytes** -- two small
+insertions -- after which the two are instruction for instruction identical. So the
 February 1990 source and the cartridge are much closer on the boot path than a
-29.9% whole-image figure suggests.
+30.4% whole-image figure suggests.
 
 Note that the cartridge has battery-backed PRG RAM, so any "does it boot"
 comparison must clear `NES/SaveRAM/` on both sides or BizHawk resumes a stale save
 and shows you last session's game. And unattended, the cartridge does *not* reach
-the GAME RESTORE SCREEN: it goes title → attract demo. Reaching the restore screen
+the GAME RESTORE SCREEN: it goes title -> attract demo. Reaching the restore screen
 needs a button press, and BizHawk here takes input from SDL with no way for the
-harness to inject one — so "does it boot" is currently measurable only as "does it
+harness to inject one -- so "does it boot" is currently measurable only as "does it
 reach the title screen unattended".
 
 `crates/` has not been started, and nothing in this repository depends on it.
