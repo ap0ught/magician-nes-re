@@ -78,8 +78,13 @@ class Footprint(P.Assembler):
     order: list[str] = []
     tracing = False
 
-    def run_file(self, path, slot=None, origin=None, window_slots=None):
-        super().run_file(path, slot=slot, origin=origin, window_slots=window_slots)
+    def run_file(self, path, slot=None, origin=None, window_slots=None,
+                 addr_ceiling=None):
+        # `addr_ceiling` has to be named here as well as forwarded: run_all
+        # passes it for every module, so an override that does not accept it
+        # raises TypeError on every call and the tool measures nothing.
+        super().run_file(path, slot=slot, origin=origin,
+                         window_slots=window_slots, addr_ceiling=addr_ceiling)
         if not Footprint.tracing:
             return None
         name = pathlib.Path(path).name
@@ -111,7 +116,10 @@ def assemble() -> tuple[bytes, dict[int, str], dict[str, set[int]], list[str]]:
     """
     cart = B.read_cart(patches.cart_path("release"))[0]
     chained = set(B.CHAINED)
-    placed = [(B.SRC / m, None if m in chained else B.ASSUMED_SLOTS[m])
+    # all_slots() is PINNED_SLOTS over ASSUMED_SLOTS. Indexing ASSUMED_SLOTS
+    # directly raises KeyError for X4/X6/X7, which are pinned, not assumed.
+    _slots = B.all_slots()
+    placed = [(B.SRC / m, None if m in chained else _slots[m])
               for m in B.MODULES]
     placed += [(B.SRC / m, s) for m, s in B.SEQ_MODULES]
     origins = {"SEQ.SRC": B.SEQ_ORIGIN, **B.MODULE_ORIGINS}

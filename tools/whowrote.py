@@ -33,9 +33,10 @@ class Traced(pds6502.Assembler):
     order: list = []                  # modules in assembly order
     tracing = False
 
-    def run_file(self, path, slot=None, origin=None, window_slots=None):
+    def run_file(self, path, slot=None, origin=None, window_slots=None,
+                 addr_ceiling=None):
         super().run_file(path, slot=slot, origin=origin,
-                         window_slots=window_slots)
+                         window_slots=window_slots, addr_ceiling=addr_ceiling)
         if not self.tracing:
             # Pass 1 assembles every module at all sixteen slots as a search, so
             # recording there unions 16 attempts and reports a module as having
@@ -81,7 +82,8 @@ def main() -> int:
     # X7 is anchored so `reset` lands on the cartridge's reset vector -- which is
     # what `build.py` computes in two passes, so it is measured the same way.
     chained = set(B.CHAINED)
-    placed = [(B.SRC / m, None if m in chained else B.ASSUMED_SLOTS[m])
+    _slots = B.all_slots()   # PINNED over ASSUMED; X4/X6/X7 are pinned
+    placed = [(B.SRC / m, None if m in chained else _slots[m])
               for m in B.MODULES]
     placed += [(B.SRC / m, s) for m, s in B.SEQ_MODULES]
     Traced.tracing = True

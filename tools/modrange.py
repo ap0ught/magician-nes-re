@@ -45,11 +45,12 @@ class Traced(pds6502.Assembler):
         self._hi = max(getattr(self, "_hi", 0), self.phys)
         super().emit(byte)
 
-    def run_file(self, path, slot=None, origin=None, window_slots=None):
+    def run_file(self, path, slot=None, origin=None, window_slots=None,
+                 addr_ceiling=None):
         self._lo = 1 << 30
         self._hi = 0
         super().run_file(path, slot=slot, origin=origin,
-                         window_slots=window_slots)
+                         window_slots=window_slots, addr_ceiling=addr_ceiling)
         name = pathlib.Path(path).name
         offs = sorted(self.emitted)
         self.bymodule[name] = offs

@@ -685,13 +685,25 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
         ceilings = dict(MODULE_CEILINGS)
         if x7_base is not None:
             origins["X7.PDS"] = x7_base
+        project_error: Exception | None = None
         try:
             asm.run_all([SRC / m for m, _ in placed], [s for _, s in placed],
                         origins, window_slots, ceilings)
         except Exception as exc:                        # noqa: BLE001
-            # Report rather than traceback: the per-module slot log above is the
-            # context that makes this failure legible, and a traceback buries it.
+            # The per-module slot log above is the context that makes this
+            # failure legible, so it is kept -- and then the failure is raised
+            # rather than swallowed.
+            #
+            # It used to `break`, which left `image` as the zero-filled bytearray
+            # allocated at the top of this loop and returned it as a build. Every
+            # downstream number was then a measurement of an image with no code
+            # in it: tools/modrange.py's per-module byte ranges came out 0%,
+            # and its output is where the ceiling arithmetic in this file gets
+            # its numbers. A tool whose Assembler subclass has a stale run_file
+            # signature lands here as a plain TypeError, indistinguishable from
+            # a genuine assembly error, and produces a plausible all-zero table.
             log.append(f"project pass failed: {type(exc).__name__}: {exc}")
+            project_error = exc
             break
 
         if not x7_vector or "X7.PDS" not in dict(placed):
@@ -721,6 +733,14 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                        f"`if last>$fb80 / error`")
             log.append(f"         guard says code must stop, so SAM.SAM at $FB80 "
                        f"overwrites ${last - 0xFB80} byte(s) of it. ***")
+    # After the loop, not inside it: the handler above `break`s, so a check
+    # written there is never reached by the one case it exists for.
+    if project_error is not None:
+        print("\n".join(log), file=sys.stderr)
+        raise RuntimeError(
+            f"the project pass failed and would otherwise return an image with "
+            f"nothing in it: {type(project_error).__name__}: "
+            f"{project_error}") from project_error
     return image, asm, log, unplaced
 
 

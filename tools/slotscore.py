@@ -60,9 +60,10 @@ class Footprint(pds6502.Assembler):
         self.order: list[str] = []
         self.slotof: dict[str, int] = {}
 
-    def run_file(self, path, slot=None, origin=None, window_slots=None):
+    def run_file(self, path, slot=None, origin=None, window_slots=None,
+                 addr_ceiling=None):
         super().run_file(path, slot=slot, origin=origin,
-                         window_slots=window_slots)
+                         window_slots=window_slots, addr_ceiling=addr_ceiling)
         if not self.trace:
             return None
         name = pathlib.Path(path).name
@@ -107,8 +108,9 @@ def main() -> int:
     lo, hi = (int(x, 0) for x in args.slots.split("-"))
     slots = list(range(lo, hi + 1))
 
-    ref = dict(B.ASSUMED_SLOTS)
-    ref["X5.PDS"], ref["X7.PDS"] = 14, 15
+    # all_slots() already carries the pinned measurements (X4/X6/X7); the
+    # ASSUMED_SLOTS index raises KeyError on exactly those three.
+    ref = dict(B.all_slots())
     for kv in filter(None, args.ref.split(",")):
         k, v = kv.split("=")
         ref[k] = int(v, 0)
