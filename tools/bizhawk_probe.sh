@@ -17,6 +17,12 @@
 #     python-xlib + PIL (tools/side_by_side.py) for a screenshot.
 #   * The cartridge has battery-backed PRG RAM. BizHawk resumes a stale save, so
 #     a "working" session may not be a cold boot. Compare from cleared SRAM.
+#   * The two windows have DIFFERENT titles -- BizHawk titles a window after the
+#     ROM's file name, so they are "Magician [NES]" and "magician-rebuilt [NES]"
+#     -- so tools/side_by_side.py can tell them apart by substring. They do not
+#     both exist at once quickly: the second EmuHawk instance takes ~60 s to put
+#     its window up (the first holds the single-instance lock), which is why
+#     SETTLE is 60 rather than the 30 this used to be.
 
 set -euo pipefail
 
@@ -40,12 +46,21 @@ launch() {  # launch <ini> <rom> <logfile>
       </dev/null >"$3" 2>&1 & )
 }
 
+# Only ever read, never written -- but a stale SRAM file makes the cartridge look
+# like it boots to a resumed save, and `NOTES` below is where that happened.
+SRAM="${BIZHAWK_SRAM:-$BIZ/NES/SaveRAM}"
+
+echo "clearing $SRAM"
+mkdir -p "$SRAM"
+rm -f "$SRAM"/Magician.SaveRAM "$SRAM"/Magician.SaveRAM.bak \
+      "$SRAM"/magician-rebuilt.SaveRAM
+
 echo "launching cartridge  : $CART"
 launch "$cfg/stock.ini" "$CART" "$cfg/stock.log"
 echo "launching rebuilt    : $ROM"
 launch "$cfg/rebuilt.ini" "$ROM" "$cfg/rebuilt.log"
 
-sleep 30
+sleep "${SETTLE:-60}"
 python3 "$ROOT/tools/side_by_side.py" "$cfg/side.png" magician-rebuilt "Magician [NES]" || {
   echo "could not place the windows; check $cfg" >&2; exit 1; }
 echo
