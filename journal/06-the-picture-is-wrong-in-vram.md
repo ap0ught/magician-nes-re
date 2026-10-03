@@ -202,3 +202,107 @@ And a caution about a mistake I made while probing that: `pcall(f)` returns
 `pcall(function() return emu[n] end)` reports success for names that do not exist.
 Every name in this project is now read off `pairs()` or off a real callback
 firing, never off a `pcall` result.
+
+---
+
+# Corrections to this entry, made later the same day
+
+Two claims above were wrong, or would have been wrong. Both are corrected here in
+place rather than edited out, because the second one is exactly the kind of lead
+that costs a session if it is left standing.
+
+## The 36-byte insertion is inert. It is not the cause.
+
+The entry above ends with "the routine that writes the nametable is not the
+release's routine", and that part stands. What does not stand is the hope attached
+to it. The insertion is **dead code on a cold boot**, and this is measurable rather
+than argued.
+
+The insertion is gated on `bit $06D8` / `bmi` -- three times in the whole
+cartridge, all in bank 3, at `$DB09`, `$DB15` and `$DB42`, and **nowhere else**:
+
+    $DB05  A0 20     ldy #$20
+    $DB07  84 12     sty $12          ; $11/$12 = the tracked VRAM address
+    $DB09  2C D8 06  bit  $06D8
+    $DB0C  30 03     bmi  $DB11       ; skip the sta $2006 ...
+    $DB0E  8C 06 20  sty $2006
+    $DB11  A0 00     ldy #$00
+    $DB13  84 11     sty $11
+    $DB15  2C D8 06  bit  $06D8
+    $DB18  30 03     bmi  $DB1D       ; ... and here
+    $DB1A  8C 06 20  sty $2006
+
+A scan of all 262 144 bytes of the cartridge's PRG finds **zero** `sta $06D8`, zero
+`inc $06D8`, zero `dec $06D8`, and no RMW of any kind. The only way that byte gets
+its value is a zero-page clearing loop -- which is consistent with what the
+Cartridge's RAM actually contains. Read out of BizHawk at frame 60:
+
+    cartridge  $06D8 = $00      rebuild  $06D8 = $FF
+
+So in the cartridge `bmi` is never taken: it writes `$2006` and streams `$2007`,
+which is **exactly what the source does and exactly what the rebuild does**. The
+deferred-write path is a feature for a state this ROM never enters. Chasing it
+would have been a wasted session.
+
+(The `$FF` in the rebuild is not a fault either: the two builds allocate zero page
+differently -- the cartridge has `t0` at `$21` and `curchrpal` at `$0180`, we have
+`t0` at `$13` and the palette buffer at `$04B0` -- so untouched stretches of the
+page are still at BizHawk's power-on fill in one image and not the other. 396 of
+2048 zero-page bytes differ, essentially all of them explained by that.)
+
+## `$9D6C` is not an `rts`, in either image
+
+`journal/03` and the README both carry a claim that at frame 14, cycle 439 272,
+"the `rts` at `$9D6C` pops a destroyed return address". There is no `rts` at
+`$9D6C`. Read straight out of the assembled ROM:
+
+    rebuild $9D6C = $31
+
+and the surrounding bytes are
+
+    $9D40  0e 11 18 19 0e 11 1a 1b 12 13 1c 1d 14 ff 1e ff 1f 20
+    $9D50  2a 24 21 21 2b 2b 22 23 21 21 24 21 2c 2b 25 26 2d
+    $9D60  2e 27 28 ff 2f 29 ff 30 ff 31 32 38 39 2b 2b 3a 3a
+    $9D70  33 34 3b 3c 35 36 3d 3e 37 ff 3f ff 81 82 84 85 83 ff
+
+That is a **character-code table** -- the game's strings stored as tile indices,
+`$FF` as the terminator, `31 32 38 39` spelling "1289". No symbol exists anywhere
+in `$9D00`-`$9E00`. `$9D6C` is a data byte in a font table, not an instruction, and
+not an `rts` in the rebuild.
+
+BizHawk's own disassembler agrees in spirit and disagrees in detail:
+`emu.disassemble(0x9D6C)` returns `BRK` for **both** images, because it reads
+through the `System Bus` domain with whatever bank is currently mapped -- not
+because the byte is zero. Neither reading supports an `rts`.
+
+So the whole `$9D6C` -> `$0000` -> `brk` -> `$F9B3` IRQ chain rests on an address
+that the tracer resolved differently from the ROM it was given. Whatever is true
+about the tracer's execution, its address accounting for this claim does not match
+the assembled image, and the claim cannot be pursued as written.
+
+## Where that leaves the search
+
+The corruption is still exactly where this entry says it is: on the PPU output
+side. WRAM and OAM byte-identical, `PALRAM` identical at frame 60, `CIRAM` 969 of
+4096 different, CHR-RAM 480 of 8192 different in tiles `$045`-`$0FE`.
+
+The 480 CHR bytes are **not** a misaligned copy. Testing every constant source
+offset, the best is +320 and it explains 63 of 480 -- chance. The rebuild's bytes
+at those positions are genuinely different tile data (72 of them zero, against 148
+in the cartridge), and whole 16-byte tiles differ, with runs such as
+
+    cart $04C0  ff 50 ea 3f 00 40 54 01 00 af 15 00 00 00 00 54
+    reb  $04C0  00 00 00 00 00 00 00 00 ff ff ff ff ff ff ff ff
+
+So it is not a shifted stream and not a wrong source pointer. Both the nametable
+writes and the CHR writes go through `$2007`, and both are wrong, which points at
+the `$2006` address setup or the MMC3 CHR bank select rather than at the data.
+
+**Measurement 3 in the list above -- diff the two images' `$2006` writes -- is now
+the one to do first.** It is also the one that needs the write hook, so the hook
+question has to be settled first: `event.onmemorywrite(cb)` installs but does not
+fire, and the address-filtered forms are rejected outright. Either the callback
+needs to be a callback *object* rather than a bare function, or quickerNES does
+not implement `IMemoryCallbackSystem` at all, in which case the fallback is
+BizHawk's own trace logger -- and that needs synthetic input, which python-xlib's
+`XTEST` extension can provide even though there is no xdotool on this machine.
