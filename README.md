@@ -188,16 +188,19 @@ BizHawk 2.11.1's quickerNES at frame 60, unattended, with `NES/SaveRAM/` cleared
 | non-zero pixels | 20 807 / 57 344 | 21 580 / 57 344 |
 
 The rebuild's top ~40% is correct -- brick background, the whole `MAGICIAN` logo,
-the skeleton's head and shoulders. The lower ~60% is scrambled: tiles drawn with
-the wrong pattern or the wrong indices. Reproduce with
+the skeleton's head and shoulders. The lower ~60% is scrambled, and by frame 400
+the corruption has spread upwards. Reproduce with
 
     make rom
     python3 tools/bizhawk/capture.py /tmp/opencode/biz 60
+    python3 tools/bizhawk/series.py /tmp/opencode/biz/series cart:200,400 reb:200,400
 
-That corrects a claim three sessions of this project got wrong. "The rebuild's
-frame is flat colour, max luminance 0.0, 0 non-zero pixels" came from
-`tools/nestrace.py` -- a second NES emulator written for this project -- and not
-from an emulator whose correctness had been established. **Every conclusion in
+It is also *not* converging: static from frame 200 to frame 400, and settling on
+a different picture than the cartridge's. That corrects a claim three sessions of
+this project got wrong. "The rebuild's frame is flat colour, max luminance 0.0,
+0 non-zero pixels" came from `tools/nestrace.py` -- a second NES emulator written
+for this project -- and not from an emulator whose correctness had been
+established. **Every conclusion in
 this repository that rests on a `nestrace.py` framebuffer is withdrawn as
 evidence about the ROM**, including `PPUMASK=$FE`, "all 32 palette entries `$0F`"
 and "659/2048 nametable bytes non-zero". `nestrace.py` is still a legitimate
@@ -214,22 +217,70 @@ is not swallowed by the single-instance pipe. `tools/bizhawk/run.sh` wraps one
 such session. Two traps are documented there and in `journal/05`: the ROM path
 must be absolute (`EmuHawkMono.sh` cds to its own directory, and a relative path
 hangs with nothing in the log, which looks exactly like "BizHawk will not start"),
-and `memory.read_u8(addr, domain)` silently falls back to the default domain when
-the name is wrong, which fabricates a register dump.
+and `memory.usememorydomain` with an unknown name leaves the *previous* selection
+in place rather than falling back to the default, so a typo silently hands you the
+wrong region -- that one produced a report of "all four nametables identical" that
+was 1024 bytes of the constant `$F2` in both images. Check
+`memory.getcurrentmemorydomain()` after selecting. The real domain names are read
+from `memory.getmemorydomainlist()`, which returns plain strings: `WRAM`, `CHR`,
+`CIRAM (nametables)`, `PRG ROM`, `CHR VROM`, `PALRAM`, `OAM`, `System Bus`,
+`CPU registers`.
 
 **Where the rebuild is still wrong.** The corruption is in the picture, so the
-remaining bug is a statement about VRAM rather than about control flow.
-`tools/bizhawk/dump.lua` writes VRAM, CHR-RAM, OAM, work RAM and the palette from
-both images at the same frame so the divergence is a byte range.
+remaining bug is a statement about VRAM rather than about control flow. Dumped
+from both images at the same frame through BizHawk's own memory domains
+(`tools/bizhawk/state.lua`, which verifies the domain name after selecting it):
+
+| region | domain | frame 60 | frame 400 |
+|---|---|---|---|
+| CHR-RAM $0000-$1FFF | `CHR` | 480 / 8192 differ | 480 / 8192 |
+| nametables, 4 KiB | `CIRAM (nametables)` | 969 / 4096 differ | 1006 / 4096 |
+| palette, 32 bytes | `PALRAM` | **0 differ** | 2 differ |
+| OAM, 256 bytes | `OAM` | **0 differ** | **0 differ** |
+| work RAM, 8 KiB | `WRAM` | **0 differ** | **0 differ** |
+
+**Work RAM and OAM are byte-identical.** The screen data is decompressed
+correctly; the damage is entirely on the output side. And it is progressive, not a
+slow draw: the cartridge is static from frame 60 to 400, the rebuild is static
+from frame 200 to 400, and what it settles on is a different picture.
+
+**The routine that writes the nametable is not the release's routine.**
+`unrun`/`unrunscn` (`pds-text/x5.pds:106-121`) assembles correctly -- every
+`lda (t0),y` in it is `B1 13`, `($13),y` -- but the cartridge's copy at `$DB1D` is
+the source's routine plus **one contiguous 36-byte insertion and nothing else**,
+verified by disassembling both and comparing mnemonic streams: 71 instructions to
+71 instructions once the block is removed.
+
+```
+$DB43  2C D8 06  bit  $06D8      ; if bit 7 is set, do not write now
+$DB46  30 05     bmi  $DB4D
+$DB48  8D 07 20  sta  $2007      ; the source's only instruction here
+$DB4B  10 1A     bpl  $DB67
+$DB4D  08        php             ; save A/X/Y, queue the byte on the DMA stack
+$DB54  20 8E F3  jsr  $F38E      ;   ($F38E pushes data,count=1,lo,hi,token $60)
+$DB57  20 46 F9  jsr  $F946      ;   then flush it ($F94F is emptydma)
+$DB5A  E6 11     inc  $11        ;   bump the 16-bit VRAM address
+```
+
+The release defers the nametable write to the NMI queue; the February 1990 source
+has only the synchronous `sta $2007`. Nothing in the source corresponds to
+`$F38E` -- in our build that address is `CA / dex`, the tail of an unrelated
+routine. This is the same shape of difference already recorded for `reset`, but
+here it is inside the one routine that writes the region that is corrupt.
+
+**That is a located difference, not yet a proven cause.** If the tail of the 1 KiB
+`$2007` burst were being stolen by `nmi0`, `PALRAM` would differ substantially; it
+differs by 0 bytes at frame 60. And the damage is at the *start* of the nametable
+(`$08` filling rows 0-3, real data from row 4, against the cartridge's real data
+from row 1), not the tail. `journal/06-the-picture-is-wrong-in-vram.md` states
+what is proven, what is not, and the next three measurements.
 
 **What the tracer says, and how much of it survives.** `tools/nestrace.py` reports
 that at frame 14, cycle 439 272, the `rts` at `$9D6C` pops a destroyed return
 address and jumps to `$0000`, which is `brk`, which vectors through `$FFFE` to
 `$F9B3` -- the *IRQ* handler -- with `A=$FF`, and `$FF` to `$E001` sets bit 7,
 disabling the MMC3 IRQ. That may well be a real defect. It is no longer measured
-against an instrument of unknown correctness: BizHawk's Lua exposes
-`emu.registerafter`/`emu.registerbefore` with `client.cpu` resolving inside the
-callbacks, which is a core-native instruction trace. Trace the tracer's claim with
+against an instrument of unknown correctness. Trace the tracer's claim with
 
     python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 300 \
         --halt-at 0xFFCA --last 40
