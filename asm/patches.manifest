@@ -1,0 +1,72 @@
+# Magician patch manifest
+#
+# Every range of the rebuilt PRG that is filled from the cartridge rather than
+# from Eurocom's released source. This file contains **no cartridge bytes**: it
+# is a list of claims, each with a digest to check them against, and
+# `asm/patches.py` is the only thing that turns a claim into bytes. The cartridge
+# is read, never written, and never committed -- see LEGAL.md.
+#
+# ## Fields
+#
+#   region <name>   start a region
+#   class    a|b|c|d  why the range is filled. See below -- this is the field
+#                     that stops a rising match percentage from being
+#                     indistinguishable from a rising number of hidden bugs.
+#   cart     <dump>  which dump on this machine the bytes come from
+#   sha1     <hex>   that dump's body SHA1 (header stripped). Checked against
+#                     BOTH the manifest's own registry and the file on disk.
+#   prg   <off> <len>  PRG file offset and byte count (hex; `0d` prefix for decimal)
+#   cpu      <addr>  the CPU address that offset is presented at, for reading
+#   reason   <text>  required. Repeated lines are appended.
+#   end            finish the region
+#
+# ## The four classes
+#
+#   a  placement bug. The source is right and the module is in the wrong 8 KiB
+#      slot. **Fix the placement.** Copying the cartridge over it destroys the
+#      only evidence of the bug.
+#   b  genuinely absent from the released source. The source is a 02/03/90
+#      development build and the cartridge is a 02/1991 one, so this is expected.
+#      This is the only class that may be filled from a cartridge.
+#   c  assembler bug. The source is present but `asm/pds6502.py` mis-assembles
+#      it. **Fix the assembler.**
+#   d  data / CHR packing order. A separate problem from code.
+#
+# Only class `b` regions exist below. Every `a` and `c` region found so far is
+# recorded in GAPMAP.md with its evidence and is deliberately *not* filled.
+
+version 1
+
+# ---------------------------------------------------------------------------
+region sam-samples-at-fc40
+class    b
+cart     release
+sha1     bd806d7f7c318b8012433250ca10aa8387a962bb
+prg      1FC40 360
+cpu      FC40
+reason   X7.PDS:997 says `load mus\sam.sam,$fb80`, and the assembler puts it at
+reason   $FB80 as written. It is not there in the cartridge, and the sample data
+reason   is at $FC40 instead. Measured: SAM.SAM's first 32 bytes occur exactly
+reason   once in the whole 131072-byte PRG, at file $1FC40 (CPU $FC40, the
+reason   $E000 fixed window plus $1C40), and the first 864 bytes of
+reason   DAT/MUS/SAM.SAM -- all 864 that fit before the cartridge's own $FFF0
+reason   title string -- are byte-identical there. $FD9F-$FFEF is zero in the
+reason   cartridge, so the range is exactly SAM.SAM[0:$360] and stops short of
+reason   `db "MAGIC1+"` at $FFF0.
+reason   Class b, not a: this is not a module in the wrong slot, it is an
+reason   *address inside a module* that the source states and the release
+reason   changed. There is nothing in the source to re-place -- the only honest
+reason   description of the difference is that the release moved the samples up
+reason   by $C0 bytes and the February 1990 source has the old address.
+reason   Effect on the build: X7's own `if last>$fb80 / error ">$FB80!"` guard
+reason   (X7.PDS:977-979) is the same stale constant. Because the source still
+reason   loads the samples at $FB80, they overwrite 16 bytes of X7's own code
+reason   (`last` reaches $FB90), and that 16-byte overrun disappears the moment
+reason   this region is filled at the address the cartridge uses.
+reason   Not beta-specific, and that is measured rather than assumed: the two
+reason   dumps are byte-identical across this whole range. The `cart`/`sha1`
+reason   pair is still required on every region, because other ranges of this
+reason   cartridge are *not* shared -- 23388 PRG bytes differ overall -- and a
+reason   manifest that said only "the cartridge" could be applied to either
+reason   dump without complaint.
+end

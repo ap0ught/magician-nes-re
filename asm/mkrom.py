@@ -6,15 +6,18 @@ how the cartridge is actually laid out: a 128 KiB PRG image and a 128 KiB CHR
 image behind one mapper. An emulator wants them behind an iNES header, so this
 joins the three.
 
-The header is the cartridge's own, read off `Magician (USA).nes` and recorded in
-PROVENANCE.md section 1 -- not synthesised from the mapper number, because the
-two dumps on this machine share this header byte for byte and differ only in
-the body. `option 0,0` in the source's `memchk`/`load` macros shows the author
-was driving the same mapper, so this is the header to reuse, but it is a *choice*
-of revision, not a derivation.
+Before joining, `asm/patches.py`'s manifest is applied: every range of the PRG
+that Eurocom's released source does not contain at all is filled from the
+cartridge there, digest-verified against the dump the manifest names. That is
+the only step in the whole build that reads cartridge bytes into the ROM, and it
+is why this file -- not `build.py` -- is where the manifest is applied: this is
+the thing that produces the loadable image. `build.py` also applies it, so the
+byte accounting it prints describes the same image this writes; `apply()` is
+idempotent, so the second call is a no-op.
 
     python3 asm/mkrom.py                    # out/magician-rebuilt.nes
     python3 asm/mkrom.py --rom out/x.nes
+    python3 asm/mkrom.py --no-patches       # the source-only image, for comparison
 """
 
 from __future__ import annotations
@@ -22,12 +25,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import patches  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = ROOT / "asm" / "out"
 
-# 'NES\x1a', 8x16 KiB PRG, 16x8 KiB CHR, f6=0x42 f7=0x00, then eight zero bytes.
-# f6: battery-backed PRG RAM, horizontal mirroring. f7: mapper 4 (MMC3).
+# The cartridge is read here for the manifest's digest check and nothing else.
+# `option 0,0` in the source's `memchk`/`load` macros shows the author was
+# driving the same mapper, so this header is the right one to reuse, but it is a
+# *choice* of revision, not a derivation: the two dumps on this machine share it
+# byte for byte and differ only in the body.
 INES_HEADER = bytes([
     0x4E, 0x45, 0x53, 0x1A,   # 'NES' + EOF
     0x08,                     # 8 x 16 KiB PRG  = 128 KiB
@@ -48,6 +58,10 @@ def main() -> int:
     ap.add_argument("--prg", type=pathlib.Path, default=OUT / "prg.bin")
     ap.add_argument("--chr", type=pathlib.Path, default=OUT / "chr.bin")
     ap.add_argument("--rom", type=pathlib.Path, default=OUT / "magician-rebuilt.nes")
+    ap.add_argument("--cart-dir", type=pathlib.Path, default=patches.CART_DIR,
+                    help="where the cartridge dumps are read from")
+    ap.add_argument("--no-patches", action="store_true",
+                    help="do not apply asm/patches.manifest")
     args = ap.parse_args()
 
     prg = args.prg.read_bytes()
@@ -57,16 +71,32 @@ def main() -> int:
     if len(chr_rom) != CHR_SIZE:
         raise SystemExit(f"{args.chr} is {len(chr_rom)} bytes, expected {CHR_SIZE}")
 
+    image = bytearray(prg)
+    if not args.no_patches:
+        regions = patches.load()
+        if regions:
+            resolved = patches.verify(regions, args.cart_dir)
+            prgs = {name: patches.body(p) for name, p in resolved.items()}
+            cart = prgs[regions[0].cart] if len(prgs) == 1 else patches._mixed(
+                prgs, regions)
+            report = patches.apply(image, cart, regions, args.cart_dir)
+            print(patches.summarise(report))
+
     args.rom.parent.mkdir(parents=True, exist_ok=True)
-    args.rom.write_bytes(INES_HEADER + prg + chr_rom)
-    body = INES_HEADER + prg + chr_rom
+    body = INES_HEADER + bytes(image) + chr_rom
+    args.rom.write_bytes(body)
     print(f"{args.rom}  {len(body)} bytes")
-    print(f"  body sha1 {hashlib.sha1(prg + chr_rom).hexdigest()}")
+    print(f"  body sha1 {hashlib.sha1(bytes(image) + chr_rom).hexdigest()}")
     print(f"  (the cartridge's own body sha1 is "
-          f"bd806d7f7c318b8012433250ca10aa8387a962bb -- a development build, "
-          f"so it does not match; see PROVENANCE.md section 6)")
+          f"{patches.CARTS['release']['sha1']} -- a development build built "
+          f"against later source, so it does not match; see PROVENANCE.md "
+          f"section 6)")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except patches.PatchError as exc:
+        print(f"mkrom: {exc}", file=sys.stderr)
+        raise SystemExit(2)
