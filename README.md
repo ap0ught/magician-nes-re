@@ -58,19 +58,22 @@ The cartridge is the user's own. It is never committed; see `LEGAL.md`.
 
 ## The source
 
-`vendor/Magician-NES` is a git submodule pinned to Chris Shrigley's release
-(`ap0ught/Magician-NES`, forked from `tkcn568/Magician-NES`). It holds eight `X?.PDS` project
-files, seven `.SRC` include files, the level data under `DAT/`, the message text under `TXT/`
-and the CHR artwork.
+`vendor/Magician-NES/` is **Eurocom's source, vendored here** as of 2026-10-03, at upstream
+commit `bf653a407cd97e4dfdca665063f25d8b44da130a`. It was a submodule until then; see
+`LEGAL.md` for why, and for the terms. The files are unmodified — the build reads the decoded
+form in `pds-text/`, not these.
+
+It holds eight `X?.PDS` project files, ten `.SRC` include files, the level data under `DAT/`,
+the message text under `TXT/` and the CHR artwork.
 
 The `.PDS` files are binary containers produced by the 1989 Atari ST toolchain PDS 1.26.
 `tools/pds_extract.py` decodes them to plain text into `pds-text/` (git-ignored, regenerated).
-6 351 lines of source, with every routine, RAM variable, macro and data format named.
+13,082 logical lines of source, with every routine, RAM variable, macro and data format named.
 
 ## Layout
 
 ```
-vendor/Magician-NES/   upstream source (submodule)
+vendor/Magician-NES/   Eurocom's source, vendored, unmodified
 tools/pds_extract.py   PDS container -> plain text
 tools/                 build and analysis helpers
 asm/                   PDS-compatible assembler + cartridge build
