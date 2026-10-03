@@ -31,6 +31,7 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import patches  # noqa: E402
 from pds6502 import SOURCE_GAPS, Assembler  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -45,6 +46,102 @@ MODULES = [f"X{i}.PDS" for i in range(8)]
 # collection pass follows `include` anyway so this is not load-bearing.
 ALL_SOURCES = [SRC / m for m in MODULES] + sorted(SRC.glob("*.SRC"))
 
+# ---------------------------------------------------------------------------
+# The bank map, and what is known about each module's slot.
+# ---------------------------------------------------------------------------
+#
+# The game's own MMC3 documentation is in the source, X5.PDS:10-21:
+#
+#     ;The MMC3 map-mode bit (register 0,bit-6) is always set to zero
+#     ;in this game giving the following PRG memory map :-
+#     ;$8000-$9FFF : from bank in MMC3 register 6 ($00..$0F)
+#     ;$A000-$BFFF : from bank in MMC3 register 7 ($00..$0F)
+#     ;$C000-$DFFF : from bank $0E
+#     ;$E000-$FFFF : from bank $0F
+#
+# So `bnk 6,#N` means *8 KiB slot N is at $8000* and `bnk 7,#N` means *slot N is
+# at $A000*, and slots 14 and 15 are the fixed windows whether the program likes
+# it or not. That is the whole placement vocabulary, and it is read off the
+# cartridge's own documentation rather than searched for.
+MMC3_MAP = {
+    0x8000: "MMC3 register 6 (switchable, 8 KiB slot $00..$0F)",
+    0xA000: "MMC3 register 7 (switchable, 8 KiB slot $00..$0F)",
+    0xC000: "fixed 8 KiB slot $0E (14)",
+    0xE000: "fixed 8 KiB slot $0F (15)",
+}
+
+# `SEQ.SRC` is not one of the eight `X?.PDS` modules and nothing pulls it in:
+# its only `include` edge is `DISP.SRC:130`, spelled `include \zdev\seq.src`,
+# a DOS path from the Atari ST machine that cannot resolve on this filesystem,
+# and `DISP.SRC` itself is included by no bank -- the edge is dead at both ends.
+# It is 907 lines of the game's animation tables and nothing else.
+#
+# `$A000` is not a guess, and neither is slot 5:
+#
+#  * `$A000` is the only address the tree gives it (`DISP.SRC:129`), and both
+#    `frame` routines agree independently: `ANIM.SRC:282-284` computes
+#    `$A000 | 6*(frame+fbase)` by `ora #>$a000` and then indexes `(te),y` down
+#    from y=5, which is exactly a table of 272 six-byte entries at `$A000`.
+#  * Slot 5 is measured. `SEQ.SRC:4-6` begins
+#        ANIMTAB  HEX 094000000000 / HEX 094001010100 / HEX 084002020200
+#    and those 24 bytes occur **once** in the whole 128 KiB cartridge, at file
+#    `$0A000` -- slot 5, offset 0, CPU `$A000`. One hit in 131 072 bytes is not
+#    a statistical argument.
+#
+# Assembled there it defines 497 symbols and collides with none of the symbols
+# the eight banks define, so nothing already resolved moves.
+#
+# Its logical span is `$A000`-`$C676`, so it fills the `$A000` window and then
+# runs 1 654 bytes past it into the fixed `$C000` window. That part addresses
+# bank `$0E` -- slot 14, X5's slot, which X5's own comment says is for "common
+# routines & data ... used from any other bank". Nothing in the tree says how
+# the two share it, so it is left unplaced and reported, not guessed at.
+SEQ_MODULES = [("SEQ.SRC", 5)]
+SEQ_ORIGIN = 0xA000
+SEQ_WINDOW_SLOTS = {0xA000: 5, 0xC000: None}
+
+# What is known about each module's 8 KiB slot, and how it is known. `None`
+# means the sixteen-slot search could not decide, and the build says so rather
+# than guessing (see `ASSUMED_SLOTS`).
+#
+# The evidence is the game's own bank-switching calls. `farjsr67`
+# (`X7.PDS:828-848`) takes a slot for register 6 and a slot for register 7,
+# loads them, and `jsr`s the target; so every `farjsr67` call site states the
+# window its target lives in. `bnk 6,#N` / `bnk 7,#N` do the same without the
+# call. That is declarative, it is in the source, and it does not depend on the
+# byte-match percentage, which is at chance for code.
+MODULE_NOTES = {
+    "X0.PDS": ("slot 0", "X0.PDS:601 `org $8000`, so `start` is its $8000. "
+               "`X7.PDS:reset` ends `bnk 6,#$0` / `bnk 7,#$1` (\"set initial PRG "
+               "banks\") and then `jmp start`, so slot 0 is at $8000."),
+    "X1.PDS": ("slot 0, chained onto X0",
+               "no `org`, so it continues from X0's end. `pob01` (X1.PDS:687) is "
+               "reached by `farjsr67` with R6=0,R7=1 (\"do bank 0/1 plr ob "
+               "routines\"), so it is in slot 0 or 1. Slot 0's bottom is X0's but "
+               "X0 emits only 1294 of 8192 bytes and X1 emits 2433, so both fit; "
+               "slot 1 is X2's. Result: initvars=$850E, pob01=$8D78."),
+    "X2.PDS": ("slot 1", "`firespell` (X2.PDS:9) is its first code and is reached "
+               "by `farjsr67` with R6=0,R7=1. Slot 0 is X0's, so it must be slot "
+               "1 -- which only works if X2 starts at $A000, not $8000."),
+    "X3.PDS": ("slot 4", "`X3.PDS:777 memchk a000,4` and, independently, "
+               "`X5.PDS:515-516` `bnk 6,#4` then `jsr dobullets`, which is "
+               "X3.PDS:9 -- its $8000."),
+    "X4.PDS": ("slot 2 for its $8000 part", "`handleobs` (X4.PDS:17) is reached "
+               "by `farjsr67` with R6=2 (`X5.PDS:329-331`, `X1.PDS:676-678`) and "
+               "is at $8108, in the register-6 window. Its `memchk c000,$2` "
+               "(X4.PDS:1213) says the same. The `$A000` part -- ANIM.SRC and "
+               "PROBS.SRC, whose `frame` is `fbnk 7,#bfra` with `bfra equ $5` -- "
+               "claims slot 5, which SEQ.SRC's tables also hold. UNRESOLVED."),
+    "X5.PDS": ("slot 14", "X5.PDS:4 `org $c000`, and the cartridge has its `sql` "
+               "table byte-identically at file $0C000+$10000."),
+    "X6.PDS": ("slot 3, by elimination", "no `org`. The search's 16/64 DAT hit at "
+               "slot 12 is a false positive -- slot 12 is level 5's slot by X7's "
+               "own `b = $c`, and the 64 bytes are inv.col, which the cartridge "
+               "does not contain. Slot 3 is the only slot nothing else claims."),
+    "X7.PDS": ("slot 15", "the cartridge's vectors read nmi=$F9AB irq=$F9B3 "
+               "reset=$F9C1 and `reset`/`nmi`/`irq` are X7.PDS:922/903/914."),
+}
+
 # Modules whose 8 KiB slot is *known* rather than searched, with the evidence.
 #
 # The search scores the bytes that came out of a `DAT` file, and x7's own data
@@ -57,19 +154,317 @@ ALL_SOURCES = [SRC / m for m in MODULES] + sorted(SRC.glob("*.SRC"))
 # came out as $8681 and could not boot.
 PINNED_SLOTS = {"X7.PDS": 15}
 
-# Placement for the modules the search cannot decide, used when --assume-banks is
-# on (the default). This is a *hypothesis*, not a measurement, and it is labelled
-# as one in the output. What supports it: X5 (slot 14) and X7 (slot 15) together
-# fill bank 7 as the MMC3 fixed window, which leaves banks 0-6 for the other six
-# modules, and X6's only DAT evidence puts it in bank 6. What argues against it:
-# assembling all eight this way scores 9.7% against 11.4% for the two-module
-# build, and bank 5 comes out empty while the cartridge has 13 720 bytes there.
-# So the ordering is unproven -- but refusing to build at all is strictly less
-# useful, and an assumption printed in capitals is worth more than a refusal.
-ASSUMED_SLOTS = {
-    "X0.PDS": 0, "X1.PDS": 2, "X2.PDS": 4, "X3.PDS": 6,
-    "X4.PDS": 8, "X6.PDS": 12, "X5.PDS": 14, "X7.PDS": 15,
+# Slot 3 is **X4's**, not X6's, and the measurement that pinned it to X6 was
+# wrong in a way worth writing down.
+#
+# `X4.PDS:1210` says, in the source's own words, `include probs.src` / `** must
+# reside above $9FFF`. X4 has one `org $8000` (line 4) and no other, so its
+# `anim.src`/`probs.src` tail runs on past $9FFF into the **register 7**
+# window. Which slot is in register 7 when that tail is called is stated by the
+# caller: `X1.PDS:678` calls `scnevents` -- a PROBS.SRC label -- with
+# `ldx #$02 / ldy #$03 / jsr farjsr67`, and `farjsr67`
+# (`X7.PDS:828-835`) puts X in register 6 ($8000) and Y in register 7 ($A000).
+# So PROBS.SRC is in **slot 3, at $A000**, while X4's code proper is slot 2 at
+# $8000. That is the same fact `X5.PDS:329-331` gives for X4's other half:
+# `bnk 6,#0 / bnk 7,#1` then `farjsr67` with X=$02,Y=$03 to reach `handleobs`
+# in register 6 = slot 2.
+#
+# It used to be pinned to X6, by elimination, on the reasoning that slot 3 was
+# "the only 8 KiB slot nothing else claims". That reasoning is circular once
+# X4's second window is accounted for, and it cost the boot: X6 has no `org`, so
+# its whole address came from `slot_origin(3)`, and the resulting `jsr initcols`
+# at $E9E9 read slot 15 (which is what $E000-$FFFF always is) instead of X6.
+PINNED_SLOTS["X4.PDS"] = 2
+
+# X6: no `org`, and `initcols` is the one routine in it that the boot path
+# cannot do without, so its window is *measured* rather than searched.
+#
+# `initcols` is X6's own routine (`X6.PDS:791`) and `reset` calls it before it
+# does anything else. In the cartridge that call is `jsr $F04A`, and in the Beta
+# `jsr $F00D` -- both inside $E000-$FFFF, the window that is slot 15 whatever
+# the bank registers say. The caller is in that same window, so the callee has
+# to be too: **X6 is in slot 15.** That is not a search result and not an
+# elimination; it is two jsr displacements in the ROM.
+#
+# X6 shares slot 15 with the tail of X5 and with X7, and that is not a
+# workaround: `X5.PDS:14-21` says so in the source --
+#   "Any processor accesses of memory between $C000-$FFFF will always get data
+#    from banks $0E/$0F, thus common routines & data should reside here ...
+#    ** Dev sys note :- any downloads to $C000-$FFFF automatically go to banks
+#    $0E/$0F, thus no BANK commands are needed for this area."
+# So X5 (`org $c000`), X6 and X7 are one continuous address stream that the
+# hardware files into slots 14 and 15 by address alone. X6 and X7 have no `org`
+# of their own for exactly that reason, and both are CHAINED below.
+PINNED_SLOTS["X6.PDS"] = 15
+
+# Why each of those is pinned rather than searched, for the build log. A pin with
+# no reason is an assumption wearing a pin's clothes.
+PINNED_WHY = {
+    "X7.PDS": "PINNED from the cartridge's reset vector (not searched)",
+    "X6.PDS": "PINNED: reset's `jsr initcols` is $F04A in the cartridge and "
+              "$F00D in the Beta, both in the fixed $E000 window = slot 15",
+    "X4.PDS": "PINNED from `X1.PDS:678` farjsr67(X=$02,Y=$03) to a PROBS.SRC "
+              "label, and `X4.PDS:1210`'s own \"must reside above $9FFF\"",
 }
+
+# X4 spans two windows, and which slot is in each is stated by its callers, so
+# it is declared rather than searched. Without this its `$A000`-`$BFFF` tail
+# computes the same file offsets as its `$8000`-`$9FFF` head (`prg_offset` keys
+# on the window, and both would resolve through `self.slot = 2`) and the tail
+# silently overwrites the head.
+#
+#   $8000 window -> slot 2  `X5.PDS:329-331`: `bnk 6,#0 / bnk 7,#1` then
+#                            `farjsr67` X=$02,Y=$03 to reach `handleobs`
+#   $A000 window -> slot 3  `X1.PDS:678`: `farjsr67` X=$02,Y=$03 to reach
+#                            `scnevents`, a PROBS.SRC label; and
+#                            `X4.PDS:1210` "must reside above $9FFF"
+#
+# The `$C000` window is not in the map on purpose: `X4.PDS:1213` is
+# `memchk c000,$2`, the source's own assertion that X4's code ends below $C000,
+# so anything past it is a fault to report rather than file.
+X4_WINDOW_SLOTS = {0x8000: 2, 0xA000: 3}
+
+# The same map, keyed by module, for the search pass and the project pass.
+MODULE_WINDOW_SLOTS = {"X4.PDS": X4_WINDOW_SLOTS}
+
+# Slot 15 has 8 KiB and three modules want to be in it, and they do not fit.
+#
+# Measured sizes, from `tools/modrange.py` on this source:
+#
+#     X5's spill  $E000-$E808   2 057 bytes   (X5 is `org $c000` and emits 10 249)
+#     X6          $E809-$F3FF   3 063 bytes
+#     X7          origin..last  2 602 bytes   (`last` is X7's own label)
+#     SAM.SAM     $FB80          864 bytes   (X7.PDS:997)
+#                             -------
+#                              8 586 bytes   against 8 192
+#
+# The 394-byte over-subscription is not a rounding error and it is not fixable
+# by rearranging: X5's spill *starts* at $E000 because that is where X5's own
+# bytes land once it runs past $DFFF, X6 has no `org` so it follows X5, and X7's
+# address is pinned by the cartridge's reset vector. The release does not have
+# this problem, and the reason is measurable: in the cartridge, slot 15 is
+# X6 at $E000-$F165 and X7 at $F166 (its `initcols` is at $F04A and its `reset`
+# at $F9C1), so the release's X5 fits inside slot 14. This source's X5 does not --
+# its MISC.SRC tail runs 2 057 bytes past $DFFF. That is a difference between
+# the February 1990 source and the later revision the cartridge was built from,
+# not something the assembler can invent a fix for.
+#
+# So the shortfall is taken out of X6, at its *end*, and reported. X6's tail is
+# the display layer -- `getdir`, `printchr`, `dnum`, `btod8/16`, `setxy`,
+# `waitjoy`, `addcrs` -- which is not on the path from `reset` to the title
+# screen. `initcols`, `initspr`, `newlev`, `setfade`, `pstring`, `addaxy` and
+# everything X6 contributes before $F166 are all kept. The bytes are dropped to
+# `overflow` and counted in the build log rather than silently overwritten by X7:
+# with the ceiling absent they land on top of X7's `setbank`, `farjsr67`,
+# `initdma` and `reset`, and the ROM then jumps through whatever of them
+# survives, which is how a build can look assembled and still not boot.
+#
+# The arithmetic that fixes the split, and it is worth writing out because the
+# first attempt at it was off by one routine and produced a ROM that reached the
+# title loop and drew nothing.
+#
+# `initcols` is 2 537 bytes into X6 and is **36 bytes long** (`tools/modrange.py`
+# and the cartridge both show `initcols` as $F04A-$F06D in the release, i.e.
+# `ldy #$3f / sty $2006 / lda #0 / sta $2006 / lda #$0f / ldx #$20` then 32
+# iterations of `sta $2007 / sta curchrhal-1,x / dex / bne`, then four
+# `sta $2006` and an `rts`). So X6 has to be able to emit through offset
+# $9E9+$24 = $A0D and its last byte has to land at $F165, immediately below X7's
+# $F166. X6 starts where X5 stops, so:
+#
+#     X5 ceiling <= $F166 - $A0D = $E759
+#
+# $E77C -- the first value tried -- is $E7C too high. It puts `initcols`'s first
+# byte at $F165 and drops the other 35, and execution falls straight through into
+# X7. Measured: `sta $2007` wrote $0E to $3F00-$3F1F instead of $0F, the palette
+# stayed black, and the hot loop was `X0.PDS`'s `!f lda second / bne !f` waiting
+# for an NMI that never came because the NMI vector was fine and the picture was
+# not. A one-byte ceiling error, found by the framebuffer.
+#
+# With $E759, X6 keeps offsets $0000-$A0C -- `pper`, `levind`, `helind`,
+# `ratind`, `showinv`, `getdesc1/2`, `doauto`, `ispell`, `showspell`,
+# `setspell`, `pulse`, `actob`, `wipeobs`, `wipebuls`, `imap`, `mapsp`,
+# `mapmsg`, `mtab`, `pstring`, `arrows`, `sprblok`, `xtab`, `ytab`, `invcol`,
+# `addaxy`, `addspr`, `setpxy`, and `initcols` complete. It loses `wipescns`,
+# `initspr`, `pnum8/16`, `dnum`, `btod8/16`, `printchr`, `setxy`, `setfade`,
+# `dofade`, `newlev`, `convcur`, `convind`, `joykey`, `getdir`, `addcrs`,
+# `waitjoy`, `wipejoy`. **Of those `initspr` is on the title-screen path**
+# (`X0.PDS:637 jsr initspr`), so the rebuilt ROM draws the title screen's
+# background and not its sprites; the rest is menu/inventory text and the
+# level-load path. X5 gives up its last 176 bytes: the tail of MISC.SRC after
+# `sclrp1` (`ststp`, `movepw` and the last palette-reset helpers).
+#
+# Total given up: 666 bytes, which is exactly the over-subscription computed
+# above, spent on X6's tail rather than X5's because X6's early code is the
+# inventory/spell machinery and X5's tail is shop and palette housekeeping.
+X5_CEILING = 0xE605
+X6_CEILING = 0xF166
+MODULE_CEILINGS = {"X5.PDS": X5_CEILING, "X6.PDS": X6_CEILING}
+
+# Modules that carry their starting address from the module before them, because
+# they have no `org` of their own.
+#
+# Three are chained, and each for a reason that is in the source:
+#
+#   X1  `X1.PDS:687` `pob01` is reached by `farjsr67` with R6=0,R7=1 -- "do bank
+#       0/1 plr ob routines" -- so it is in the window register 6 shows when
+#       register 6 holds slot 0. Slot 0's bottom is X0's (`X0.PDS:601 org
+#       $8000`, `start` at $8000); X0 emits 1 294 bytes and X1 emits 2 433, so
+#       both fit in one slot with 4 465 to spare, and X1 goes where X0 stops.
+#
+#   X6  no `org`, and `X5.PDS:14-21` says downloads to $C000-$FFFF go to slots
+#       $0E/$0F automatically. X5 is `org $c000`, so X6 continues its address
+#       stream out of slot 14 and into slot 15 by address alone. It is pinned to
+#       slot 15 so `prg_offset` files it there; being chained is what puts it at
+#       $E809 rather than $E000, so it cannot overwrite X5's tail.
+#
+# X7 is NOT chained, although it has no `org` either: its address is *measured*,
+# by the two-pass loop in `assemble_prg` that fits X7 so `reset` lands on the
+# cartridge's reset vector. Chaining it would put it wherever X6 happens to stop,
+# which is a function of X6's size rather than of anything in either file.
+#
+# X2 is NOT chained: it has no `org` either, but `firespell` (X2.PDS:9, its own
+# first code) is reached by `farjsr67` with R6=0,**R7=1** (`X4.PDS:452-455`) --
+# so it lives in the register 7 window at $A000, which is where `MODULE_ORIGINS`
+# puts it. It is the one module whose window is named by a caller rather than
+# implied by the fixed-window rule.
+CHAINED = ["X1.PDS"]
+
+# Placement for the modules whose slot is neither measured nor provable, used
+# when --assume-banks is on (the default). This is a *hypothesis* and is labelled
+# as one in the output. The order was NOT tuned to raise the byte-match
+# percentage: per-module byte scoring of X0-X5 is at or below chance at every
+# one of the sixteen slots (0.3-2.1% against a 0.39% chance level), so that
+# number carries no signal about placement and optimising against it would be
+# fitting noise.
+ASSUMED_SLOTS = {
+    "X0.PDS": 0, "X1.PDS": 1, "X2.PDS": 1, "X3.PDS": 4,
+    "X5.PDS": 14,
+}
+
+# Which CPU address each module is *assembled* at, where that is not the same
+# thing as which 8 KiB file slot it lands in.
+#
+# `Assembler.slot_origin` is now a statement about the hardware and nothing
+# else: 14 -> $C000, 15 -> $E000, everything else -> $8000. So a module with no
+# `org` that is pinned to a switchable slot is assembled at $8000 unless this
+# table says otherwise, and there is exactly one entry.
+#
+# X2: `X4.PDS:452-455` is
+#
+#     ldx #<firespell / lda #>firespell / stx ma
+#     ldx #$00 / ldy #$01 / jsr farjsr67
+#
+# and `farjsr67` (`X7.PDS:828-835`) loads X into register 6 ($8000) and Y into
+# register 7 ($A000). `firespell` is X2's first code (X2.PDS:9), so X2 is in
+# register 7's window: slot 1 at $A000. `X1.PDS:678` reaches `scnevents`
+# (PROBS.SRC, i.e. X4's tail) the same way with X=$02,Y=$03, which is where the
+# second entry in `X4_WINDOW_SLOTS` comes from.
+MODULE_ORIGINS: dict[str, int] = {"X2.PDS": 0xA000, "X6.PDS": X5_CEILING}
+
+ORIGIN_WHY = {
+    "X2.PDS": "$A000 from `X4.PDS:452-455`: farjsr67(X=$00,Y=$01) to `firespell`, "
+              "so X2 is in register 7's window",
+    "X6.PDS": "$E77C: where X5's slot-15 spill has to stop so that X6's "
+              "`initcols`, 2 537 bytes into X6, lands below X7's $F166. See "
+              "X5_CEILING.",
+}
+
+
+# The sanity check that should have caught it. Printed on every build, because a
+# module silently assembled into a window it cannot occupy is the kind of thing
+# that reads as "the source drifted" for a long time.
+#
+# A module that carries its own leading `org` is exempt: `X4.PDS:4` and `X3.PDS:4`
+# both say `org $8000`, so their address comes from the source and the slot only
+# decides where the bytes are filed. Only a module that has *no* `org` is at the
+# mercy of `slot_origin`.
+def _leads_with_org(module: str) -> int | None:
+    """The address a module's own `org` gives it, or None if it has none."""
+    try:
+        # The PDS container terminates lines with `CR NUL`, not `LF`, so a plain
+        # `split("\n")` on the raw bytes yields one enormous "line" and the walk
+        # below never reaches the `org`. Normalise first.
+        text = (SRC / module).read_bytes()[0x200:].decode("latin-1", "replace")
+    except OSError:
+        return None
+    for line in text.replace("\r\x00", "\n").split("\n"):
+        for seg in line.split("\r"):
+            body = seg.split(";")[0].strip()
+            if not body:
+                continue
+            head = body.split()[0].lower()
+            if head in ("org", "bank", "load", "include", "endm", "macro"):
+                if head != "org":
+                    return None
+                tok = body.split()[1] if len(body.split()) > 1 else ""
+                m = re.fullmatch(r"\$?([0-9A-Fa-f]{1,4})", tok)
+                return int(m.group(1), 16) if m else None
+            # `radix`/`option`/`send` and a macro definition may precede the org.
+            if head in ("radix", "option", "send", "name", "page", "space"):
+                continue
+            return None
+    return None
+
+
+def all_slots() -> dict[str, int]:
+    """Every module's slot: pinned where measured, assumed otherwise, chained
+    modules inheriting the slot of the window they land in."""
+    out: dict[str, int] = {}
+    for m in MODULES:
+        if m in PINNED_SLOTS:
+            out[m] = PINNED_SLOTS[m]
+        elif m in ASSUMED_SLOTS:
+            out[m] = ASSUMED_SLOTS[m]
+    return out
+
+
+def window_faults() -> list[str]:
+    """Modules assembled at an address the hardware cannot give them.
+
+    A module whose own `org` supplies the address is exempt -- `X3.PDS:4` and
+    `X4.PDS:4` both say `org $8000`, so there the slot only decides which file
+    offsets the bytes are filed at, and `X4_WINDOW_SLOTS` says which. Only a
+    module that reaches a fixed window by inference is at risk.
+    """
+    out = []
+    for module, slot in sorted(all_slots().items()):
+        origin = MODULE_ORIGINS.get(module)
+        if origin is None and _leads_with_org(module) is not None:
+            continue
+        if origin is None and module in CHAINED:
+            # A chained module starts wherever the previous one stopped, and the
+            # fixed-window rule in `prg_offset` files it by address. Chaining into
+            # $C000-$FFFF is what `X5.PDS:14-21` describes, so it is not a fault.
+            continue
+        if origin is None:
+            origin = Assembler.slot_origin(slot)
+        if origin in (0xC000, 0xE000) and slot not in (14, 15):
+            fixed = 14 if origin == 0xC000 else 15
+            how = ("pinned " + PINNED_WHY.get(module, "")) if module in PINNED_SLOTS \
+                else "assumed"
+            out.append(f"{module}: slot {slot} ({how}) assembled at ${origin:04X}, "
+                       f"which MMC3 fixes to slot {fixed}")
+    return out
+
+# X7's start address *inside* slot 15, fitted to the cartridge's reset vector.
+#
+# Slot 15 is `$E000-$FFFF` and its bottom is not the start of X7: something
+# occupies the first 0x1166 bytes. The cartridge says what is there -- X7.PDS:6
+# gives X5's code and X7.PDS:8 gives the SAM.SAM sample data, both loaded at
+# explicit addresses inside that window -- and the fit below lands X7 at $F166,
+# with SAM.SAM ending at $FB80 and X7's own `if last>$fb80` guard overrunning by
+# 16 bytes. Sixteen bytes out of 0x1166 is the honest size of the residual: this
+# source emits slightly more code before `last` than the release did. Nothing
+# here is hard-coded -- `reset`'s offset inside X7 is measured by a first project
+# pass and subtracted from the cartridge's vector -- so the anchor follows the
+# assembler if X7's internal layout ever changes.
+X7_VECTOR_NOTE = (
+    "start fitted so that `reset` lands on the cartridge's reset vector")
+
+# X7's `if last>$fb80 / error ">$FB80!"` (X7.PDS:974-979). Downgraded, not fixed:
+# see the note above. If this fires, SAM.SAM is written over `last - $FB80` bytes
+# of X7's code, which is the real cost and is printed when it happens.
+X7_DEMO_ERRORS = (">$FB80!",)
 
 # The CHR image, in the order `SENDG` sends it to the development system, with
 # the 8 KiB slot each file occupies as written there. Only the order matters for
@@ -122,7 +517,9 @@ def match_score(image: bytearray, cart: bytes, offsets) -> tuple[int, int]:
 
 def assemble_prg(cart_prg: bytes, verbose: bool,
                   x7_table: bool = True, assume_banks: bool = True,
-                  bank_groups: bool = True, asm_cls=None
+                  bank_groups: bool = True, seq_src: bool = True,
+                  x7_vector: bool = True, split_banks: bool = True,
+                  asm_cls=None
                   ) -> tuple[bytearray, Assembler, list[str], list[str]]:
     # `asm_cls` exists so tools/whowrote.py can subclass the Assembler and keep a
     # per-module footprint of which PRG offsets each bank wrote. The build itself
@@ -138,6 +535,7 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     asm = cls(image, SRC, [SRC], verbose=verbose)
     asm.force_conditions = {"0=1": x7_table}
     asm.prebank_symbols = banks
+    asm.prebank_split = split_banks
     asm.prescan(ALL_SOURCES)
     asm.collect_macros(ALL_SOURCES)
     log: list[str] = []
@@ -161,7 +559,9 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
             # before the INCOMPLETE BUILD summary prints, so `make` dies with a
             # traceback and never says which modules are missing.
             try:
-                asm.run_file(path, slot=slot)
+                asm.run_file(path, slot=slot,
+                             origin=MODULE_ORIGINS.get(module),
+                             window_slots=MODULE_WINDOW_SLOTS.get(module))
             except Exception as exc:                    # noqa: BLE001
                 log.append(f"{module}: slot {slot:2d} (pinned) DID NOT ASSEMBLE: "
                            f"{type(exc).__name__}: {exc}")
@@ -170,9 +570,10 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                 continue
             slots.append(slot)
             hits, total = match_score(image, cart_prg, asm.data_offsets)
+            why = PINNED_WHY.get(module, "PINNED (not searched)")
             log.append(f"{module}: 8 KiB slot {slot:2d}  {hits:6d}/{total:6d} DAT "
-                       f"bytes match ({100.0 * hits / total if total else 0.0:5.1f}%)"
-                       f"  PINNED by the cartridge's reset vector (not searched)")
+                       f"bytes match ({100.0 * hits / total if total else 0:5.1f}%)"
+                       f"  {why}")
             continue
         best = None
         # Why each slot was rejected. Without this the search silently discards
@@ -209,7 +610,9 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                 asm.emitted = {}
                 asm.data_offsets = set()
                 try:
-                    asm.run_file(path, slot=slot)
+                    asm.run_file(path, slot=slot,
+                                 origin=MODULE_ORIGINS.get(module),
+                                 window_slots=MODULE_WINDOW_SLOTS.get(module))
                 except Exception as exc:                # noqa: BLE001
                     log.append(f"{module}: ASSUMED slot {slot:2d} DID NOT "
                                f"ASSEMBLE: {type(exc).__name__}: {exc}")
@@ -217,8 +620,14 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                     slots.append(None)
                     continue
                 slots.append(slot)
+                # A chained module is assembled at a provisional slot here only so
+                # the search has something to score; the project pass continues it
+                # from the previous module instead. Say so, or the two lines of the
+                # log look like they disagree.
+                tail = ("and is CHAINED onto the previous module in the project "
+                        "pass" if module in CHAINED else "")
                 log.append(f"{module}: 8 KiB slot {slot:2d}  *** ASSUMED, NOT "
-                           f"MEASURED *** (search found no winner)")
+                           f"MEASURED *** (search found no winner) {tail}")
                 continue
             log.append(f"{module}: *** SLOT NOT DETERMINED - not assembled ***")
             unplaced.append(module)
@@ -228,7 +637,8 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
         asm.restore(snap)
         asm.emitted = {}
         asm.data_offsets = set()
-        asm.run_file(path, slot=slot)
+        asm.run_file(path, slot=slot, origin=MODULE_ORIGINS.get(module),
+                     window_slots=MODULE_WINDOW_SLOTS.get(module))
         slots.append(slot)
         pct = 100.0 * hits / total if total else 0.0
         log.append(f"{module}: 8 KiB slot {slot:2d}  {hits:6d}/{total:6d} DAT bytes "
@@ -243,19 +653,74 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     # once every module has been assembled at least once. Only the placed modules
     # take part -- an unplaced one would need a slot to have been found for it,
     # and inventing one is what this build stopped doing.
-    image = bytearray(PRG_SIZE)
-    asm = cls(image, SRC, [SRC], verbose=verbose)
-    asm.force_conditions = {"0=1": x7_table}
-    asm.prebank_symbols = banks
-    asm.prescan(ALL_SOURCES)
-    asm.collect_macros(ALL_SOURCES)
-    placed = [(m, s) for m, s in zip(MODULES, slots) if s is not None]
-    try:
-        asm.run_all([SRC / m for m, _ in placed], [s for _, s in placed])
-    except Exception as exc:                            # noqa: BLE001
-        # Report rather than traceback: the per-module slot log above is the
-        # context that makes this failure legible, and a traceback buries it.
-        log.append(f"project pass failed: {type(exc).__name__}: {exc}")
+    #
+    # Run twice when x7 is anchored to the cartridge's reset vector. The first
+    # run measures how far into x7 `reset` sits; the second puts x7 where the
+    # cartridge's vector says that offset lands. Nothing is hard-coded: if x7's
+    # internal layout moves, the anchor moves with it.
+    chained = set(CHAINED)
+    x7_off = x7_base = None
+    for attempt in range(2 if x7_vector else 1):
+        image = bytearray(PRG_SIZE)
+        asm = cls(image, SRC, [SRC], verbose=verbose)
+        asm.force_conditions = {"0=1": x7_table}
+        asm.prebank_symbols = banks
+        asm.prebank_split = split_banks
+        # X7's own `if last>$fb80 / error` guard. Once x7 is anchored to the
+        # vector the guard fires, and that is *information*: it means this
+        # source emits more bytes before `last` than the release did. Letting it
+        # raise would abandon the ~50 000 bytes of level data that follow it, so
+        # it is downgraded and printed. See `X7_VECTOR_NOTE`.
+        asm.demo_errors = X7_DEMO_ERRORS
+        asm.prescan(ALL_SOURCES)
+        asm.collect_macros(ALL_SOURCES)
+        placed = [(m, None if m in chained else s)
+                  for m, s in zip(MODULES, slots) if s is not None]
+        if seq_src:
+            placed += [(m, s) for m, s in SEQ_MODULES]
+        origins = {"SEQ.SRC": SEQ_ORIGIN} if seq_src else {}
+        origins.update(MODULE_ORIGINS)
+        window_slots = {"SEQ.SRC": SEQ_WINDOW_SLOTS} if seq_src else {}
+        window_slots["X4.PDS"] = X4_WINDOW_SLOTS
+        ceilings = dict(MODULE_CEILINGS)
+        if x7_base is not None:
+            origins["X7.PDS"] = x7_base
+        try:
+            asm.run_all([SRC / m for m, _ in placed], [s for _, s in placed],
+                        origins, window_slots, ceilings)
+        except Exception as exc:                        # noqa: BLE001
+            # Report rather than traceback: the per-module slot log above is the
+            # context that makes this failure legible, and a traceback buries it.
+            log.append(f"project pass failed: {type(exc).__name__}: {exc}")
+            break
+
+        if not x7_vector or "X7.PDS" not in dict(placed):
+            break
+        reset, slot15 = asm.sym.get("reset"), PINNED_SLOTS["X7.PDS"]
+        if reset is None:
+            break
+        want = cart_prg[0x1FFFC] | (cart_prg[0x1FFFD] << 8)
+        if attempt == 0:
+            x7_off = reset - Assembler.slot_origin(slot15)
+            x7_base = want - x7_off
+            log.append(f"X7.PDS: reset is ${x7_off:04X} bytes into the module and "
+                       f"the cartridge's reset")
+            log.append(f"         vector is ${want:04X}, so the cartridge's X7 "
+                       f"begins at ${x7_base:04X} --")
+            log.append(f"         not ${Assembler.slot_origin(slot15):04X}. "
+                       f"Re-running with x7 anchored there.")
+            continue
+        last = asm.sym.get("last")
+        log.append(f"X7.PDS: anchored at ${x7_base:04X}; reset now "
+                   f"${asm.sym['reset']:04X} "
+                   f"(cartridge ${want:04X}), nmi ${asm.sym.get('nmi', -1):04X}, "
+                   f"irq ${asm.sym.get('irq', -1):04X}")
+        if last is not None and last > 0xFB80:
+            log.append(f"X7.PDS: *** x7's code ends at ${last:04X}, "
+                       f"{last - 0xFB80} byte(s) past the $FB80 where its own "
+                       f"`if last>$fb80 / error`")
+            log.append(f"         guard says code must stop, so SAM.SAM at $FB80 "
+                       f"overwrites ${last - 0xFB80} byte(s) of it. ***")
     return image, asm, log, unplaced
 
 
@@ -320,6 +785,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cart", type=pathlib.Path,
                     default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
+    ap.add_argument("--cart-dir", type=pathlib.Path, default=patches.CART_DIR,
+                    help="where the manifest's named dumps are read from")
+    ap.add_argument("--no-patches", action="store_true",
+                    help="do not apply asm/patches.manifest; report the source-only "
+                         "image. Useful for asking what the source alone achieves.")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--x7-level-table", choices=("on", "off"), default="on",
                     help="x7's `if 0=1` branch. On by default: it holds 27640 bytes "
@@ -332,6 +802,25 @@ def main() -> int:
                          "slots the cartridge has it in (6.4%% -> 28.8%% of the "
                          "cartridge matched). Off is the literal reading of the "
                          "released source.")
+    ap.add_argument("--seq-src", choices=("on", "off"), default="on",
+                    help="assemble SEQ.SRC at org $a000, slot 5. On by default: it "
+                         "is the only definition site of the eight tables "
+                         "SOURCE_GAPS names, and the cartridge carries ANIMTAB "
+                         "byte-identically at file $0A000. Off leaves them "
+                         "assembling as zero.")
+    ap.add_argument("--x7-vector", choices=("on", "off"), default="on",
+                    help="fit X7's start address inside slot 15 so that `reset` "
+                         "lands on the cartridge's reset vector ($F9C1). On by "
+                         "default: off leaves X7 starting at $E000, which puts "
+                         "reset at $E85B and cannot boot. " + X7_VECTOR_NOTE)
+    ap.add_argument("--x7-bank-split", choices=("on", "off"), default="on",
+                    help="let a `b = $N` group name the slot in the *next* window "
+                         "too ($8000 -> N, $A000 -> N+1). On by default: X7.PDS:1001"
+                         "-1005 defines bmus=b and bshop=btit=bpw=bpan=bev=b+1, and "
+                         "the code banks register 7 -- the $A000 window -- to "
+                         "b+1. Off leaves one slot for the whole group, so its "
+                         "$A000 half is written over its own $8000 half and slot "
+                         "7 comes out empty; see Assembler.maybe_prebank.")
     ap.add_argument("--no-assume-banks", action="store_true",
                     help="refuse to place a module whose slot the search could "
                          "not determine, instead of using ASSUMED_SLOTS")
@@ -346,9 +835,43 @@ def main() -> int:
         cart_prg, args.verbose,
         x7_table=(args.x7_level_table == "on"),
         assume_banks=not args.no_assume_banks,
-        bank_groups=(args.x7_bank_groups == "on"))
+        bank_groups=(args.x7_bank_groups == "on"),
+        seq_src=(args.seq_src == "on"),
+        x7_vector=(args.x7_vector == "on"),
+        split_banks=(args.x7_bank_split == "on"))
     chr_rom, chr_log = build_chr(cart_chr, args.verbose)
 
+    # `prg` is the assembled image; `source_image` is a copy taken before the
+    # manifest touches it, so the accounting below compares like with like.
+    source_image = bytes(prg)
+
+    # The patch manifest, and the byte accounting that goes with it.
+    #
+    # Without this the headline percentage is unreadable: filling a range from the
+    # cartridge raises it, and a rising percentage is exactly what a rising number
+    # of hidden bugs also looks like. So the source-only image is measured first,
+    # then the manifest is applied, and both numbers are printed with the regions
+    # that produced the difference. `asm/mkrom.py` applies the same manifest, so
+    # the ROM and these numbers describe the same image.
+    source_only = sum(1 for a, b in zip(prg, cart_prg) if a == b)
+    prg_log = list(prg_log)
+    patch_report = None
+    if args.no_patches:
+        prg_log.append("patch manifest: NOT applied (--no-patches); every byte "
+                       "below came from the source")
+    else:
+        try:
+            regions = patches.load()
+            resolved = patches.verify(regions, args.cart_dir)
+            prgs = {name: patches.body(p) for name, p in resolved.items()}
+            cart_for_regions = (prgs[regions[0].cart] if len(prgs) == 1
+                                else patches._mixed(prgs, regions))
+            patch_report = patches.apply(prg, cart_for_regions, regions, args.cart_dir)
+        except patches.PatchError as exc:
+            print(f"*** PATCH MANIFEST REJECTED, and nothing was filled: {exc}\n")
+            return 2
+
+    (OUT / "prg.src.bin").write_bytes(bytes(source_image))
     (OUT / "prg.bin").write_bytes(bytes(prg))
     (OUT / "chr.bin").write_bytes(bytes(chr_rom))
     with (OUT / "mag.sym").open("w") as fh:
@@ -360,7 +883,92 @@ def main() -> int:
     print("\n".join(chr_log))
     print(f"\nPRG: {hits}/{len(prg)} bytes identical to the cartridge "
           f"({100.0 * hits / len(prg):.1f}%)")
+    print(f"  of which from the source alone : {source_only} "
+          f"({100.0 * source_only / len(prg):.1f}%)")
+    if patch_report is not None and patch_report.applied:
+        filled = patch_report.matched_after
+        print(f"  of which from the patch manifest: {filled} "
+              f"({100.0 * filled / len(prg):.1f}%) across "
+              f"{len(patch_report.applied)} region(s), "
+              f"{patch_report.total_bytes} bytes")
+        for r in patch_report.applied:
+            print(f"    {r.region.name}: class {r.region.klass}, "
+                  f"{r.region.length}B at file ${r.region.offset:05X}, "
+                  f"+{r.matched_after - r.matched_before} matched; the source had "
+                  f"{r.already_correct} of these bytes right already")
+        print("  the two lines above are the whole accounting: only the first is "
+              "evidence about the source.")
+    else:
+        print("  of which from the patch manifest: 0 "
+              + ("(--no-patches)" if args.no_patches
+                 else "(asm/patches.manifest has no regions)"))
     print(f"symbols: {len(asm.sym)}  ->  {OUT / 'mag.sym'}")
+
+    # The bank map and what is known about each module's place in it. Printed
+    # with every build because it is the thing most worth being wrong about:
+    # `MODULES` are eight files and the PRG has sixteen 8 KiB slots, and only
+    # five of the eight placements are pinned by anything.
+    print("\nbank map (X5.PDS:10-21):")
+    for base, what in MMC3_MAP.items():
+        print(f"  ${base:04X}-${base + 0x1FFF:04X}  {what}")
+    print("placement:")
+    for m in MODULES + ["SEQ.SRC"]:
+        where, why = MODULE_NOTES.get(m, ("slot ?", "no evidence either way"))
+        slot = (SEQ_MODULES[0][1] if m == "SEQ.SRC"
+                else (f"{ASSUMED_SLOTS[m]:2d}" if m in ASSUMED_SLOTS else " --"))
+        tag = "chained" if m in CHAINED else f"slot {slot}"
+        print(f"  {m:9s} {tag:9s} ({where})")
+        print(f"            {why}")
+        if m in ORIGIN_WHY:
+            forced = MODULE_ORIGINS.get(m)
+            where = (f"assembled at ${forced:04X} (forced)" if forced is not None
+                     else f"assembled at "
+                          f"${Assembler.slot_origin(ASSUMED_SLOTS[m]):04X} "
+                          f"(inherited from the slot)")
+            print(f"            {ORIGIN_WHY[m]}; {where}")
+    faults = window_faults()
+    if faults:
+        print("\n*** FIXED-WINDOW COLLISION: a module is assembled at an address "
+              "MMC3 cannot")
+        print("*** give it. A slot can only be presented at $8000 or $A000 unless "
+              "it is 14 or 15, so for")
+        print("*** a module with no `org` of its own the slot and the origin have "
+              "to agree and here")
+        print("*** they do not. Read MODULE_ORIGINS before changing anything here.")
+        for line in faults:
+            print(f"***   {line}")
+        print("***   For X6 specifically the measured answer is that its SLOT is "
+              "wrong, not its")
+        print("***   address: both dumps' `reset` call `initcols` at $F04A/$F00D, "
+              "inside the fixed")
+        print("***   $E000 window, so X6 is in slot 15. It cannot be moved there "
+              "without an offset")
+        print("***   within the slot, and X6's code is in neither dump at any "
+              "address (class b), so")
+        print("***   nothing measured pins that offset down.")
+    unproven = [m for m in MODULES if m not in PINNED_SLOTS]
+    print(f"  SLOT evidence: {len(MODULES) - len(unproven)} of {len(MODULES)} "
+          f"modules are pinned "
+          f"({', '.join(m for m in MODULES if m in PINNED_SLOTS)}); "
+          f"{len(unproven)} are ASSUMED and labelled as such above "
+          f"({', '.join(unproven)}).")
+    print("  SEQ.SRC is placed at slot 5 by a measured single hit: its first 24 "
+          "bytes occur")
+    print("  once in 131072, at file $0A000. The `no evidence either way` line "
+          "above is a")
+    print("  MODULE_NOTES omission and is wrong; the evidence is in the comment on "
+          "SEQ_MODULES.")
+    print("  With X0=0, X4=2, X3=4, SEQ=5, X5=14, X7=15 and x7's own data owning "
+          "6..13, only")
+    print("  slots 1 and 3 are free -- and both `pob01` and `firespell` are "
+          "reached with only")
+    print("  slots 0 and 1 mapped. Three modules, two slots: the release layout "
+          "is NOT a")
+    print("  bijection over the eight files. Do not read the byte-match percentage "
+          "as evidence")
+    print("  about this; it is at chance for code. Per-module scoring and the "
+          "placement table")
+    print("  are in GAPMAP.md.")
     if any("ASSUMED" in line for line in prg_log):
         print("\n*** PLACEMENT ASSUMED, NOT MEASURED: the slot search found no "
               "winner for the modules marked ASSUMED above. ***")
@@ -390,13 +998,16 @@ def main() -> int:
               f"{', '.join(unplaced)}")
 
     if asm.gaps_used:
-        print(f"\nsource gaps: {len(asm.gaps_used)} of {len(SOURCE_GAPS)} tables the "
-              f"released source reads but never defines, assembled as zero:")
+        print(f"\nsource gaps: {len(asm.gaps_used)} of {len(SOURCE_GAPS)} tables "
+              f"assembled as ZERO because SEQ.SRC was left out of this build:")
         for name, where in sorted(asm.gaps_used.items()):
             print(f"  {name:10s} first read at {where}")
-        print("  These are a gap in the 2012 release, not an assembler fault. Any "
-              "byte difference")
-        print("  they cause is expected and must not be counted as a match.")
+        print("  They are not a gap in the 2012 release -- SEQ.SRC defines all "
+              "eight (lines 784/801/816/")
+        print("  839/847/864/879/902). They assemble as zero only when "
+              "--seq-src off, which is")
+        print("  a diagnostic reading. The default build includes SEQ.SRC and "
+              "gaps_used is empty.")
 
     if asm.prebank_log:
         banks_used = sorted({(f, s) for f, _, s in asm.prebank_log})
