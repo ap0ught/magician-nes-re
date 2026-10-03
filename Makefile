@@ -6,6 +6,7 @@
 #   make verbose    per-file incbin trace
 #   make gaps       the committed stock-vs-rebuild comparison and gap map
 #   make probe      run the rebuilt ROM beside the cartridge in BizHawk
+#   make testsuite  run tools/nestrace.py against koute's nes-testsuite
 #   make clean      remove generated output
 #
 # The cartridge is only ever read, never written, and never committed. See
@@ -32,7 +33,13 @@ TEXTOUT := $(wildcard pds-text/x?.pds)
 # the build silently skips.
 CART ?= /extdrive/backups/SHARE/roms/nes/Magician (USA).nes
 
-.PHONY: all extract assemble rom check verbose gaps probe clean
+# A checkout of https://github.com/koute/pinky (the nes-testsuite/ directory
+# only). It is third-party and is never committed, so it is not a dependency the
+# build can rely on: TS points at wherever the user unpacked it.
+TS ?= /tmp/opencode/pinky/nes-testsuite
+TS_FRAMES ?= 120
+
+.PHONY: all extract assemble rom check verbose gaps probe testsuite clean
 
 all: extract assemble rom
 
@@ -93,6 +100,19 @@ gaps: assemble
 # on this machine. Both windows are moved side by side over X11 by tools/.
 probe: rom
 	@tools/bizhawk_probe.sh "$(CART)" "$(ROM)"
+
+# The tracer is the only NES instrument here, so it is measured against a test
+# suite rather than trusted. Exits non-zero if anything FAILs or ERRORs, which
+# means it is a gate you can leave switched off until the tracer is good enough.
+testsuite:
+	@test -d "$(TS)/testcases" || { \
+		echo "no nes-testsuite at $(TS)"; \
+		echo "  git clone --depth 1 --filter=blob:none --sparse https://github.com/koute/pinky"; \
+		echo "  cd pinky && git sparse-checkout set nes-testsuite nes mos6502"; \
+		echo "  then: make testsuite TS=/path/to/pinky/nes-testsuite"; \
+		exit 2; \
+	}
+	$(PYTHON) tools/nestrace.py --testsuite "$(TS)" --ts-frames $(TS_FRAMES)
 
 clean:
 	rm -rf asm/out pds-text

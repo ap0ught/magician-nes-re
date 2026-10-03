@@ -10,10 +10,11 @@ Three goals, in the order they pay off:
 
 1. **Rebuild the cartridge from the original source** (`asm/`). Eurocom's PDS 1.26 assembly,
    the binary level data and the CHR artwork, assembled by a PDS-compatible assembler written
-   here. It assembles, it loads, and it runs to a black screen: 29.9% of the PRG matches, the
-   reset and IRQ vectors match exactly, and the boot address chain is self-consistent. What is
-   left is that the released code differs from this February 1990 source — the basis for every
-   hack, and for the two goals below.
+   here. It assembles, it loads, and it runs to a black screen: 30.4% of the PRG matches, the
+   reset and IRQ vectors match exactly, and the boot address chain is self-consistent. It gets
+   as far as frame 14, where one `rts` returns through a destroyed stack frame and everything
+   after that is downstream of it. What is left is that the released code differs from this
+   February 1990 source — the basis for every hack, and for the two goals below.
 2. **A moddable core** (`crates/`). 6502 + software PPU + MMC3, verified frame by frame against
    the real cartridge, with traps that replace cartridge routines address by address. Same shape
    as `~/code/z2rs`.
@@ -175,43 +176,65 @@ the bug.
 
 ## Status
 
-**The rebuild assembles, loads and runs, and still shows a black screen.** No
-emulator has been run since BizHawk was found to be unusable here, so this is the
-tracer's verdict (`tools/nestrace.py`), not an emulator's: max luminance over the
-256x240 picture area is 0, and the frame is uniformly black. The captured
-frame for this state is reproducible with
+**The rebuild assembles, loads and runs, and still shows a black screen.** The
+tracer's verdict (`tools/nestrace.py`), not an emulator's: the framebuffer is one
+flat colour. Reproduce with
 
-    python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 120 --png out.png
+    python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 300 --png out.png
 
-The cartridge does **not** boot in the tracer either, which is the important
-caveat: the tracer is a diagnostic, not an acceptance test, and "the rebuild is
-black" is not yet a statement about the rebuild. Both images now run 600 frames
-without halting and both end in the same place -- the cartridge in
-`$8382: jsr rn / lda $40 / bne $8382`, waiting on a zero-page flag that exactly
-one `sta $40` in the cartridge can clear, with an all-`$0F` palette. Since the
-cartridge demonstrably works on hardware, the palette is not yet evidence about
-the rebuild either. What *is* sound is the comparison between the two under the
-same instrument, and that comparison is what `journal/03-...md` records.
+**Where it dies, precisely.** Not at a palette and not in the boot path. At frame
+14, cycle 439 272, the `rts` at `$9D6C` pops a destroyed return address and jumps
+to `$0000`, which is `brk`, which vectors to `$F9B3` -- the *IRQ* handler -- and
+runs it with A=`$FF`. `$FF` written to `$E001` sets bit 7 and **disables the MMC3
+IRQ**, which is why the rebuild then takes 1 077 scanline IRQs where the cartridge
+takes 8 107, and why `sta $2001` happens 12 times instead of 198. The handler's
+`jmp $000B` then lands mid-instruction; by frame 194 the rebuild is executing
+animation tables at `$FFC0` in the fixed bank, where there is no `jsr $FFC0`
+anywhere in its PRG and no symbol at all, and halts on `$52` at `$FFCA` (a
+genuine 6502 freeze). **That one `rts` is the whole remaining bug.** Trace it with
+
+    python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 300 \
+        --halt-at 0xFFCA --last 40
+
+The stack was already 144 bytes deep at the bad `rts`, which matters because
+`initdma` parks the DMA queue at `$7E` -- the queue and the main stack share page
+1, and the main stack has only `$FF`-`$80` before they meet.
+
+**The cartridge is not the control it was assumed to be.** Three claims this file
+used to make are refuted by measurement, all of it after the tracer gained MMC3
+interrupts, CHR banking and correct CHR-RAM writes:
+
+* It is not true that both images "end spinning at `$8382: jsr rn / lda $40 /
+  bne $8382`". `$8382` is `ptlr`, a player-animation table inside X4
+  (`x4.pds:202`), reached only because the MMC3 IRQ never fired. With interrupts
+  delivered the cartridge takes NMI every frame, takes 8 107 scanline IRQs in 150
+  frames, runs its sound engine, does OAM DMA, scans the joypad, calls
+  `setchr`/`movepal`, and ends with `curchrpal` holding
+  `0F 28 38 30 0F 2A 3A 30 0F 17 27 38 0F 21 31 30` -- `TIT.PAL` with `$0F` in
+  the four backdrop slots `movepal` forces. The palette pipeline works end to end.
+* It is therefore also not true that an all-`$0F` palette on the cartridge is
+  evidence about anything. **The cartridge is black in this instrument too**
+  (55/2048 nametable bytes nonzero, `$2007` only ever aimed at `$3F00` and at
+  sixteen bytes per nametable block). Something is still missing from the tracer
+  on the graphics side. The two candidates the measurements point at: there is no
+  APU at all, and `tick` advances the PPU once per instruction so vblank is seen
+  up to seven CPU cycles late and sprite-0 hit has no dot. Neither is implemented.
+* It is not true that the palette being `$0F` is why the screen is black, in the
+  sense that fixing the palette would fix the screen. The palette reaches the PPU
+  correctly and the nametable is empty.
 
 Byte-match against the release is **39 832 / 131 072 (30.4%)**, of which
 **38 982 (29.7%) is source-only** and 864 bytes (0.7%) come from the one
-class-b manifest region. That number went *down* from 29.9%'s 39 204 in the last
+class-b manifest region. That number went *down* from 29.9%'s 39 204 in an earlier
 round of fixes, and that is the right outcome: byte-match against a later release
 rewards a wrong-but-self-consistent build, and the fix that lowered it
 (`lda (zp),y` was being assembled as `lda (zp,x)`, 54 statements in all eight
 modules) is confirmed by the cartridge's own opcode at file `$1F772`.
 
-What the tracer now shows the rebuild doing, in order, with `--where`:
+What the tracer shows the rebuild doing, in order, with `--where`:
 
     reset -> initdma -> initcols -> setchr/setspr/movepal -> dotitle
           -> unrunscn -> jsr initspr -> NMI -> tnmi
-
-and then, at cycle 98674, `addmsg`'s `rts` at `$F1A5` finds an empty stack and
-returns into RAM at `$0F10`. **That is the remaining bug: a lost stack frame**,
-not a missing routine and not the slot-15 ceilings. `im` (`X5.PDS:319`, the
-`orgchrpal -> curchrpal` copy) and `nmi0` (`X5.PDS:167`, the per-frame palette
-push) are never reached because of it, which is why every one of the 32 palette
-entries is still `$0F`. `journal/03-...md` has the trace and the dead ends.
 
 Corrections to what this file used to claim, with the measurements:
 
@@ -248,3 +271,131 @@ harness to inject one -- so "does it boot" is currently measurable only as "does
 reach the title screen unattended".
 
 `crates/` has not been started, and nothing in this repository depends on it.
+
+## Tracer conformance
+
+`tools/nestrace.py` is the only NES instrument on this machine (no emulator is
+installed, and BizHawk cannot run headless without Xvfb), so it is measured
+against koute's `nes-testsuite` rather than trusted. `--testsuite DIR` runs every
+testcase, **refuses to run a ROM whose md5 does not match the testcase**, and
+compares the md5 of the 256x240 greyscale framebuffer against the reference.
+
+    make testsuite                      # TS=/path/to/nes-testsuite
+
+The suite is third-party and is never committed; `TS` points at a checkout
+else on disk. `KNOWN-FAIL` means we reproduced the reference's own failure
+screen -- ten testcases expect blargg's failure digest, and pinky fails those
+too. `UNSUPPORTED` means the mapper is not modelled and the ROM was *not* run.
+
+Run of 2026-10-03 (`--ts-frames 120`): **68 testcases, PASS 7, KNOWN-FAIL 7,
+FAIL 34, ERROR 19, UNSUPPORTED 1.** Of the 41 with a real expected picture, 7
+pass.
+
+```text
+
+apu_test  (FAIL 8)
+  FAIL         apu_test/1-len_ctr                            got 101b37d83de9, want a6a60165f8a7
+  FAIL         apu_test/2-len_table                          got 1dae3e93370e, want e082be73c51e
+  FAIL         apu_test/3-irq_flag                           got f558d9957ab7, want df67bf9e0aa4
+  FAIL         apu_test/4-jitter                             got d3c9f46c50d9, want 5511965c3880
+  FAIL         apu_test/5-len_timing                         got 10520ee16c0d, want 9416144226b8
+  FAIL         apu_test/6-irq_flag_timing                    got 5c59c69f5fd7, want b474f7a1ca18
+  FAIL         apu_test/7-dmc_basics                         got 171fbab47e7d, want 3d7a08151b0d
+  FAIL         apu_test/8-dmc_rates                          got 873a0e8e7184, want c5f193bb4fd2
+
+blargg_apu_2005.07.30  (KNOWN-FAIL 7)
+  KNOWN-FAIL   blargg_apu_2005.07.30/01.len_ctr              printed blargg's failure screen, which is what the testcase expects
+  KNOWN-FAIL   blargg_apu_2005.07.30/02.len_table            printed blargg's failure screen, which is what the testcase expects
+  KNOWN-FAIL   blargg_apu_2005.07.30/03.irq_flag             printed blargg's failure screen, which is what the testcase expects
+  KNOWN-FAIL   blargg_apu_2005.07.30/04.clock_jitter         printed blargg's failure screen, which is what the testcase expects
+  KNOWN-FAIL   blargg_apu_2005.07.30/05.len_timing_mode0     printed blargg's failure screen, which is what the testcase expects
+  KNOWN-FAIL   blargg_apu_2005.07.30/06.len_timing_mode1     printed blargg's failure screen, which is what the testcase expects
+  KNOWN-FAIL   blargg_apu_2005.07.30/07.irq_flag_timing      printed blargg's failure screen, which is what the testcase expects
+
+blargg_ppu_tests_2005.09.15b  (ERROR 3)
+  ERROR        blargg_ppu_tests_2005.09.15b/palette_ram      halted: illegal opcode $42 at $E0A3 (PC=$E0A3)
+  ERROR        blargg_ppu_tests_2005.09.15b/vbl_clear_time   halted: illegal opcode $02 at $E339 (PC=$E339)
+  ERROR        blargg_ppu_tests_2005.09.15b/vram_access      halted: illegal opcode $02 at $E413 (PC=$E413)
+
+branch_timing_tests  (PASS 3)
+  PASS         branch_timing_tests/1.Branch_Basics           26 frames
+  PASS         branch_timing_tests/2.Backward_Branch         32 frames
+  PASS         branch_timing_tests/3.Forward_Branch          30 frames
+
+dmc_dma_during_read4  (FAIL 1)
+  FAIL         dmc_dma_during_read4/read_write_2007          got 55f42c07e417, want 289318c88b06
+
+holy_diver_batman  (UNSUPPORTED 1)
+  UNSUPPORTED  holy_diver_batman/M1_P128K_C128K_W8K          mapper 1
+
+instr_misc  (FAIL 1, PASS 2)
+  PASS         instr_misc/01-abs_x_wrap                      22 frames
+  PASS         instr_misc/02-branch_wrap                     22 frames
+  FAIL         instr_misc/03-dummy_reads                     got d5050ef43fd1, want e4b3faaf5841
+
+oam_read  (PASS 1)
+  PASS         oam_read/oam_read                             68 frames
+
+sprite_hit_tests_2005.10.05  (FAIL 10, PASS 1)
+  FAIL         sprite_hit_tests_2005.10.05/01.basics         got e93b775d032e, want 388ab951797a
+  FAIL         sprite_hit_tests_2005.10.05/02.alignment      got b4e420c08b31, want efe0e20c14ae
+  FAIL         sprite_hit_tests_2005.10.05/03.corners        got dd21ba551804, want 7ff7c9bc044a
+  FAIL         sprite_hit_tests_2005.10.05/04.flip           got 88ab4314eb46, want c1bc9a362d15
+  FAIL         sprite_hit_tests_2005.10.05/05.left_clip      got 9011675b5bcf, want e8ab4d728f70
+  FAIL         sprite_hit_tests_2005.10.05/06.right_edge     got dee27043d5bb, want cd8c9e59befa
+  FAIL         sprite_hit_tests_2005.10.05/07.screen_bottom  got 5acdd2f8e12e, want 6e946157b0a4
+  FAIL         sprite_hit_tests_2005.10.05/08.double_height  got 5d1cdb607b74, want b8cb45dfdf1c
+  FAIL         sprite_hit_tests_2005.10.05/09.timing_basics  got 7e161bbc2bb1, want ab27927fd039
+  FAIL         sprite_hit_tests_2005.10.05/10.timing_order   got a24647bbd159, want 1fa4915b3c7e
+  PASS         sprite_hit_tests_2005.10.05/11.edge_timing    108 frames
+
+sprite_hit_timing  (FAIL 1)
+  FAIL         sprite_hit_timing/sprite_hit_timing           got a2c7bac2cb87, want ffe8f3026500
+
+vbl_nmi_timing  (FAIL 7)
+  FAIL         vbl_nmi_timing/1.frame_basics                 got a1700661daae, want b6c0c4c43834
+  FAIL         vbl_nmi_timing/2.vbl_timing                   got cd5e01fd6b29, want 4390eee80911
+  FAIL         vbl_nmi_timing/3.even_odd_frames              got 8da9015293c1, want cfa81bdc8309
+  FAIL         vbl_nmi_timing/4.vbl_clear_timing             got d091c4f5152d, want c0e78f389727
+  FAIL         vbl_nmi_timing/5.nmi_suppression              got f00fdc89cbd2, want 2ff7a0778343
+  FAIL         vbl_nmi_timing/6.nmi_disable                  got 0f5142192bbd, want 45e1c4cf3394
+  FAIL         vbl_nmi_timing/7.nmi_timing                   got d6fb79ed2d1a, want bce0c0c99010
+
+mmc3_irq_tests  (FAIL 6)
+  FAIL         mmc3_irq_tests/1.Clocking                     $F8=2 (code 2 in the readme)
+  FAIL         mmc3_irq_tests/2.Details                      $F8=2 (code 2 in the readme)
+  FAIL         mmc3_irq_tests/3.A12_clocking                 $F8=2 (code 2 in the readme)
+  FAIL         mmc3_irq_tests/4.Scanline_timing              $F8=2 (code 2 in the readme)
+  FAIL         mmc3_irq_tests/5.MMC3_rev_A                   $F8=2 (code 2 in the readme)
+  FAIL         mmc3_irq_tests/6.MMC3_rev_B                   $F8=2 (code 2 in the readme)
+
+instr_test-v5  (ERROR 16)
+  ERROR        instr_test-v5/01-basics                       no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/02-implied                      no $DE $B0 $47 signature at $6001 (halted: illegal opcode $1A at $03A0)
+  ERROR        instr_test-v5/03-immediate                    no $DE $B0 $47 signature at $6001 (halted: illegal opcode $0B at $03A0)
+  ERROR        instr_test-v5/04-zero_page                    no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/05-zp_xy                        no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/06-absolute                     no $DE $B0 $47 signature at $6001 (halted: illegal opcode $02 at $03A2)
+  ERROR        instr_test-v5/07-abs_xy                       no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/08-ind_x                        no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/09-ind_y                        no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/10-branches                     no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/11-stack                        no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/12-jmp_jsr                      no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/13-rts                          no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/14-rti                          no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/15-brk                          no $DE $B0 $47 signature at $6001 (ran out of frames)
+  ERROR        instr_test-v5/16-special                      no $DE $B0 $47 signature at $6001 (ran out of frames)
+```
+
+Reading it: `branch_timing_tests` 3/3 and `oam_read` 1/1 are framebuffer-exact
+against a reference and cover the two subsystems this game's timing rests on.
+`instr_misc` 2/3 bounds the CPU (`03-dummy_reads` wants the 6502's dummy reads,
+which the tracer does not do). All eighteen `sprite_hit_*` + `vbl_nmi_timing`
+failures are dot-level timing, which is one missing capability -- `tick` advances
+the PPU once per instruction -- not eighteen bugs. There is no APU, which is why
+every `apu_test` fails. `instr_test-v5` is wired up but not usable at Python
+speed and its result-byte convention is not yet re-read from the source, so its
+sixteen rows are `ERROR` and mean "not measured". See
+`journal/04-measure-the-instrument-against-a-test-suite.md` §5.
+
