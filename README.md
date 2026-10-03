@@ -265,15 +265,23 @@ $DB5A  E6 11     inc  $11        ;   bump the 16-bit VRAM address
 The release defers the nametable write to the NMI queue; the February 1990 source
 has only the synchronous `sta $2007`. Nothing in the source corresponds to
 `$F38E` -- in our build that address is `CA / dex`, the tail of an unrelated
-routine. This is the same shape of difference already recorded for `reset`, but
-here it is inside the one routine that writes the region that is corrupt.
+routine. This is the same shape of difference already recorded for `reset`.
 
-**That is a located difference, not yet a proven cause.** If the tail of the 1 KiB
-`$2007` burst were being stolen by `nmi0`, `PALRAM` would differ substantially; it
-differs by 0 bytes at frame 60. And the damage is at the *start* of the nametable
-(`$08` filling rows 0-3, real data from row 4, against the cartridge's real data
-from row 1), not the tail. `journal/06-the-picture-is-wrong-in-vram.md` states
-what is proven, what is not, and the next three measurements.
+**That insertion is inert, and is not the cause.** It is gated on `bit $06D8` /
+`bmi`, three times in the whole cartridge and nowhere else, and a scan of all
+262 144 bytes of its PRG finds **zero** writes to `$06D8`. Read out of BizHawk at
+frame 60: cartridge `$06D8` = `$00`. So `bmi` is never taken and the cartridge
+writes `$2006` and streams `$2007` exactly as the source does. The deferred path
+is for a state this ROM never enters.
+
+So the difference is real and it is not the bug. What is left: the corruption is on
+the PPU output side, both the nametable writes and 480 bytes of CHR-RAM writes go
+through `$2007`, and both are wrong. The 480 CHR bytes are not a misaligned copy
+-- the best constant source offset explains 63 of 480, which is chance -- so it is
+neither a shifted stream nor a wrong source pointer. That leaves the `$2006`
+address setup or the MMC3 CHR bank select, and the measurement to make is a diff of
+the two images' `$2006` writes. `journal/06-the-picture-is-wrong-in-vram.md` has
+the full state, what is proven, what is retracted, and what is blocked on.
 
 **What the tracer says, and how much of it survives.** `tools/nestrace.py` reports
 that at frame 14, cycle 439 272, the `rts` at `$9D6C` pops a destroyed return
@@ -285,8 +293,14 @@ against an instrument of unknown correctness. Trace the tracer's claim with
     python3 tools/nestrace.py --rom asm/out/magician-rebuilt.nes --frames 300 \
         --halt-at 0xFFCA --last 40
 
-**That one `rts` is not the whole remaining bug, and the claim is withdrawn as
-stated.** `tools/nestrace.py` further reports 1 077 scanline IRQs in the rebuild
+**That one `rts` is not the whole remaining bug, and the claim is withdrawn
+entirely.** There is no `rts` at `$9D6C` in either image: in the assembled ROM the
+byte there is `$31`, inside a character-code table (`... 2f 29 ff 30 ff 31 32 38
+39 2b 2b 3a 3a ...`, `$FF` terminators, `31 32 38 39` spelling "1289"), and no
+symbol exists anywhere in `$9D00`-`$9E00`. BizHawk's `emu.disassemble(0x9D6C)`
+returns `BRK` for both images because it reads through the `System Bus` domain with
+whatever bank is mapped. The address the tracer resolved does not match the ROM it
+was given, so the chain cannot be pursued as written. For the record: `tools/nestrace.py` further reports 1 077 scanline IRQs in the rebuild
 against the cartridge's 8 107, `sta $2001` 12 times against 198, and a genuine
 6502 freeze on `$52` at `$FFCA` by frame 194 while executing animation tables at
 `$FFC0` in the fixed bank. A ROM that freezes at `$FFCA` on frame 194 does not
