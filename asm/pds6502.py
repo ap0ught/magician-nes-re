@@ -675,21 +675,38 @@ class Fixup:
         self.expr, self.where, self.scope = expr, where, scope
 
 
-# Tables the released source reads but never defines.
+# Tables the banks read but never define -- and *why* they are undefined.
 #
 # ANIM.SRC:289-312 indexes eight of them (`lda cpltab,x` and friends) to build
 # the sprite frame pointers, and DISP.SRC:422-445 has the same eight in the same
-# order. Neither name is defined in any of the eight `X?.PDS` banks, in any
-# `.SRC` include, or under `DAT/`. So the source as released cannot fully
-# assemble: this is a gap in the 2012 release, not a fault in this assembler, and
-# no amount of reading the source will produce the values.
+# order. No name here is defined in any of the eight `X?.PDS` banks or in any
+# `.SRC` the banks include, which is why they assemble as zero.
 #
-# They are almost certainly the per-level sprite pointer triples laid down by the
-# level-data `load` machinery from `DAT/*.blk` by some build step that was not
-# shipped. That is a guess, so it is not treated as one: they assemble as zero,
-# every use is recorded, and `asm/build.py` prints the list. A rebuild that
-# differs from the cartridge here is *expected* and must not be read as an
-# assembler error -- nor quietly used to claim a better match than it has.
+# CORRECTION 2026-10-02. What this comment used to assert -- "a gap in the 2012
+# release", "defined nowhere in the release", "no amount of reading the source
+# will produce the values" -- **was false**. `vendor/Magician-NES/SEQ.SRC` defines
+# all eight, and it ships in the release:
+#
+#     SEQ.SRC:784  XPLTAB   SEQ.SRC:801  YPLTAB
+#     SEQ.SRC:816  DPLTAB   SEQ.SRC:839  CPLTAB
+#     SEQ.SRC:847  XPHTAB   SEQ.SRC:864  YPHTAB
+#     SEQ.SRC:879  DPHTAB   SEQ.SRC:902  CPHTAB
+#
+# SEQ.SRC is 907 lines of the game's animation tables (`ANIMTAB` and the per-axis
+# pointer lists) and reaches nothing, because its only `include` edge is
+# `DISP.SRC:130`, spelled `include \zdev\seq.src` -- a DOS path from the Atari ST
+# development machine that cannot resolve on a case-sensitive POSIX filesystem.
+# `DISP.SRC` itself is included by no bank, so the edge is dead at both ends.
+#
+# So the values were never missing; they were unreachable. `build.py` now
+# assembles `SEQ.SRC` at `org $a000` -- the address `DISP.SRC:129` gives it, and
+# the one both `frame` routines agree with (`ora #>$a000`) -- which defines all
+# eight here. Assembling it that way defines 497 symbols and collides with
+# **zero** of the 3 125 the eight banks define, so nothing already resolved moves.
+#
+# The old fallback stays as a guard, not as a diagnosis: if a build ever assembles
+# without SEQ.SRC, these names must still resolve to something rather than raise,
+# and the use must be reported so the difference is never counted as a match.
 SOURCE_GAPS = frozenset({
     "cphtab", "cpltab", "dphtab", "dpltab",
     "xphtab", "xpltab", "yphtab", "ypltab",
@@ -738,6 +755,9 @@ class Assembler:
         # Symbols whose assignment also switches the output slot. See
         # maybe_prebank(): x7's `memchk c000,b` banks the *next* group.
         self.prebank_symbols: frozenset[str] = frozenset()
+        # Whether a bank-counter assignment also names the slot in the *next*
+        # window. See maybe_prebank().
+        self.prebank_split = False
         self.prebank_log: list[tuple[str, int, int]] = []
         # Bytes a module wrote past its slot window where the next window is a
         # different slot, so no file offset can be chosen for them. See
@@ -745,6 +765,22 @@ class Assembler:
         # silently destroyed X5's `sql` table.
         self.overflow: list[tuple[str, int, int]] = []
         self.report: list[str] = []
+        # Window base address -> 8 KiB slot, for a module whose logical span
+        # crosses a window boundary and so needs a *different* slot in each. The
+        # only module that does is `SEQ.SRC`; see prg_offset() and SEQ_MODULES
+        # in build.py. A key mapped to None means "this window is real but the
+        # tree does not say which slot is in it", and its bytes are recorded in
+        # `overflow` rather than guessed at.
+        self.window_slots: dict[int, int | None] = {}
+        # Highest physical address this run may write, or None. A module with
+        # no `org` that runs out of room in a window would otherwise land on
+        # top of whatever the next module puts there, and the loss is invisible:
+        # the later module simply wins. See X6_LIMIT in build.py.
+        self.addr_ceiling: int | None = None
+        # `error` directives to record instead of raising, and the ones recorded.
+        # See the `error` case in `directive`.
+        self.demo_errors: tuple[str, ...] = ()
+        self.demo_seen: list[tuple[str, str]] = []
 
         self.cond: list[bool] = []
         self.cond_taken: list[bool] = []
@@ -837,15 +873,35 @@ class Assembler:
     def slot_origin(slot: int) -> int:
         """Where MMC3 presents 8 KiB slot ``slot``, as a CPU address.
 
-        $8000/$A000/$C000/$E000 present slots ``n & 3``, so slot 15 -- which x7
-        names in its own comment ("samples always to bank $F") -- assembles at
-        $E000. Nothing in the source says so: x7 has no leading `org` at all, so
-        without this it starts wherever the previous module stopped. It is the
-        same mapping ``prg_offset`` inverts, and it is checkable rather than
-        assumed: build.py tries all sixteen slots and keeps the one whose output
-        matches the cartridge.
+        The game's own MMC3 documentation (X5.PDS:10-21) is the whole story,
+        and it is a MMC3 not a MMC1:
+
+            $8000-$9FFF : register 6 -- any of slots $00..$0D
+            $A000-$BFFF : register 7 -- any of slots $00..$0D
+            $C000-$DFFF : slot $0E, whatever the registers say
+            $E000-$FFFF : slot $0F, whatever the registers say
+
+        So 14 and 15 are *fixed* to $C000 and $E000 and everything else is
+        switchable, presented at $8000 unless the source puts it in the
+        register-7 window.
+
+        This used to be `0x8000 + (slot & 3) * 0x2000`, which is the **MMC1**
+        rule -- 16 KiB banks, two of them, only four possible combinations. It
+        is wrong here for 14 of the 16 slots, and the two that were visibly
+        wrong were the two that did the most damage: slot 2 mapped to $C000
+        (where MMC3 puts slot 14) and slot 3 to $E000 (where MMC3 puts slot 15).
+        X6 has no `org` of its own, so `slot_origin` alone decided that it
+        assembled at $E000 while its bytes were filed in slot 3, and `reset`'s
+        `jsr initcols` -- a jump into the fixed $E000 window from inside that
+        same window -- read slot 15 at $E9E9, which is a hole. The ROM reached
+        `$E9E9`, executed a `brk`, and went round the reset vector until the
+        frame budget ran out. Max luminance over the picture area: 0.
         """
-        return 0x8000 + (slot & 3) * 0x2000
+        if slot == 14:
+            return 0xC000
+        if slot == 15:
+            return 0xE000
+        return 0x8000
 
     def prg_offset(self, phys: int | None = None) -> int:
         """Where a byte at physical address `phys` goes in the PRG image.
@@ -881,15 +937,52 @@ class Assembler:
         address cannot be placed without a `bank` directive saying which slot is
         there, so the byte is dropped and recorded in `overflow` rather than
         folded.
+
+        `window_slots` overrides all of that for a module that genuinely spans
+        two windows. `SEQ.SRC` is the case that forced it, and it is worth
+        writing out because the naive reading loses data silently:
+
+        Assembled at `org $a000` -- the only address the tree gives it
+        (`DISP.SRC:129`) and the one both `frame` routines agree with
+        (`ANIM.SRC:283`, `ora #>$a000`) -- it runs `$A000`-`$C676`: 9 827 bytes,
+        the whole `$A000` window and then 1 654 bytes past it. With one
+        `self.slot` for the whole module, `$A000` and `$C000` compute the *same*
+        file offset, so the tail overwrites the head: 9 827 bytes assembled into
+        8 192 distinct offsets, and `ANIMTAB` -- which the cartridge carries
+        byte-identically at file `$0A000` -- destroyed by its own tail. So the
+        module is told which slot is in each window it reaches into; see
+        `SEQ_WINDOW_SLOTS` in `build.py`. A window the map does not mention, or
+        maps to `None`, is recorded in `overflow` rather than guessed at.
         """
         p = self.phys if phys is None else phys
         if not 0x8000 <= p < 0x10000:
             self.overflow.append((self.here.name, p & 0xFFFF, self.slot))
             return -1
+        if self.addr_ceiling is not None and p >= self.addr_ceiling:
+            self.overflow.append((self.here.name, p & 0xFFFF, self.slot))
+            return -1
         win = 0x8000 + ((p - 0x8000) & 0x6000)
         slot = self.slot
-        if win >= 0xE000 and slot == 14:
-            slot = 15                      # `$C000`-`$DFFF` is 14, `$E000`- is 15
+        # The two fixed windows, and they are fixed *absolutely*. In MMC3's 8 KiB
+        # PRG mode register 1 is the second-to-last bank and register 7 is the
+        # last one, so $C000-$DFFF is slot 14 and $E000-$FFFF is slot 15 whatever
+        # `self.slot` says. This used to be `if win >= 0xE000 and slot == 14`,
+        # which only got the $E000 half right and only for a module that
+        # happened to be assembled in slot 14. X2 assembles at $A000 in slot 1
+        # and runs on to $CC11; with `self.slot` still 1, its $C000-$CC11 tail
+        # computed the same file offsets as its own $A000-$BBFF head and
+        # overwrote 7 554 bytes of it -- 8192 bytes of X2 assembled into 8192
+        # distinct offsets out of the 15 746 it emitted, silently.
+        if win == 0xC000:
+            slot = 14
+        elif win == 0xE000:
+            slot = 15
+        if self.window_slots:
+            want = self.window_slots.get(win)
+            if want is None:
+                self.overflow.append((self.here.name, p & 0xFFFF, self.slot))
+                return -1
+            slot = want
         return slot * self.SLOT + (p - win)
 
     def emit(self, byte: int):
@@ -945,7 +1038,9 @@ class Assembler:
                 "redef": set(self.redefinable), "const": set(self.constants),
                 "pre": set(self.preexisting), "data": set(self.data_offsets),
                 "slot": self.slot, "phys": self.phys, "log": self.log,
-                "star": self.star, "prebank": list(self.prebank_log)}
+                "star": self.star, "prebank": list(self.prebank_log),
+                "wslots": dict(self.window_slots),
+                "ceiling": self.addr_ceiling}
 
     def restore(self, snap: dict):
         self.sym = dict(snap["sym"])
@@ -957,6 +1052,8 @@ class Assembler:
         self.slot = snap["slot"]
         self.phys, self.log, self.star = snap["phys"], snap["log"], snap["star"]
         self.prebank_log = list(snap["prebank"])
+        self.window_slots = dict(snap["wslots"])
+        self.addr_ceiling = snap["ceiling"]
 
     def prescan(self, paths: list[pathlib.Path]):
         """Collect macro names up front: x1-x7 use macros that x0 defines, and a
@@ -994,18 +1091,36 @@ class Assembler:
             self.cond, self.cond_taken = [], []
             self.scope = ""
 
-    def run_all(self, paths: list[pathlib.Path], slots: list[int]):
+    def run_all(self, paths: list[pathlib.Path], slots: list[int | None],
+                origins: dict[str, int] | None = None,
+                window_slots: dict[int, dict[int, int | None]] | None = None,
+                ceilings: dict[str, int] | None = None):
         """Assemble every module in order, repeating until nothing moves.
 
         The eight banks are one program: x0's reset code calls routines that
         x1-x7 define, so a single pass over the project cannot resolve
         everything. Pass two can, because the symbol table carries over.
+
+        A `slots` entry of `None` means "continue from wherever the previous
+        module stopped", which is what a module with no `org` of its own does --
+        see `CHAINED` in build.py for the one place that is used, and why.
+
+        `origins` supplies a starting address for a module that has no `org` of
+        its own either, and `window_slots` the slot in each window it reaches
+        into; both are keyed by file name. See `run_file`, `prg_offset`, and
+        `SEQ_MODULES` / `SEQ_WINDOW_SLOTS` in build.py for the module that needs
+        them.
         """
+        origins = origins or {}
+        window_slots = window_slots or {}
+        ceilings = ceilings or {}
         prev: dict[str, int] | None = None
         for attempt in range(self.MAX_PASSES):
             self.tolerate = True
             for path, slot in zip(paths, slots):
-                self.run_file(path, slot=slot)
+                self.run_file(path, slot=slot, origin=origins.get(path.name),
+                              window_slots=window_slots.get(path.name),
+                              addr_ceiling=ceilings.get(path.name))
             current = dict(self.sym)
             if current == prev:
                 break
@@ -1014,24 +1129,71 @@ class Assembler:
         # One last clean pass, with the now-known symbols, so the emitted bytes
         # come from a run in which every reference resolved.
         for path, slot in zip(paths, slots):
-            self.run_file(path, slot=slot)
+            self.run_file(path, slot=slot, origin=origins.get(path.name),
+                          window_slots=window_slots.get(path.name),
+                          addr_ceiling=ceilings.get(path.name))
         return self
 
-    def run_file(self, path: pathlib.Path, slot: int | None = None):
+    def run_file(self, path: pathlib.Path, slot: int | None = None,
+                 origin: int | None = None,
+                 window_slots: dict[int, int | None] | None = None,
+                 addr_ceiling: int | None = None):
         """Assemble one module, iterating until its symbols stop moving.
 
         Zero-page versus absolute is chosen from the *value* of the operand, so
         a forward reference in the first pass is assumed absolute and may make
         every later address move. Re-running the module with the symbols now
         known settles it; the loop stops when a pass changes no symbol.
+
+        `origin` sets the starting address, as an `org` would. It exists for
+        `SEQ.SRC`, which has no `org` of its own because the one that places it
+        lives in its includer: `DISP.SRC:129-130` is literally
+
+            org $a000
+            include \\zdev\\seq.src
+
+        and nothing else in the tree names `$A000`. Supplying the origin here is
+        the honest way to honour that line without pulling in the rest of a file
+        that is a superseded 797-byte prototype (see `MODULE_NOTES` in
+        build.py).
+
+        `window_slots` says which 8 KiB slot is in each window the module's
+        logical span reaches, and is only needed by the same module; see
+        `prg_offset`.
         """
+        saved_wslots, saved_ceiling = self.window_slots, self.addr_ceiling
+        self.window_slots = dict(window_slots or {})
+        self.addr_ceiling = addr_ceiling
+        try:
+            self._run_file(path, slot=slot, origin=origin,
+                           base_wslots=dict(self.window_slots))
+        finally:
+            self.window_slots, self.addr_ceiling = saved_wslots, saved_ceiling
+
+    def _run_file(self, path: pathlib.Path, slot: int | None = None,
+                  origin: int | None = None, base_wslots=None):
         lines = logical_lines(self.read_source(path), str(path), self.keywords,
                               self.report, self.macro_names)
+        # `self.here` is only re-pointed by `include`, so without this the
+        # overflow and prebank reports name the directory instead of the module
+        # -- and `overflow` is the report that says which module lost bytes.
+        saved_here = self.here
+        self.here = path
+        try:
+            self._assemble(path, lines, slot=slot, origin=origin,
+                           base_wslots=dict(self.window_slots))
+        finally:
+            self.here = saved_here
+
+    def _assemble(self, path: pathlib.Path, lines, slot: int | None = None,
+                  origin: int | None = None, base_wslots=None):
         if slot is not None:
             self.slot = slot
             base_addr = (self.slot_origin(slot),) * 3
         else:
             base_addr = (self.phys, self.log, self.star)
+        if origin is not None:
+            base_addr = (origin,) * 3
         base_slot = self.slot
         # The address counters are restored per attempt. They are only ever moved
         # by `org`, and x7 has no leading `org` -- so a run that raised halfway
@@ -1054,9 +1216,16 @@ class Assembler:
             self.data_offsets = set()
             self.unresolved = {}
             self.overflow = []
+            # Not cumulative: the point is which tables are still unresolved in
+            # the run whose bytes are kept, not which were unresolved in some
+            # earlier pass of the same module.
+            self.gaps_used = {}
             self.cond = []
             self.cond_taken = []
             self.scope = ""
+            # `window_slots` is installed by maybe_prebank() mid-module, so it
+            # has to be cleared per attempt like the other per-run state.
+            self.window_slots = dict(base_wslots or {})
             self.process(lines)
             current = dict(self.sym)
             if current == prev:
@@ -1204,15 +1373,49 @@ class Assembler:
         new value is a valid slot -- so this cannot fire on an ordinary counter.
         Set `prebank_symbols = ()` to switch it off and get the literal reading
         of the released source.
+
+        With `prebank_split` on, the assignment also says which slot is in the
+        *next* window. X7's own bank constants demand it:
+
+            b    = $6
+            load mus\\mus.mus,$8000
+            ...
+            org *,*&$dfff        ;(used at $8000..$9FFF)
+            include probdat.src
+            memchk c000,b
+            bmus  equ b           ;music data bank (16k)
+            bshop equ b+1         ;shop data bank
+            btit  equ b+1 ... bpan equ b+1 ... bev equ b+1
+
+        `bmus` is `b` and everything else is `b+1`, and the code agrees:
+        `X0.PDS:624` `bnk 7,#btit`, `X1.PDS:743` `bnk 7,#bpan` -- register 7 is
+        the `$A000` window (`X5.PDS:11-21`) -- and those routines read `titdat`
+        and `pandat`, whose logical addresses `org *,*&$dfff` has folded back
+        into `$8000-$9FFF`. So one group occupies two slots: `b` for its
+        `$8000` half and `b+1` for its `$A000` half, and the logical wrap is what
+        lets code at `$A0xx` be reached as `$80xx`.
+
+        Without this the whole run collapses onto one slot: `$A000` and `$C000`
+        both compute the same file offset for a module with a single `self.slot`,
+        so the group overwrites itself from `$A000` on. Measured, that is what
+        happens -- slot 6 scores 1.7% against the cartridge and **slot 7 scores
+        0 non-zero bytes out of the 6 756 the cartridge has there.**
         """
         if not self.prebank_symbols:
             return
         if name.lower() not in self.prebank_symbols:
             return
         slot = value & 0x0F
-        if slot != self.slot:
-            self.slot = slot
-            self.prebank_log.append((self.here.name, self.star, slot))
+        if slot == self.slot:
+            return
+        self.slot = slot
+        if self.prebank_split:
+            # `$C000`/`$E000` are the fixed windows (banks $0E/$0F), so they are
+            # named here too: SAM.SAM is loaded at $FB80 inside this same run of
+            # assignments and would otherwise fall out of the map.
+            self.window_slots = {0x8000: slot, 0xA000: slot + 1,
+                                 0xC000: 14, 0xE000: 15}
+        self.prebank_log.append((self.here.name, self.star, slot))
 
     def expand_macro(self, macro: Macro, args: list[str], at: Line):
         binding = (args + [""] * 10)[:10]
@@ -1322,6 +1525,14 @@ class Assembler:
             msg = operands.strip()
             if len(msg) >= 2 and msg[0] == '"' and msg[-1] == '"':
                 msg = msg[1:-1]
+            if any(pat in msg for pat in self.demo_errors):
+                # A source-level `if`/`error` that measurement has shown to be
+                # wrong for this build. Swallowing it is a decision, not a fix,
+                # so it is recorded and printed rather than passed over: the
+                # `else` arm of the guard is skipped, which is exactly what
+                # makes the thing the guard was protecting get overwritten.
+                self.demo_seen.append((msg, ln.where))
+                return
             raise AsmError(f"error directive: {msg}", ln.where)
         elif op in ("send", "option", "radix", "name", "page", "space", "end"):
             pass
@@ -1465,7 +1676,20 @@ class Assembler:
 
         if mode == "rel":
             self.emit(code)
-            self.fixups.append(Fixup(self.prg_offset(), self.log,
+            # A 6502 measures a branch displacement from the address of the
+            # *next* instruction, which is the byte after the displacement byte.
+            # At this point `self.log` is the displacement byte's own address --
+            # `emit(code)` above has already advanced past the opcode -- so the
+            # base has to be advanced once more.
+            #
+            # Getting this wrong is invisible in a listing and fatal in a ROM: it
+            # makes every branch land one byte late, and it is one byte *late*
+            # rather than one byte early, so a routine's loop and its backward
+            # branch agree with each other and the routine still runs. Measured
+            # against the cartridge, `X6.PDS:791 initcols` emitted `D0 F8` where
+            # the release has `D0 F7`, and `X7.PDS:927`'s `bpl !a` pointed one
+            # byte into `lda $2002`'s opcode instead of at its first byte.
+            self.fixups.append(Fixup(self.prg_offset(), self.log + 1,
                                      operand.lstrip(), ln.where, self.scope))
             self.emit(0)
             return
@@ -1530,19 +1754,42 @@ class Assembler:
             # indirect forms; a bare symbol is never indirect.
             pass
         # `sta $00,x` is one operand with an index, so the zero-page test looks
-        # at the base only.
+        # at the base only -- but the *choice* of mode has to look at the index,
+        # and preferring plain `zp` first does not.
+        #
+        # `X5.PDS:112` is `!a lda (t0),y / sta t2,y / dey / bpl !a`: copy the
+        # three bytes at (t0)+2..(t0)+0 to t2+2..t2+0. There is no `sta $zp,y` on
+        # a 6502 -- `sta` has `zp`, `zp,x`, `abs`, `abs,x` and `abs,y` and no
+        # `zp,y` -- so this has to assemble to the *absolute* indexed form
+        # `$99 t2 00`, which is what the original assembler did. Preferring `zp`
+        # emitted `$85 t2`: two bytes, no index, and the three bytes all landed
+        # on t2. It is silent, because `sta t2,y` is a perfectly good looking
+        # operand; and it is fatal, because that loop is how a scene gets
+        # uncompressed. Measured: `unrunscn` copied one token's five bytes to
+        # the PPU and returned, leaving the nametable with 4 non-zero bytes in
+        # 2 048 and the screen black.
         base = operand.strip("()").split(",")[0].strip()
         value = self.value_or_defer(base, ln.where)
         zp_ok = value < 0x100
-        # Pick the zero-page variant when one exists and the operand fits.
-        for want in ("zp", "zpx", "zpy"):
+        index = None
+        if "," in operand:
+            tail = operand.rsplit(",", 1)[1].strip().lower()
+            if tail in ("x", "w"):
+                index = "x"
+            elif tail == "y":
+                index = "y"
+        # When the mnemonic has no zero-page form for the index that was written,
+        # fall through to the absolute one, which every 6502 mnemonic has.
+        pref = {"x": ("zpx", "absx", "zp", "abs"),
+                "y": ("zpy", "absy", "zp", "abs"),
+                None: ("zp", "abs")}[index]
+        for want in pref:
             for code, mode in modes:
-                if mode == want and zp_ok:
-                    return code, mode
-        for want in ("abs", "absx", "absy", "ind"):
-            for code, mode in modes:
-                if mode == want:
-                    return code, mode
+                if mode != want:
+                    continue
+                if mode in ("zp", "zpx", "zpy") and not zp_ok:
+                    continue
+                return code, mode
         for code, mode in modes:
             if mode == "indy":
                 return code, mode
