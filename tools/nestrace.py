@@ -17,9 +17,20 @@ opcode accurate, unofficial opcodes are treated as NOPs of the right length.
 from __future__ import annotations
 
 import argparse
+import bisect
 import collections
+import hashlib
+import json
 import pathlib
 import sys
+
+# One NTSC frame in PPU dots, and the dots within it at which the PPU's own tile
+# fetches drive address bit 12 up: once on every rendering scanline (dot 260) and
+# once on the pre-render line. 241 clocks per frame, which is the number
+# mmc3_irq_tests/2.Details checks.
+FRAME_DOTS = 341 * 262
+SCANLINE_CLOCK = tuple(sorted(341 * sl + 260 for sl in (*range(240), 261)))
+CPU_CYCLES_PER_FRAME = FRAME_DOTS / 3.0
 
 # ------------------------------------------------------------------ the 6502
 
@@ -106,6 +117,12 @@ MODE_LEN = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "zpx": 2, "zpy": 2,
 
 class Halt(Exception):
     pass
+
+
+class UnsupportedMapper(Exception):
+    """Raised rather than run: a ROM on a mapper we do not model would be
+    executed through the wrong bank map and produce a plausible, confident,
+    wrong answer. `holy_diver_batman` alone carries fourteen mappers."""
 
 
 class CPU:
@@ -312,9 +329,21 @@ class CPU:
             self.n = (m >> 7) & 1
             self.v = (m >> 6) & 1
         elif n == "inc":
-            bus.write(addr, (bus.read(addr) + 1) & 0xFF)
+            # INC and DEC set N and Z from the *memory* result and leave C
+            # alone. The old code wrote the byte and touched no flag at all,
+            # which is invisible in a straight-line test and lethal in a loop:
+            # `ldy #0 / ... / iny / dec $F2 / bne loop` leaves Z=0 for 32
+            # iterations and then inherits Z=1 from the `tya`, the branch falls
+            # through, and the loop exits early with no error anywhere. It is
+            # how branch_timing_tests/1 uploaded 512 bytes of its 944-byte font
+            # and then rendered a screen of blanks.
+            v = (bus.read(addr) + 1) & 0xFF
+            bus.write(addr, v)
+            self.setzn(v)
         elif n == "dec":
-            bus.write(addr, (bus.read(addr) - 1) & 0xFF)
+            v = (bus.read(addr) - 1) & 0xFF
+            bus.write(addr, v)
+            self.setzn(v)
         elif n == "inx":
             self.x = self.setzn(self.x + 1)
         elif n == "iny":
@@ -444,18 +473,30 @@ class CPU:
 # ------------------------------------------------------------------ the bus
 
 class Bus:
-    def __init__(self, prg: bytes, chr_: bytes, mapper: int, vertical: bool):
+    cpu: "CPU"
+
+    def __init__(self, prg: bytes, chr_, mapper: int, vertical: bool,
+                 chr_ram: bool = False):
         self.ram = bytearray(0x800)
         self.prg = prg
+        self.chr_rom = not chr_ram
         self.chr = bytearray(chr_) if len(chr_) else bytearray(0x2000)
         self.mapper = mapper
         self.prgram = bytearray(0x2000)
         self.cycles = 0
         self.vertical = vertical
+        if mapper not in (0, 4):
+            raise UnsupportedMapper(mapper)
+        # NROM
+        self.nrom16 = len(prg) == 0x4000
         # MMC3
+        # MMC3: R0-R7 select four 1 KiB CHR banks / two 1 KiB PRG banks / one
+        # 2 KiB PRG bank; R8 is the 2 KiB CHR bank at $1000-$1FFF and is chosen
+        # by writing >= $40 to $8001. Nine entries, not eight.
         self.bankreg = 6
-        self.regs = [0, 0, 0, 0, 0, 0, 0x0E, 0x0F]
+        self.regs = [0, 0, 0, 0, 0, 0, 0x0E, 0x0F, 0]
         self.prg_mode = 0
+        self.chr_a12_inv = False
         # Where PRG mode was last changed, and by what. PRG mode swaps the R6 and
         # R7 windows, so knowing *who* set it is the difference between reading a
         # disassembly of the right module and reading the wrong one.
@@ -466,6 +507,7 @@ class Bus:
         self.irq_enabled = False
         self.scanline = 0
         self.irq_cycles = 0
+        self.a12 = 0
         # PPU
         self.ctrl = 0
         self.mask = 0
@@ -482,6 +524,7 @@ class Bus:
         self.vblank = False
         self.frame = 0
         self.dot = 0
+        self.abs_dot = 0
         self.sl = 0
         self.ppu_writes: collections.Counter = collections.Counter()
         self.ppu_write_log: list[tuple[int, int, int]] = []
@@ -496,24 +539,37 @@ class Bus:
         self.cur_pc = 0
         self.nmi_count = 0
         self.irq_count = 0
+        self.sprite0_x = -1
+        self.sprite0_y = -1
         self.dma_pending = 0
         self.halted = ""
 
-    # -- PRG mapping. MMC3 8 KiB slots: 16 of them in 128 KiB.
+    # -- PRG mapping, by mapper.
     #
-    # PRG mode 0 is $8000=R6, $A000=R7, $C000=slot 14, $E000=slot 15; mode 1
-    # swaps R6 and R7 in the first two windows and leaves the fixed pair alone.
-    # The fixed pair staying fixed in both modes is the load-bearing part: in
-    # mode 1 the cartridge's own reset does `lda #$40 / sta $A001`, which is a
-    # *data* write to whichever register is selected -- not a mode write -- and
-    # a model that takes the PRG mode bit from there sends $E000-$FFFF to R7.
-    # The reset and IRQ vectors live in the fixed window, so they then read as
-    # whatever the banked window holds, BRK vectors through garbage, and the
-    # cartridge spins on BRK at $1000 instead of booting.
+    # NROM: 16 KiB images are mirrored at both $8000 and $C000; 32 KiB images
+    # are one flat 32 KiB window. There is no banking at all, so a NROM test
+    # ROM run through the MMC3 map below reads the wrong bytes at $A000 and
+    # $E000 and fails for reasons that have nothing to do with the thing being
+    # tested.
+    #
+    # MMC3 8 KiB slots: 16 of them in 128 KiB. PRG mode 0 is $8000=R6,
+    # $A000=R7, $C000=slot 14, $E000=slot 15; mode 1 swaps R6 and R7 in the
+    # first two windows and leaves the fixed pair alone. The fixed pair staying
+    # fixed in both modes is the load-bearing part: in mode 1 the cartridge's own
+    # reset does `lda #$40 / sta $A001`, which is a *data* write to whichever
+    # register is selected -- not a mode write -- and a model that takes the PRG
+    # mode bit from there sends $E000-$FFFF to R7. The reset and IRQ vectors live
+    # in the fixed window, so they then read as whatever the banked window holds,
+    # BRK vectors through garbage, and the cartridge spins on BRK at $1000 instead
+    # of booting.
     def _prg_offset(self, cpu: int) -> int:
-        n = len(self.prg) // 0x2000          # number of 8 KiB slots
         if cpu < 0x8000:
             return None
+        if self.mapper == 0:
+            if self.nrom16:
+                return (cpu & 0x3FFF)
+            return (cpu & 0x7FFF)
+        n = len(self.prg) // 0x2000          # number of 8 KiB slots
         if cpu < 0xA000:
             slot = self.regs[7] & 0x0F if self.prg_mode else self.regs[6] & 0x0F
         elif cpu < 0xC000:
@@ -523,6 +579,35 @@ class Bus:
         else:
             slot = n - 1
         return (slot % n) * 0x2000 + (cpu & 0x1FFF)
+
+    # -- CHR mapping. NROM has none: one flat 8 KiB (CHR-ROM or CHR-RAM).
+    # MMC3's eight 1 KiB windows are the load-bearing part for this game --
+    # Magician is MMC3 with 32 KiB of CHR-RAM, and with the banks left alone
+    # every tile fetch returns the same 8 KiB and the screen is noise.
+    #
+    # Mode 0 ($8000 bit 1 clear):  $0000 R0, $0400 R1, $0800 R4, $0C00 R5,
+    #                             $1000 R2, $1400 R3, $1800 R6, $1C00 R7
+    # Mode 1:                      $0000 R2, $0400 R3, $0800 R4, $0C00 R5,
+    #                             $1000 R6, $1400 R7, $1800 R0, $1C00 R1
+    # If the value last written to R0 has bit 6 set, R8 covers the whole
+    # $1000-$1FFF as one 2 KiB bank and R0/R1 move up to $0000-$07FF.
+    def _chr_offset(self, ppu: int) -> int:
+        ppu &= 0x1FFF
+        if self.mapper == 0:
+            return ppu
+        r = self.regs
+        mask = (len(self.chr) // 0x400) - 1
+        inv = self.chr_a12_inv
+        if r[0] & 0x40:
+            if ppu >= 0x1000:
+                return (((r[8] & ~1) + (1 if ppu >= 0x1400 else 0)) & mask) * 0x400 \
+                    + (ppu & 0x3FF)
+            tab = (0, 1, 4, 5) if not inv else (2, 3, 4, 5)
+        elif inv:
+            tab = (2, 3, 4, 5, 6, 7, 0, 1)
+        else:
+            tab = (0, 1, 4, 5, 2, 3, 6, 7)
+        return (r[tab[ppu >> 10]] & mask) * 0x400 + (ppu & 0x3FF)
 
     def read(self, a: int) -> int:
         a &= 0xFFFF
@@ -539,6 +624,7 @@ class Bus:
             if a & 7 == 4:
                 return self.oam[self.oamaddr]
             if a & 7 == 7:
+                self._a12(self.v & 0x3FFF)
                 self._inc_v()
                 v = self.ppu_read(self.v & 0x3FFF)
                 self.readbuf = self.ppu_read((self.v & 0x3FFF) - 1 if self.v >= 0x3F00 else (self.v & 0x3FFF))
@@ -564,7 +650,8 @@ class Bus:
         # reaches its main loop.
         if self.bankreg == 6 and (a & 0x1FFF) in (0x0006, 0x2006):
             self.irq_pending = False
-            return self.scanline
+            self.scanline = self.irq_cycles
+            return self.irq_cycles
         off = self._prg_offset(a)
         if off is None:
             return 0xFF
@@ -608,12 +695,17 @@ class Bus:
                     self.t = (self.t & 0xFF00) | v
                     self.v = self.t
                     self.w = 0
+                # Both halves of a $2006 write put the address on the PPU bus,
+                # so both can clock the MMC3 counter. This is how the
+                # mmc3_irq_tests ROMs drive the counter with rendering off.
+                self._a12(self.t)
             elif r == 7:
                 self.reg_writes.setdefault(r, []).append(
                     (self.cycles, self.cur_pc, self.v & 0x3FFF, v))
                 if self.ppu_writes[7] <= 64:
                     self.ppu7.append((self.cycles, self.v & 0x3FFF, v))
                 self.ppu7_targets[self.v & 0x3FFF] += 1
+                self._a12(self.v & 0x3FFF)
                 self.ppu_write(self.v & 0x3FFF, v)
                 self._inc_v()
             self.ppu_writes[r] += 1
@@ -623,23 +715,34 @@ class Bus:
         if a < 0x4020:
             if a == 0x4014:
                 self._oam_dma(v)
+                # 513 cycles, plus one more if the DMA starts on an odd CPU
+                # cycle. oam_read and dmc_dma_during_read4 both measure the
+                # stealing; without the cost the instruction after the write
+                # lands a cycle early and the measured total is short.
+                self.cpu.cycles += 513 + (self.cpu.cycles & 1)
             return
         if a < 0x6000:
             return
         if a < 0x8000:
             self.prgram[a - 0x6000] = v
             return
+        if self.mapper == 0:
+            return                            # NROM: the writes go nowhere
         if a < 0xC000:
-            # $8000/$A000 even: bank select (bits 0-2), PRG mode (bit 6),
-            # IRQ latch reload (bit 7). $8001/$A001 odd: data for the selected
-            # register. Both windows select the same register -- that is the
-            # chip. PRG mode does NOT come from the odd port.
+            # $8000/$A000 even: bank select (bits 0-2), CHR A12 inversion
+            # (bit 1 of the same port), PRG mode (bit 6), IRQ latch reload
+            # (bit 7). $8001/$A001 odd: data for the selected register. Both
+            # windows select the same register -- that is the chip. PRG mode
+            # does NOT come from the odd port.
             if (a & 1) == 0:
                 self.bankreg = v & 7
+                inv = (v >> 1) & 1
+                if inv != self.chr_a12_inv:
+                    self.chr_a12_inv = inv
                 if ((v >> 6) & 1) != self.prg_mode:
                     self.prg_mode = (v >> 6) & 1
                     self.prg_mode_from = (a, self.cur_pc, v)
-                self.irq_reload = bool(v & 0x80)
+                self.irq_reload = self.irq_reload or bool(v & 0x80)
             else:
                 self.regs[self.bankreg] = v
             return
@@ -647,6 +750,10 @@ class Bus:
             if (a & 1) == 0:
                 self.irq_latch = v
             else:
+                # $C001 acknowledges the IRQ, zeroes the counter and arms a
+                # reload on the *next* clock. It does not reload now, and it
+                # does not raise an IRQ by itself (mmc3_irq_tests 2.Details 6).
+                self.irq_pending = False
                 self.irq_cycles = 0
                 self.scanline = 0
                 self.irq_reload = True
@@ -687,7 +794,7 @@ class Bus:
     def ppu_read(self, a: int) -> int:
         a &= 0x3FFF
         if a < 0x2000:
-            return self.chr[a]
+            return self.chr[self._chr_offset(a)]
         if a < 0x3F00:
             return self.vram[self._nt_index(a)]
         return self.pal[a & 0x1F] if (a & 0x13) != 0x10 else self.vram[self._nt_index(0x2000 + (a & 0x0FFF))]
@@ -695,7 +802,9 @@ class Bus:
     def ppu_write(self, a: int, v: int) -> None:
         a &= 0x3FFF
         if a < 0x2000:
-            self.chr[a] = v
+            if self.chr_rom:
+                return                       # CHR-ROM: the write goes nowhere
+            self.chr[self._chr_offset(a)] = v
         elif a < 0x3F00:
             self.vram[self._nt_index(a)] = v
         elif (a & 0x13) == 0x10:
@@ -704,13 +813,60 @@ class Bus:
             self.pal[a & 0x1F] = v
 
     def _inc_v(self):
-        self.v = (self.v + ((32 if self.ctrl & 4 else 1))) & 0x7FFF
+        # $2000 bit 3 is "increment VRAM address by 32". Bit 2 is unused; the
+        # old code stepped by 1 or 32 on bit 2, so every game that used the
+        # increment bit -- which is all of them -- filled its nametable one byte
+        # at a time down a column and left the rest of it as $00.
+        self.v = (self.v + ((32 if self.ctrl & 8 else 1))) & 0x7FFF
 
     def _maybe_nmi(self):
         if self.vblank and (self.ctrl & 0x80):
             if not self.cpu.nmi_pending:
                 self.nmi_count += 1
             self.cpu.nmi_pending = True
+
+    # ---- the MMC3 scanline counter.
+    #
+    # This is the part that was missing entirely, and it is the reason the
+    # cartridge as well as the rebuild never reached its main loop: `irq_pending`
+    # was set by nothing and delivered to nothing, so `cpu.irq_pending` stayed
+    # false forever and the IRQ vector was never taken.
+    #
+    # The counter is clocked by the *rising edge of bit 12* of the PPU address
+    # bus. Two things drive that bus: the PPU's own tile fetches (one rise per
+    # rendering scanline, at dot 260) and CPU accesses to $2006/$2007, which
+    # clock it even when rendering is off -- that is how mmc3_irq_tests clocks
+    # the counter by hand. A fall does not clock it, and no change does not
+    # clock it.
+    #
+    # Per-clock behaviour, as measured on real cartridges by Shay Green and
+    # written up in roms/mmc3_irq_tests/readme.txt:
+    #   reload pending  -> counter = latch, no decrement
+    #   counter == 0    -> counter = latch
+    #   otherwise       -> counter -= 1
+    # and after that, if the counter is zero and IRQs are enabled, raise.
+    # Writing $C001 acknowledges, zeroes and arms the reload; it does not raise
+    # an IRQ itself, and it does not reload until the next clock.
+    def _irq_clock(self) -> None:
+        if self.mapper != 4:
+            return
+        if self.irq_reload:
+            self.irq_reload = False
+            self.irq_cycles = self.irq_latch
+        elif self.irq_cycles == 0:
+            self.irq_cycles = self.irq_latch
+        else:
+            self.irq_cycles = (self.irq_cycles - 1) & 0xFF
+        if self.irq_cycles == 0 and self.irq_enabled:
+            self.irq_pending = True
+
+    def _a12(self, addr: int) -> None:
+        """A CPU-side PPU address access. Clocks the counter on a 0->1 edge of
+        bit 12, whatever the access was."""
+        hi = (addr >> 12) & 1
+        if hi and not self.a12:
+            self._irq_clock()
+        self.a12 = hi
 
     # ---- frame timing. The PPU runs at 3 dots per CPU cycle, 341 dots per
     # scanline, 262 scanlines per frame (89342 dots, 29780.5 CPU cycles). The
@@ -723,19 +879,41 @@ class Bus:
         if d <= 0:
             return
         self.cycles = upto
+        prev = self.abs_dot
+        self.abs_dot += d * 3
+        # 241 counter clocks per frame: one on each of scanlines 0-239, where
+        # the PPU's fetches drive A12 up, and one on the pre-render line.
+        if self.mask & 0x18:
+            for f in range(prev // FRAME_DOTS, self.abs_dot // FRAME_DOTS + 1):
+                base = FRAME_DOTS * f
+                lo = max(prev, base)
+                for i in range(bisect.bisect_right(SCANLINE_CLOCK, lo - base),
+                               bisect.bisect_right(SCANLINE_CLOCK, self.abs_dot - base)):
+                    self._irq_clock()
         self.dot += d * 3
-        while self.dot >= 341 * 262:
-            self.dot -= 341 * 262
+        while self.dot >= FRAME_DOTS:
+            self.dot -= FRAME_DOTS
             self.frame += 1
         new_sl = self.dot // 341
         if self.sl < 241 <= new_sl and not self.vblank:
             self.vblank = True
             self.status |= 0x80
             self._maybe_nmi()
+        elif new_sl < 241 and self.vblank:
+            # Vblank flag is cleared at the pre-render line without a read of
+            # $2002. Without this a ROM that polls the flag instead of reading
+            # the register -- and vbl_nmi_timing/3 does exactly that -- waits
+            # forever.
+            self.vblank = False
+            self.status &= 0x7F
         self.sl = new_sl
-
-    def _mmc3_irq_check(self):
-        pass
+        # Hand the MMC3 IRQ line to the CPU. It stays asserted until the handler
+        # acknowledges it by reading $8006 or writing $E001, so if the handler
+        # does not, the CPU takes it again -- which is what the hardware does.
+        if self.irq_pending and self.irq_enabled:
+            if not self.cpu.irq_pending:
+                self.irq_count += 1
+            self.cpu.irq_pending = True
 
     # ---- rendering. A scanline renderer, not a dot renderer: for each of the
     # 240 visible scanlines it walks the 32 background tiles that cover the
@@ -755,88 +933,135 @@ class Bus:
         0x000000, 0x000000, 0x000000,
     )
 
-    def _render_scanline(self, y: int) -> list[int]:
-        """y is the visible scanline 0..239. Returns 256 palette indices."""
-        out = [self.pal_idx(0)] * 256   # the universal backdrop colour
+    def _inc_y(self, v: int) -> int:
+        """The PPU's vertical scroll increment, once per rendering scanline."""
+        if (v & 0x7000) != 0x7000:
+            return v + 0x1000
+        v &= ~0x7000
+        y = (v & 0x03E0) >> 5
+        if y == 29:
+            y = 0
+            v ^= 0x0800                 # coarse Y 29 wraps and flips nametable Y
+        elif y == 31:
+            y = 0                        # 31 is skipped entirely, no flip
+        else:
+            y += 1
+        return (v & ~0x03E0) | (y << 5)
+
+    # $2000 bit 4 is the *background* pattern table and bit 5 selects the bank
+    # for 8x16 sprites. The old code used bit 5 for the background and took its
+    # complement, so every background tile was fetched from the opposite table
+    # and then used to build the nametable address as well. Two wrong answers
+    # from one wrong bit.
+    def _bg_base(self) -> int:
+        return 0x1000 if (self.ctrl & 0x10) else 0x0000
+
+    def _render_scanline(self, y: int, v: int) -> list[int]:
+        """`v` is the address latch for this scanline. Returns 256 palette
+        indices -- the 6-bit palette RAM entries, which is what pinky's
+        `FramebufferPixel::base_color_index` hands the test suite's md5."""
+        backdrop = self.pal_idx(0)
+        out = [backdrop] * 256
         if y >= 240:
             return out
-        if not (self.mask & 0x18):
-            return out
-        bgbase = 0x0000 if (self.ctrl & 0x20) else 0x1000
-        sprbase = 0x1000 - bgbase
-        ntbase = bgbase & 0x1000
-        ntsel = (self.t >> 10) & 3
-        ntsel_addr = (ntsel << 10) & 0x0C00
-        coarsey = (self.t >> 5) & 0x1F
-        finey = (self.t >> 12) & 7
-        coarsex = self.t & 0x1F
-        finex = self.x
-        # The vertical scroll wraps every 30 tiles.
-        yfine = coarsey * 8 + finey + y
-        coarsey_eff = (yfine // 8) % 30
-        finey_eff = (yfine // 8) % 8
-        if yfine >= 240:
-            coarsey_eff = 0
-            finey_eff = yfine - 240
-        for px in range(256):
-            tot = px + finex
-            cx = (coarsex + (tot >> 3)) & 0x1F
-            fx = tot & 7
-            row = (coarsey_eff >> 2) * 32 + cx
-            tile = self.ppu_read(ntbase | ntsel_addr | row)
-            lo = self.ppu_read(bgbase + tile * 16 + finey_eff)
-            hi = self.ppu_read(bgbase + tile * 16 + finey_eff + 8)
-            if lo or hi:
-                b = ((lo >> (7 - fx)) & 1) | (((hi >> (7 - fx)) & 1) << 1)
-            else:
-                b = 0
-            if b:
-                attr = self.ppu_read(ntbase | ntsel_addr | 0x03C0 |
-                                     ((coarsey_eff >> 2) & 7) * 8 + (cx >> 2))
-                q = ((coarsey_eff & 2) << 1) | ((cx & 2))
-                pal = (attr >> q) & 3
-                if self.mask & 0x01:
-                    out[px] = self.pal_idx(pal * 4 + b)
-        if self.mask & 0x14:
-            for i in range(64):
-                sy = self.oam[i * 4] - 1
-                if not (0 <= y - sy < 8 if self.ctrl & 0x20 else 0 <= sy - y < 8):
+        vram = self.vram
+        chr_ = self.chr
+        mapper4 = self.mapper == 4
+        show_bg = bool(self.mask & 0x08)
+        show_sp = bool(self.mask & 0x04)
+        left8 = bool(self.mask & 0x02)
+        grey = bool(self.mask & 0x01)
+        bgopaque = bytearray(256)
+
+        def pat(a: int) -> int:
+            if mapper4:
+                return chr_[self._chr_offset(a)]
+            return chr_[a & 0x1FFF]
+
+        bgbase = self._bg_base()
+        if show_bg:
+            coarse_x = v & 0x1F
+            nt_x = (v >> 10) & 1
+            nt_y = (v >> 11) & 1
+            coarse_y = (v >> 5) & 0x1F
+            fine_y = (v >> 12) & 7
+            nt = ((nt_y << 1) | nt_x) * 0x400
+            att = 0x3C0 + (coarse_y >> 2) * 8
+            # 33 tiles: 32 to cover the line, plus one for the fine-X shift.
+            shift = coarse_x * 8 + self.x
+            for i in range(33):
+                cx = (coarse_x + i) & 0x1F
+                ntx = nt ^ (((coarse_x + i) >> 5) & 1) * 0x400
+                tile = vram[(ntx + coarse_y * 32 + cx) & 0x7FF]
+                base = bgbase + tile * 16 + fine_y
+                lo = pat(base)
+                hi = pat(base + 8)
+                if not (lo | hi):
                     continue
-                tile = self.oam[i * 4 + 1]
-                attr = self.oam[i * 4 + 2]
-                xpos = self.oam[i * 4 + 3]
-                h = 8
-                if attr & 0x80:
-                    h = 16
-                    bank = 0x1000 if (self.ctrl & 0x20) else 0x0000
-                    tile &= 0xFE
-                    if not (self.ctrl & 0x20):
-                        tile += 1
-                else:
-                    bank = sprbase
-                row_in = (y - sy) if (self.ctrl & 0x20) else (y - sy)
-                if attr & 0x40:
-                    row_in = h - 1 - row_in
-                addr = bank + tile * 16 + (row_in & 7)
-                lo = self.ppu_read(addr)
-                hi = self.ppu_read(addr + 8)
-                if attr & 0x80:
-                    hi = 0
-                fx = (0 if (attr & 0x40) else 0)
+                a = vram[(ntx + att + (cx >> 2)) & 0x7FF]
+                q = ((coarse_y & 2) << 1) | (cx & 2)
+                p = ((a >> q) & 3) * 4
                 for k in range(8):
-                    if xpos + k >= 256:
-                        break
-                    px = xpos + k
-                    if px < 0:
+                    px = i * 8 + k - shift
+                    if not 0 <= px < 256 or (px < 8 and not left8):
                         continue
-                    bit = (7 - k) if not (attr & 0x40) else k
+                    bit = 7 - k
                     b = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1)
-                    if b == 0:
-                        continue
-                    if attr & 0x20:
-                        out[px] = 0x20 | out[px]     # behind background
-                    else:
-                        out[px] = self.pal_idx(0x10 + (attr & 3) * 4 + b)
+                    if b:
+                        bgopaque[px] = 1
+                        out[px] = backdrop if grey else self.pal_idx(p + b)
+        if not show_sp:
+            return out
+        oam = self.oam
+        h16mode = bool(self.ctrl & 0x20)
+        spbase = bgbase if h16mode else (0x1000 - bgbase)
+        drawn = bytearray(256)          # OAM order: the first sprite wins
+        nvis = 0
+        for i in range(64):
+            sy = oam[i * 4] - 1
+            row_in = y - sy
+            h = 16 if (oam[i * 4 + 2] & 0x80) else 8
+            if not 0 <= row_in < h:
+                continue
+            nvis += 1
+            if nvis > 8:
+                self.status |= 0x20      # sprite overflow
+            tile = oam[i * 4 + 1]
+            attr = oam[i * 4 + 2]
+            xpos = oam[i * 4 + 3]
+            if attr & 0x40:
+                row_in = h - 1 - row_in
+            if h == 16:
+                t = (tile & 0xFE) + (1 if row_in >= 8 else 0)
+                r = row_in & 7
+            else:
+                t = tile
+                r = row_in
+            addr = spbase + t * 16 + r
+            lo = pat(addr)
+            hi = pat(addr + 8)
+            if not (lo | hi):
+                continue
+            for k in range(8):
+                px = xpos + k
+                if not 0 <= px < 256 or (px < 8 and not left8):
+                    continue
+                bit = k if (attr & 0x40) else 7 - k
+                b = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1)
+                if not b:
+                    continue
+                # Sprite 0 hit: opaque sprite 0 over opaque background, with both
+                # halves of rendering on and the leftmost 8 pixels open.
+                if i == 0 and show_bg and bgopaque[px] and not (self.status & 0x40):
+                    self.status |= 0x40
+                    self.sprite0_x = px
+                    self.sprite0_y = y
+                if drawn[px]:
+                    continue
+                drawn[px] = 1
+                if (attr & 0x20) and bgopaque[px]:
+                    continue            # behind an opaque background pixel
+                out[px] = backdrop if grey else self.pal_idx(0x10 + (attr & 3) * 4 + b)
         return out
 
     def pal_idx(self, i: int) -> int:
@@ -846,7 +1071,27 @@ class Bus:
         return self.pal[i] & 0x3F
 
     def render_frame(self) -> list[list[int]]:
-        return [self._render_scanline(y) for y in range(240)]
+        """Render one whole frame from the current PPU state.
+
+        `v` and `t` are snapshotted and the vertical increment is simulated, so
+        the frame is internally consistent even though the CPU keeps writing
+        to the latches mid-frame. The previous code read the vertical scroll out
+        of `t` -- the write-only register -- so a game that scrolls by writing
+        $2005 and never $2006 got no vertical scroll at all, and one that writes
+        $2006 mid-frame got the wrong one.
+        """
+        if not (self.mask & 0x18):
+            return [[self.pal_idx(0)] * 256 for _ in range(240)]
+        self.status &= ~0x60
+        v = self.v
+        t = self.t
+        v = (v & ~0x7BE0) | (t & 0x7BE0)   # pre-render: vertical bits from t
+        rows = []
+        for y in range(240):
+            v = (v & ~0x041F) | (t & 0x041F)   # each line: horizontal bits from t
+            rows.append(self._render_scanline(y, v))
+            v = self._inc_y(v)
+        return rows
 
 
 def load_rom(path: pathlib.Path):
@@ -855,10 +1100,18 @@ def load_rom(path: pathlib.Path):
         raise SystemExit(f"{path}: not an iNES file")
     nprg, nchr, f6, f7 = b[4], b[5], b[6], b[7]
     prg = b[16:16 + nprg * 16384]
+    chr_ram = nchr == 0
     chr_ = b[16 + nprg * 16384: 16 + nprg * 16384 + nchr * 8192] if nchr else bytearray(0x2000)
     mapper = (f6 >> 4) | (f7 & 0xF0)
     vertical = bool(f6 & 1)
-    return prg, chr_, mapper, vertical
+    # `chr_ram` has to come from the header, not from `len(chr_)`: a zero CHR
+    # count means 8 KiB of *RAM*, and load_rom substitutes that 8 KiB so the
+    # array exists. Deriving ROM-vs-RAM from the length therefore called every
+    # CHR-RAM cartridge CHR-ROM, `ppu_write` returned before storing, and every
+    # tile a game uploaded to CHR-RAM vanished -- a black screen with a
+    # nametable full of tile numbers pointing at nothing. Four of the test
+    # suites are CHR-RAM cartridges and all four rendered one flat colour.
+    return prg, chr_, mapper, vertical, chr_ram
 
 
 def load_syms(rom: pathlib.Path) -> dict[str, int]:
@@ -893,10 +1146,215 @@ def resolve(s: str, syms: dict[str, int]) -> int:
     return int(t, 0)
 
 
+def make_machine(rom: pathlib.Path):
+    """`(.nes path) -> (Bus, CPU)`, or raise UnsupportedMapper."""
+    prg, chr_, mapper, vertical, chr_ram = load_rom(rom)
+    bus = Bus(prg, chr_, mapper, vertical, chr_ram)
+    cpu = CPU(bus)
+    bus.cpu = cpu
+    cpu.pc = bus.read(0xFFFC) | (bus.read(0xFFFD) << 8)
+    return bus, cpu
+
+
+# ------------------------------------------------------------------ test suite
+#
+# pinky's nes-testsuite: a JSON file per testcase holding the digest of the ROM
+# it is written against, how many frames to run, and the md5 of the 256x240
+# framebuffer it expects at the end. The framebuffer is one byte per pixel and
+# that byte is the 6-bit palette RAM entry -- `FramebufferPixel::base_color_index`
+# -- so the expected values depend on palette RAM, the nametables, the attribute
+# table and CHR, and on nothing else. No master palette, no emphasis.
+#
+# The harness runs `elapsed_frames * 2` frames and reads the framebuffer at the
+# frame boundary, which is where this renderer's `bus.frame` increments too.
+#
+# The digest check is not optional. A testcase names the ROM it was calibrated
+# against; running some *other* ROM under the same expectations produces a
+# confident wrong answer, which is the exact failure mode this whole tool
+# exists to eliminate.
+
+BLARGG_FAILURE_MD5 = "0941a56e4c62c6026264952a9bfaea35"
+"""The framebuffer md5 of blargg's own "Failed" screen. Ten of the 46 JSON
+testcases expect it: the seven blargg_apu ones and the three blargg_ppu ones.
+pinky recorded those as failures too, so for them a PASS from us would mean we
+disagree with the reference, and a match on this digest means the ROM printed
+its failure screen -- which is the *expected* outcome, not our bug."""
+
+
+def framebuffer_md5(bus: Bus) -> str:
+    h = hashlib.md5()
+    for row in bus.render_frame():
+        h.update(bytes(row))
+    return h.hexdigest()
+
+
+def run_frames(bus: Bus, cpu: CPU, frames: int, cycle_cap: int) -> str:
+    """Run until `frames` complete PPU frames have been generated. Returns '' on
+    success, or the reason it stopped early."""
+    while bus.frame < frames:
+        if cpu.cycles >= cycle_cap:
+            return f"cycle cap at frame {bus.frame}/{frames}"
+        try:
+            cpu.step()
+        except Halt as h:
+            return f"halted: {h}"
+        bus.tick(cpu.cycles)
+    return ""
+
+
+def index_roms(romdir: pathlib.Path) -> dict[str, pathlib.Path]:
+    out: dict[str, pathlib.Path] = {}
+    for p in sorted(romdir.rglob("*.nes")):
+        out[hashlib.md5(p.read_bytes()).hexdigest()] = p
+    return out
+
+
+def run_json_suite(root: pathlib.Path, roms: dict[str, pathlib.Path],
+                   wanted: set[str], cycle_cap: int, rows: list) -> None:
+    for js in sorted((root / "testcases").rglob("*.json")):
+        suite = js.parent.name
+        if wanted and suite not in wanted:
+            continue
+        spec = json.loads(js.read_text())
+        want_md5 = spec["test"]["expected_framebuffer_md5sum"]
+        frames = spec["test"]["elapsed_frames"] * 2
+        name = f"{suite}/{js.stem}"
+        rom = roms.get(spec["romfile_md5sum"])
+        if rom is None:
+            rows.append((suite, name, "NO-ROM", "no ROM with that digest under roms/"))
+            continue
+        got = hashlib.md5(rom.read_bytes()).hexdigest()
+        if got != spec["romfile_md5sum"]:
+            rows.append((suite, name, "MD5-MISMATCH",
+                         f"rom/{rom.name} is {got}, testcase wants {spec['romfile_md5sum']}"))
+            continue
+        try:
+            bus, cpu = make_machine(rom)
+        except UnsupportedMapper as m:
+            rows.append((suite, name, "UNSUPPORTED", f"mapper {m.args[0]}"))
+            continue
+        why = run_frames(bus, cpu, frames, cycle_cap)
+        if why:
+            rows.append((suite, name, "ERROR", f"{why} (PC=${cpu.pc:04X})"))
+            continue
+        md5 = framebuffer_md5(bus)
+        if md5 == want_md5:
+            rows.append((suite, name, "PASS", f"{frames} frames"))
+        elif want_md5 == BLARGG_FAILURE_MD5:
+            rows.append((suite, name, "KNOWN-FAIL",
+                         "printed blargg's failure screen, which is what the testcase expects"))
+        else:
+            rows.append((suite, name, "FAIL", f"got {md5[:12]}, want {want_md5[:12]}"))
+
+
+def run_mmc3_suite(roms: dict[str, pathlib.Path], wanted: set[str],
+                   frames: int, rows: list) -> None:
+    """mmc3_irq_tests has no JSON testcases, so read its own result byte.
+
+    `source/validation.asm` puts it at zero-page $F8: 1 means passed, anything
+    else is the failure code listed in the ROM's readme, and the ROM then spins
+    in `forever`. Nine codes are enumerated there; 10 would mean it never got
+    as far as reporting."""
+    for rom in sorted(roms.values()):
+        if rom.parent.name != "mmc3_irq_tests":
+            continue
+        suite = "mmc3_irq_tests"
+        if wanted and suite not in wanted:
+            continue
+        name = f"{suite}/{rom.stem}"
+        bus, cpu = make_machine(rom)
+        why = run_frames(bus, cpu, frames, 40_000_000)
+        code = bus.ram[0xF8]
+        if code == 1:
+            rows.append((suite, name, "PASS", f"$F8=1 after {bus.frame} frames"))
+        elif code == 0:
+            rows.append((suite, name, "ERROR",
+                         f"$F8 still 0 after {frames} frames ({why or 'no halt'})"))
+        else:
+            rows.append((suite, name, "FAIL", f"$F8={code} (code {code} in the readme)"))
+
+
+def run_instr_suite(roms: dict[str, pathlib.Path], wanted: set[str],
+                    frames: int, rows: list) -> None:
+    """instr_test-v5 has no JSON testcases either; read its result byte.
+
+    From its readme: the status byte lives at $6000 ($80 = still running,
+    $00-$7F = finished with that code) and $DE $B0 $47 is written to $6001-$6003
+    while it runs, so a $6000 that goes back to zero without the signature ever
+    appearing is a ROM that never started. Code 0 is a pass.
+
+    These ROMs take thousands of frames of real time, which a Python tracer
+    cannot afford for all sixteen, so `frames` is a budget and a ROM that is
+    still $80 when the budget runs out is reported as INCOMPLETE, not as a
+    failure."""
+    for rom in sorted(roms.values()):
+        if rom.parent.name != "instr_test-v5":
+            continue
+        suite = "instr_test-v5"
+        if wanted and suite not in wanted:
+            continue
+        name = f"{suite}/{rom.stem}"
+        bus, cpu = make_machine(rom)
+        why = run_frames(bus, cpu, frames, 400_000_000)
+        code = bus.prgram[0]
+        sig = bytes(bus.prgram[1:4])
+        if sig != b"\xde\xb0\x47":
+            rows.append((suite, name, "ERROR",
+                         f"no $DE $B0 $47 signature at $6001 ({why or 'ran out of frames'})"))
+        elif code == 0x80:
+            rows.append((suite, name, "INCOMPLETE",
+                         f"still running ($6000=$80) after {bus.frame} frames"))
+        elif code == 0:
+            rows.append((suite, name, "PASS", f"$6000=0 after {bus.frame} frames"))
+        else:
+            rows.append((suite, name, "FAIL", f"$6000=${code:02X} after {bus.frame} frames"))
+
+
+def run_testsuite(args) -> int:
+    """The driver: build the ROM index, run every suite, print the table."""
+    root: pathlib.Path = args.testsuite
+    romdir = root / "roms"
+    if not romdir.is_dir() or not (root / "testcases").is_dir():
+        print(f"{root}: expected testcases/ and roms/ under it "
+              f"(a pinky nes-testsuite checkout)", file=sys.stderr)
+        return 2
+    roms = index_roms(romdir)
+    wanted = set(args.suite)
+    rows: list = []
+    run_json_suite(root, roms, wanted, args.ts_max_cycles, rows)
+    run_mmc3_suite(roms, wanted, args.ts_frames, rows)
+    run_instr_suite(roms, wanted, args.ts_frames, rows)
+
+    order = {"PASS": 0, "KNOWN-FAIL": 1, "FAIL": 2, "INCOMPLETE": 3,
+             "ERROR": 4, "MD5-MISMATCH": 5, "NO-ROM": 6, "UNSUPPORTED": 7}
+    tally: collections.Counter = collections.Counter(r[2] for r in rows)
+    bysuite: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    for suite, _, verdict, _ in rows:
+        bysuite[suite][verdict] += 1
+    width = max((len(r[1]) for r in rows), default=10)
+    cur = None
+    for suite, name, verdict, note in sorted(
+            rows, key=lambda r: (list(bysuite).index(r[0]) if r[0] in bysuite else 0, r[1])):
+        if suite != cur:
+            c = bysuite[suite]
+            print(f"\n{suite}  ({', '.join(f'{k} {v}' for k, v in sorted(c.items()))})")
+            cur = suite
+        print(f"  {verdict:<12} {name:<{width}}  {note}")
+    print(f"\n{len(rows)} testcases: "
+          + ", ".join(f"{k} {tally[k]}" for k in sorted(tally, key=lambda k: order.get(k, 9))))
+    # The number that decides whether the tracer can be trusted: everything that
+    # can pass and does, against everything that can pass and does not.
+    judged = [r for r in rows if r[2] in ("PASS", "FAIL")]
+    if judged:
+        print(f"{sum(1 for r in judged if r[2] == 'PASS')}/{len(judged)} "
+              f"of the testcases that have a real expected picture pass")
+    return 0 if not tally["FAIL"] and not tally["ERROR"] else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--rom", type=pathlib.Path, required=True)
+    ap.add_argument("--rom", type=pathlib.Path, default=None)
     ap.add_argument("--frames", type=float, default=10.0, help="frames of CPU to run")
     ap.add_argument("--trace", type=int, default=0, help="print the first N instructions")
     ap.add_argument("--trace-from", default=None,
@@ -924,15 +1382,32 @@ def main() -> int:
     ap.add_argument("--last", type=int, default=0,
                     help="print the last N instructions executed (a ring buffer), "
                          "which is where a crash actually happened")
+    ap.add_argument("--testsuite", type=pathlib.Path, default=None,
+                    metavar="DIR",
+                    help="run a pinky nes-testsuite checkout instead of a single "
+                         "ROM: DIR is the directory holding testcases/ and roms/")
+    ap.add_argument("--suite", action="append", default=[],
+                    help="only these suites (repeatable); default is all of them")
+    ap.add_argument("--ts-frames", type=int, default=600,
+                    help="frame budget for mmc3_irq_tests and instr_test-v5, which "
+                         "have no JSON testcases and report through a result byte")
+    ap.add_argument("--ts-max-cycles", type=int, default=40_000_000,
+                    help="cycle cap per JSON testcase")
     args = ap.parse_args()
 
-    prg, chr_, mapper, vertical = load_rom(args.rom)
+    if args.testsuite:
+        return run_testsuite(args)
+    if args.rom is None:
+        ap.error("one of --rom or --testsuite is required")
+
+    prg, chr_, mapper, vertical, chr_ram = load_rom(args.rom)
     syms = load_syms(args.rom)
     print(f"mapper {mapper}  {'vertical' if vertical else 'horizontal'} mirroring  "
-          f"PRG {len(prg)} bytes ({len(prg)//8192} x 8 KiB)  CHR {len(chr_)} bytes")
+          f"PRG {len(prg)} bytes ({len(prg)//8192} x 8 KiB)  "
+          f"CHR {len(chr_)} bytes {'RAM' if chr_ram else 'ROM'}")
     if syms:
         print(f"symbols: {len(syms)} from {args.rom.parent / 'mag.sym'}")
-    bus = Bus(prg, chr_, mapper, vertical)
+    bus = Bus(prg, chr_, mapper, vertical, chr_ram)
     cpu = CPU(bus)
     bus.cpu = cpu
     cpu.pc = bus.read(0xFFFC) | (bus.read(0xFFFD) << 8)
