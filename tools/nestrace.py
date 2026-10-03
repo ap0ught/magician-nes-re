@@ -242,14 +242,22 @@ class CPU:
         self.cycles += cyc
         R = self._exec
         if name not in ("nop",):
-            R(name, addr, val, target)
+            R(name, addr, val, target, mode)
         self.log.append((self.cycles, self.pc, op, self.a, self.x, self.y, self.sp, 0))
 
     # ---- the operations. `addr` is the effective address (for stores too),
-    # `val` the operand value (for stores the low byte read).
-    def _exec(self, name, addr, val, target):
+    # `val` the operand value (for stores the low byte read). `mode` is the
+    # addressing mode of THIS instruction -- it is passed in rather than
+    # recovered from self.log, because self.log is only appended to after
+    # _exec returns, so anything read out of it during _exec is the previous
+    # instruction's state.
+    def _exec(self, name, addr, val, target, mode="imp"):
         bus = self.bus
         n = name
+        # Accumulator-mode shifts ($0A/$2A/$4A/$6A) are the only ones with no
+        # operand byte. The mode is a property of the opcode, so it is
+        # available here; the previous instruction's opcode is not.
+        acc = mode == "acc"
         if n == "lda":
             self.a = self.setzn(bus.read(addr))
         elif n == "ldx":
@@ -316,41 +324,39 @@ class CPU:
         elif n == "dey":
             self.y = self.setzn(self.y - 1)
         elif n == "asl":
-            if addr == self.pc - 1 and n == "asl" and self.log and self.log[-1][2] == 0x0A:
-                pass
-            v = self.a if self._is_acc() else bus.read(addr)
+            v = self.a if acc else bus.read(addr)
             self.c = (v >> 7) & 1
             v = self.setzn(v << 1)
-            if not self._is_acc():
-                bus.write(addr, v)
-            else:
+            if acc:
                 self.a = v
+            else:
+                bus.write(addr, v)
         elif n == "lsr":
-            v = self.a if self._is_acc() else bus.read(addr)
+            v = self.a if acc else bus.read(addr)
             self.c = v & 1
             v = self.setzn(v >> 1)
-            if not self._is_acc():
-                bus.write(addr, v)
-            else:
+            if acc:
                 self.a = v
+            else:
+                bus.write(addr, v)
         elif n == "rol":
-            v = self.a if self._is_acc() else bus.read(addr)
+            v = self.a if acc else bus.read(addr)
             c = self.c
             self.c = (v >> 7) & 1
             v = self.setzn((v << 1) | c)
-            if not self._is_acc():
-                bus.write(addr, v)
-            else:
+            if acc:
                 self.a = v
+            else:
+                bus.write(addr, v)
         elif n == "ror":
-            v = self.a if self._is_acc() else bus.read(addr)
+            v = self.a if acc else bus.read(addr)
             c = self.c
             self.c = v & 1
             v = self.setzn((v >> 1) | (c << 7))
-            if not self._is_acc():
-                bus.write(addr, v)
-            else:
+            if acc:
                 self.a = v
+            else:
+                bus.write(addr, v)
         elif n in ("bne", "beq", "bcc", "bcs", "bmi", "bpl", "bvc", "bvs"):
             cond = {
                 "bne": self.z == 0, "beq": self.z == 1,
@@ -401,9 +407,6 @@ class CPU:
             self.v = 0
         else:
             raise Halt(f"unimplemented {n}")
-
-    def _is_acc(self):
-        return self.log and self.log[-1][2] in (0x0A, 0x2A, 0x4A, 0x6A)
 
     def _setflags(self, p):
         self.n = (p >> 7) & 1
