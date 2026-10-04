@@ -74,31 +74,58 @@ CARTS: dict[str, dict[str, object]] = {
     },
 }
 
-# The classification every region must carry. These are the four cases from
+# The classification every region must carry. These are the cases from
 # `README.md`'s "A gap is not one thing", and the point of recording one is that
-# the four need opposite treatment:
+# they need opposite treatment:
 #
 #   a  placement bug      the source is right and the module is in the wrong
 #                         8 KiB slot.  FIX THE PLACEMENT. Copying the cartridge
 #                         over it destroys the only evidence of the bug.
-#   b  absent from source the released source is older/smaller than the cartridge.
-#                         This is the only class that may be filled from a cart.
+#   b  absent from source the released source is older/smaller than the cartridge,
+#                         and the release has bytes where the source has *nothing*
+#                         -- a hole.  May be filled from a cart.
 #   c  source bug         the source is present but the assembler mis-assembles
 #                         it.  FIX THE ASSEMBLER.
 #   d  data / CHR         artwork packing order.  A separate problem from code.
+#   e  absent asset       the build puts an asset here and the release puts a
+#                         *different* asset here, and the release's asset is in
+#                         no form in this source.  May be filled from a cart.
+#
+# The `b`/`e` distinction is the whole reason `e` exists, so it is worth being
+# exact about. Both mean "the cartridge has something the source does not", and
+# they are filled the same way, but they are not the same finding:
+#
+#   * `b` is a **hole**. The source emits nothing at the address. There is
+#     nothing to reason about and nothing to preserve: `sam-samples-at-fc40` is
+#     864 bytes at $FC40 where the February 1990 source has no code and no data.
+#   * `e` is **occupied by the wrong thing**. The source *does* emit bytes here,
+#     and they are wrong, and they are wrong in a way no re-placement can fix,
+#     because what belongs here is an asset this source does not contain at all.
+#     Overlaying class `a` or class `c` here would be a lie: there is no slot to
+#     move and no assembler bug to fix.
+#
+# The reason a class `e` region must be justified by a *negative* measurement --
+# "no N-byte slice of this file occurs anywhere in the release" -- is that it is
+# otherwise indistinguishable from a class `b` hole, and the two call for
+# different amounts of remaining work. `b` says the source stopped short. `e` says
+# the source was working from a different asset, which usually means the layout
+# around it also diverged and the fill alone will not make the feature work.
 CLASSES = {
     "a": "placement bug -- fix the slot, do NOT copy bytes",
     "b": "genuinely absent from the released source -- may be filled",
     "c": "assembler bug -- fix the assembler, do NOT copy bytes",
     "d": "data/CHR packing -- separate problem",
+    "e": "asset absent from this source in any form -- may be filled",
 }
 
 MANIFEST = pathlib.Path(__file__).resolve().parent / "patches.manifest"
 
-# The only class `apply` will fill. Named here rather than written as the literal
-# "b" at the two places that need it, so that adding a class to CLASSES cannot
-# quietly make it fillable.
-FILLABLE = "b"
+# The classes `apply` will fill, named here rather than written as a literal at
+# the three places that need them, so that adding a class to CLASSES cannot
+# quietly make it fillable. `a` and `c` are deliberately absent: both mean the
+# source or the assembler is right and the *image* is wrong, and the only honest
+# repair is upstream of this file.
+FILLABLE = frozenset({"b", "e"})
 
 
 class PatchError(Exception):
@@ -206,20 +233,21 @@ def parse(text: str) -> list[Region]:
         if cur.klass not in CLASSES:
             raise PatchError(f"region {cur.name}: class {cur.klass!r} is not one of "
                              f"{', '.join(sorted(CLASSES))}")
-        if cur.klass != FILLABLE:
-            # The class rule, enforced. `CLASSES` says only b may be filled, and
-            # GAPMAP.md repeats it as a fact about this file, but nothing here
+        if cur.klass not in FILLABLE:
+            # The class rule, enforced. `CLASSES` says only b and e may be filled,
+            # and GAPMAP.md repeats it as a fact about this file, but nothing here
             # checked: a class-a region parsed cleanly and `apply` filled it, so
-            # the one control the manifest has is a comment.
+            # the one control the manifest has was a comment.
             #
             # Rejecting it at parse time rather than at apply time is deliberate.
-            # A class-a region is a *placement* bug, and the fill would be wrong
-            # even if the address were right; it must never reach an image.
+            # A class-a region is a *placement* bug and a class-c region is an
+            # *assembler* bug; in both the fill would be wrong even if the
+            # address were right, so neither must ever reach an image.
             raise PatchError(
                 f"region {cur.name}: class {cur.klass!r} is "
-                f"{CLASSES[cur.klass]} -- only class {FILLABLE!r} may be filled "
-                f"from a cartridge. Fix the slot or the assembler; do not carry "
-                f"the bytes.")
+                f"{CLASSES[cur.klass]} -- only "
+                f"{'/'.join(sorted(FILLABLE))} may be filled from a cartridge. "
+                f"Fix the slot or the assembler; do not carry the bytes.")
         if cur.cart not in CARTS:
             raise PatchError(f"region {cur.name}: cart {cur.cart!r} is not a known "
                              f"dump ({', '.join(sorted(CARTS))})")
@@ -370,14 +398,14 @@ def apply(image: bytearray, cart: bytes, regions: list[Region],
     resolved = verify(regions, cart_dir)
     report = Report(cart_dir=cart_dir)
     for region in regions:
-        # Belt and braces: `parse` already refuses a non-b class, but `apply`
-        # is the thing that writes, so it checks the class it is about to act on
-        # rather than trusting its caller to have gone through `parse`.
-        if region.klass != FILLABLE:
+        # Belt and braces: `parse` already refuses a non-fillable class, but
+        # `apply` is the thing that writes, so it checks the class it is about to
+        # act on rather than trusting its caller to have gone through `parse`.
+        if region.klass not in FILLABLE:
             raise PatchError(
                 f"region {region.name}: refusing to fill class {region.klass!r} "
                 f"({CLASSES.get(region.klass, 'unknown class')}); only class "
-                f"{FILLABLE!r} may be filled from a cartridge")
+                f"{'/'.join(sorted(FILLABLE))} may be filled from a cartridge")
         if region.end > len(image):
             raise PatchError(f"region {region.name}: ${region.offset:05X}+"
                              f"{region.length} runs past the end of the "

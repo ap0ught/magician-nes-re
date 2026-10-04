@@ -9,7 +9,7 @@
 # ## Fields
 #
 #   region <name>   start a region
-#   class    a|b|c|d  why the range is filled. See below -- this is the field
+#   class    a|b|c|d|e why the range is filled. See below -- this is the field
 #                     that stops a rising match percentage from being
 #                     indistinguishable from a rising number of hidden bugs.
 #   cart     <dump>  which dump on this machine the bytes come from
@@ -20,20 +20,55 @@
 #   reason   <text>  required. Repeated lines are appended.
 #   end            finish the region
 #
-# ## The four classes
+# ## The five classes
 #
 #   a  placement bug. The source is right and the module is in the wrong 8 KiB
 #      slot. **Fix the placement.** Copying the cartridge over it destroys the
 #      only evidence of the bug.
-#   b  genuinely absent from the released source. The source is a 02/03/90
-#      development build and the cartridge is a 02/1991 one, so this is expected.
-#      This is the only class that may be filled from a cartridge.
+#   b  a hole. The source emits *nothing* at this address and the release emits
+#      bytes. Genuinely absent from the released source: the source is a
+#      02/03/90 development build and the cartridge is a 02/1991 one.
 #   c  assembler bug. The source is present but `asm/pds6502.py` mis-assembles
 #      it. **Fix the assembler.**
 #   d  data / CHR packing order. A separate problem from code.
+#   e  occupied by the wrong asset. The source *does* emit bytes here, they are
+#      wrong, and no re-placement fixes them, because what belongs here is an
+#      asset this source does not contain in any form. b and e are both filled
+#      the same way and are not the same finding: `b` says the source stopped
+#      short, `e` says the source was working from different data, which in
+#      practice means the layout around it diverged too.
 #
-# Only class `b` regions exist below. Every `a` and `c` region found so far is
+# Only `b` and `e` may be filled. Every `a` and `c` region found so far is
 # recorded in GAPMAP.md with its evidence and is deliberately *not* filled.
+#
+# ## Class `e` exists but has no regions yet
+#
+# It was added on 2026-10-04 for the title and password scene descriptors, and
+# the measurement that stopped both of them being filled is recorded here
+# rather than in a journal entry, because it is the kind of fact that gets
+# re-derived wrongly:
+#
+#   `X7.PDS:997-999` loads `tit.dat`, `pw.dat` and `pan.dat` into PRG slot 7.
+#   This build puts them at slot-7 offsets $0BA7 (314 B), $0CE1 (292 B) and
+#   $0E05 (96 B). In the release, `PAN.DAT` -- the one file of the three whose
+#   content *is* byte-identical, and which occurs exactly once in the 131072-byte
+#   PRG -- is at slot-7 offset $11E6. So the release's copy of the same asset sits
+#   $3E1 (993) bytes later than this build's, and the release's bytes at $0BA7
+#   and at $0CE1 are 6502 code, not scene descriptors:
+#
+#     $EBA7  25 2C 38 FD AD AE AF AD AD ...     (release)
+#     $ECE1  A5 39 D0 06 E8 A5 38 D0 01 60 ...  (release: LDA $39/BNE/INX/...)
+#
+#   Overlaying those two ranges would replace this build's descriptors with the
+#   release's code: the byte-match count would rise by 606 and the title screen
+#   would look exactly the same afterwards, because the game's init still reads
+#   a scene descriptor from $ABA7 and would find code. That is a number going up
+#   and nothing being fixed, so it is not done.
+#
+#   The blocker is the layout, not the assets: X7's slot-7 image diverges
+#   progressively through the init data block, and the release is $3E1 ahead by
+#   `pan.dat` and $7DD ahead by slot-7 offset $1186. Finding the 993 bytes this
+#   build does not emit is source-level work. See GAPMAP.md.
 
 version 1
 
