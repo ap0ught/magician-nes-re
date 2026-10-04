@@ -157,7 +157,17 @@ def main() -> int:
                     default=pathlib.Path("asm/out/magician-rebuilt.nes"),
                     help="the rebuilt image")
     ap.add_argument("--from", dest="start", type=lambda s: int(s, 0),
-                    required=True, help="CPU address both images are swept from")
+                    required=True, help="default CPU address for both sweeps")
+    ap.add_argument("--prg-from", type=lambda s: int(s, 0),
+                    help="CPU address to sweep the REBUILD from, when the two "
+                         "images put the same routine at different addresses. "
+                         "This is the normal case away from the fixed-window "
+                         "trampolines: the release is a later, larger build, so "
+                         "nmi0 is at $FC2A in the cartridge and $DD01 in ours, and "
+                         "aligning the same address range would be comparing a "
+                         "routine with somebody else's data table.")
+    ap.add_argument("--cart-from", type=lambda s: int(s, 0),
+                    help="CPU address to sweep the CARTRIDGE from (overrides --from)")
     ap.add_argument("--length", type=lambda s: int(s, 0), default=0x100)
     ap.add_argument("--anchor", choices=("cart", "prg"), default="cart",
                     help="which image's address the sweep starts at in both. "
@@ -171,9 +181,10 @@ def main() -> int:
 
     cart, prg = load(args.cart), load(args.prg)
 
-    start = args.start
-    A = sweep(cart, start, args.length, args.undoc)   # cartridge
-    B = sweep(prg, start, args.length, args.undoc)    # rebuild
+    cart_start = args.cart_from if args.cart_from is not None else args.start
+    prg_start = args.prg_from if args.prg_from is not None else args.start
+    A = sweep(cart, cart_start, args.length, args.undoc)   # cartridge
+    B = sweep(prg, prg_start, args.length, args.undoc)    # rebuild
 
     sym = {}
     if args.sym.exists():
@@ -189,8 +200,8 @@ def main() -> int:
         n = sym.get(addr)
         return f" <{n}>" if n else ""
 
-    print(f"# cartridge vs rebuild, swept from ${start:04X}, "
-          f"{args.length:#x} bytes each\n")
+    print(f"# cartridge vs rebuild, {args.length:#x} bytes each\n"
+          f"#   cartridge swept from ${cart_start:04X}, rebuild from ${prg_start:04X}\n")
     print(f"{'cart':<38} {'prg':<38}")
     print(f"{'-'*38} {'-'*38}")
 

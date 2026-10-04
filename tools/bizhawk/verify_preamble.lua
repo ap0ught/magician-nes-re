@@ -156,35 +156,50 @@ end
 -- ## The trap this had to be written around
 --
 -- On this build `memory.usememorydomain(name)` and `memory.getmemorydomainsize(name)`
--- **never fail**. Measured with bias_probe.lua: all 21 candidate names returned
--- size_ok=true and select_ok=true, including "VRAM", "PPU", "Nametables" and
--- "Null". An unknown name logs "Unable to find domain: <name>" and then leaves
--- the *previous* domain selected. A subsequent read therefore returns another
--- region's bytes, at the right size, with no error -- which is a nametable dump
--- full of cartridge code.
+-- **never fail**. Measured with bias_probe.lua: "VRAM", "PPU", "Nametables" and
+-- "Null" all returned success from both. An unknown name logs "Unable to find
+-- domain: <name>" and then leaves the *previous* domain selected, so the next
+-- read returns another region's bytes, at the right size, with no error -- which
+-- is a nametable dump full of cartridge code.
 --
--- So a select is only believed when `getcurrentmemorydomain()` confirms it, and
--- the domains required below are the ones that actually exist on quickerNES:
--- System Bus (which is where the nametables and the palette live -- there is no
--- VRAM domain), CHR, RAM, WRAM and OAM.
-for _, d in ipairs({ "System Bus", "CHR", "RAM" }) do
-  if not select(d) then
-    fail(string.format(
-      "the %q memory domain is not selectable on this core. On quickerNES the "
-      .. "real domains are System Bus, CHR, PRG ROM, RAM, WRAM and OAM; asking "
-      .. "for any other name does not fail, it silently keeps the previous "
-      .. "domain, so a read afterwards returns the wrong region's bytes",
-      d))
-  else
-    local okr, v = pcall(memory.read_u8, 0)
-    if okr and type(v) == "number" then
-      note(string.format("domain %-12s selected and readable, size %s, first byte %02X",
-                         d, tostring((function()
-                           local ok, s = pcall(memory.getmemorydomainsize, d)
-                           return ok and s or "?"
-                         end)()), v % 256))
+-- So a name is only believed when it is in the core's own domain list *and*
+-- getcurrentmemorydomain() confirms the select. The nine domains quickerNES
+-- really has, measured: CHR, CHR VROM, CIRAM (nametables), CPU registers, OAM,
+-- PALRAM, PRG ROM, System Bus, WRAM. There is no VRAM domain: the nametables are
+-- CIRAM (nametables), the palette is PALRAM, and System Bus covers the CPU
+-- address space including $2000-$3FFF.
+local function domains()
+  local out = {}
+  local ok, l = pcall(memory.getmemorydomainlist)
+  if not ok or type(l) ~= "table" then return nil end
+  for _, v in ipairs(l) do out[tostring(v)] = true end
+  return out
+end
+
+local have = domains()
+if have == nil then
+  fail("the core's memory domain list could not be read")
+else
+  local names = {}
+  for n in pairs(have) do names[#names + 1] = n end
+  table.sort(names)
+  note("domains     = " .. table.concat(names, " | "))
+  -- "RAM" (the battery-backed $6000-$7FFF) is absent on some builds and present
+  -- on others, so it is checked when listed and not demanded; the rest are what a
+  -- nametable or palette claim needs.
+  for _, d in ipairs({ "System Bus", "CHR", "CIRAM (nametables)", "PALRAM", "OAM",
+                       "WRAM", "RAM" }) do
+    if not have[d] then
+      if d ~= "RAM" then
+        fail(string.format("this core has no %q memory domain (it has: %s)",
+                           d, table.concat(names, ", ")))
+      end
+    elseif not select(d) then
+      fail(string.format("the %q memory domain is listed but did not select", d))
     else
-      fail(string.format("the %q memory domain could not be read", d))
+      local size = "?"
+      pcall(function() size = tostring(memory.getmemorydomainsize()) end)
+      note(string.format("domain %-20s selected, size %s", d, size))
     end
   end
 end

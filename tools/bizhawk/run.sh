@@ -232,22 +232,42 @@ echo "run.sh: verdict ok (system=$WANT_SYSTEM, rom=$(basename "$ROM"), sha1=$ROM
 # verdict alone is not enough. Anything the caller declared it wanted must exist
 # and be non-empty: a zero-byte screenshot is not a picture of nothing, it is a
 # screenshot that was never taken.
+#
+# The verdict appears *before* the measuring script runs, so this has to wait for
+# the files rather than look once. Checking immediately reports every run as a
+# failure, which is the same class of bug as never checking at all.
 if [ -n "${MAGICIAN_EXPECT:-}" ]; then
   IFS=':' read -r -a _want <<<"$MAGICIAN_EXPECT"
+  OUT_WAIT="${MAGICIAN_EXPECT_WAIT:-120}"
+  waited=0
+  while :; do
+    missing=0
+    for f in "${_want[@]}"; do
+      [ -n "$f" ] || continue
+      if [ ! -s "$f" ]; then missing=1; fi
+    done
+    [ "$missing" -eq 0 ] && break
+    [ "$waited" -ge "$OUT_WAIT" ] && break
+    # Stop early once the script is done: client.exit() means nothing more is
+    # coming, so waiting out the full timeout would only make failure slower.
+    if [ "$waited" -ge 5 ] && ! pgrep -f '[m]ono EmuHawk' >/dev/null; then break; fi
+    sleep 1
+    waited=$((waited + 1))
+  done
   missing=0
   for f in "${_want[@]}"; do
     [ -n "$f" ] || continue
     if [ ! -e "$f" ]; then
-      echo "run.sh: FAIL -- expected output $f does not exist" >&2
+      echo "run.sh: FAIL -- expected output $f does not exist (waited ${waited}s)" >&2
       missing=1
     elif [ ! -s "$f" ]; then
-      echo "run.sh: FAIL -- expected output $f is 0 bytes" >&2
+      echo "run.sh: FAIL -- expected output $f is 0 bytes (waited ${waited}s)" >&2
       missing=1
     else
       echo "run.sh: ok $f ($(stat -c %s "$f") bytes)"
     fi
   done
-  [ "$missing" -eq 0 ] || exit 5
+  [ "$missing" -eq 0 ] || { echo "run.sh: log follows" >&2; cat "$LOG" >&2; exit 5; }
 fi
 
 if pgrep -f 'EmuHawk.exe' >/dev/null; then

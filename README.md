@@ -250,10 +250,19 @@ Three claims are withdrawn:
 2. **"480 / 8192 CHR bytes" was 6% of the CHR.** The `CHR` domain is 131072 bytes.
    Over all of it, 71 558 differ. "The best constant offset explains 63 of 480,
    which is chance" describes the 8 KiB sample, not the image.
-3. **"OAM 0 differ"** — OAM is 256 of 256 different at frame 60.
+3. **"OAM 0 differ"** — re-measured 2026-10-03 with the guarded harness, OAM has
+   **0 of 256** bytes differing at every frame from 0 to 90. `WRAM` has **0 of
+   8192** differing at every frame too. The claim that "every domain changes at
+   once at frame 46 -- CIRAM 969, OAM 0->256, WRAM 0->8192" does not reproduce and
+   is withdrawn: there is no frame-46 memory event.
 
 So **"the game logic is correct and the damage is entirely on the PPU output side"
 is withdrawn.** The CPU side differs from frame 1.
+
+**The `RAM` figure was wrong too.** Re-measured 2026-10-03 with the guarded
+harness: 396 of 2048 bytes differ at frame 60, and between 282 and 409 at every
+frame from 2 to 90. The previously recorded "1767 / 2048" is not the answer at any
+frame.
 
 **The first divergent frame is 1, and it is one byte.** `p0`, zero page `$0008`:
 
@@ -455,6 +464,46 @@ title -> attract demo. Reaching the restore screen needs a button press. The
 earlier claim that no harness could inject one was an artifact of driving BizHawk
 by window-scraping; `joypad.*` is on the Lua surface and is the next thing to
 close, but it is not needed to answer "does it draw a picture".
+
+### The three unaccounted bytes, 2026-10-03
+
+They were never in `nmi0`. `nmi0` is in X5.PDS and, in the cartridge, at `$DBEF`;
+the three bytes are in the **NMI trampoline** in the fixed window, which is X7's
+`nmi`, and they are `lda $2002` -- present in the source at `X7.PDS:908`, absent
+from the release:
+
+    == F9AB: 48        pha           | F9A8: 48        pha   <nmi>   ; identical
+    == F9AC: 8A        txa           | F9A9: 8A        txa          ; identical
+    == F9AD: 48        pha           | F9AA: 48        pha          ; identical
+    == F9AE: 98        tya           | F9AB: 98        tya          ; identical
+    == F9AF: 48        pha           | F9AC: 48        pha          ; identical
+    +                            | F9AD: AD 02 20  lda $2002  ; DELETION, source only
+    == F9B0: 6C 09 00  jmp ($0009)   | F9B0: 6C 09 00  jmp ($0009)  ; identical
+
+`tools/align6502.py` produces this; the alignment is held across 42 byte-identical
+instructions that straddle the insertion and continues through `irq` and `reset`.
+
+**This is class (b), not an assembler bug.** The source states the instruction and
+`asm/pds6502.py` emitted it correctly; the release removed it after February 1990.
+**It is also not the cause of the scrambled nametable**, and aligning `nmi0`
+properly across its $112 address difference shows why: 63 instructions
+byte-identical, 63 with only an operand moved, and the release's is 10 bytes
+longer from a 43-byte insertion plus a 5-byte one against 7 bytes it dropped. The
+`$2006` dance is inside the release's insertion -- code the source does not have.
+
+**`PPUCTRL` is `$88` in both images at the end of `nmi0`**, which retires the
+"pattern table" theory: ours computes `$F8 & p0 | $88` and the release loads
+`$88` outright, and both store `$88`. That is also why patching `reset`'s `sta p0`
+to `stx p0` changed nothing.
+
+The rebuild's nametable 0 at frame 60 holds **one unbroken tile counter from `$00`
+to `$E5`**, with `$08` where the cartridge has `$00`, and no constant shift of the
+cartridge's bytes matches it (best is +64 at 14.9%). All 969 differing bytes are
+in nametable 0; `$2400`/`$2800`/`$2C00` are identical. A monotonic byte stream in
+VRAM is what a `$2006` aimed at the wrong place, or a DMA loop pointed at VRAM
+instead of CHR, looks like -- and it is not what a pattern-table mistake looks
+like. `journal/08-the-three-bytes-were-never-in-nmi0.md` has the full alignment
+and the measurements.
 
 `crates/` has not been started, and nothing in this repository depends on it.
 
