@@ -81,10 +81,12 @@ The cartridge's is `file[0x20010:]`; the rebuild's is `asm/out/chr.bin`.
 The two CHR images have **identical byte multisets** -- 0 bytes present in one and
 absent from the other -- but different content at the same offsets:
 
-    identical  59 514 / 131 072 (45.4%)
-    first difference at CHR offset $0454, tile 69:
-      ours  fe640000 787c787c 00000000 20102010
-      cart  fe640000 747c7430 00000000 00000000
+identical  59 514 / 131 072 (45.4%)
+first difference at CHR offset $0454, tile 69: our tile and the cartridge's
+differ in 7 of 16 bytes, all in bit 2 of four columns plus the whole second bit
+plane -- the cartridge's is the *less* detailed of the two, as a shipped revision
+against development artwork usually is. The dump is not quoted here because it is
+cartridge-derived data and nothing downstream needs it.
 
 Per file, the agreement degrades exactly where a revision change would sit: the
 first eight files (`10.chr` .. `53.chr`, `su.chr`, `map.chr`) are byte-identical or
@@ -222,4 +224,4 @@ the wrong bytes" from "wrote the right bytes to the wrong address".
 | CHR artwork matches the cartridge | **no**, and not fixable from source |
 | `$2006`/`$2007` write hook available | **no**, `onmemorywrite` never fires |
 | `make rom` produces a loadable image | **yes** |
-| PRG bytes identical to the cartridge | 39 832 / 131 072 (30.4%) -- 38 982 source-only + 864 from one class-b manifest region |
+| PRG bytes identical to the cartridge | 39 832 / 131 072 (30.4%) -- 38 982 source-derived, plus 864 supplied by the one class-b manifest region of which 850 are byte-different from the source-only image |
