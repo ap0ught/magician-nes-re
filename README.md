@@ -226,23 +226,77 @@ from `memory.getmemorydomainlist()`, which returns plain strings: `WRAM`, `CHR`,
 `CIRAM (nametables)`, `PRG ROM`, `CHR VROM`, `PALRAM`, `OAM`, `System Bus`,
 `CPU registers`.
 
-**Where the rebuild is still wrong.** The corruption is in the picture, so the
-remaining bug is a statement about VRAM rather than about control flow. Dumped
-from both images at the same frame through BizHawk's own memory domains
-(`tools/bizhawk/state.lua`, which verifies the domain name after selecting it):
+**Where the rebuild is still wrong — CORRECTED 2026-10-03.** The table below was
+measured with two harness faults and its conclusion does not survive. It is kept
+only so the correction is legible against it. `tools/bizhawk/frames.lua` plus
+`tools/bizhawk/bisect.py` now snapshot six domains at *every* frame and report the
+first frame each one differs:
 
-| region | domain | frame 60 | frame 400 |
-|---|---|---|---|
-| CHR-RAM $0000-$1FFF | `CHR` | 480 / 8192 differ | 480 / 8192 |
-| nametables, 4 KiB | `CIRAM (nametables)` | 969 / 4096 differ | 1006 / 4096 |
-| palette, 32 bytes | `PALRAM` | **0 differ** | 2 differ |
-| OAM, 256 bytes | `OAM` | **0 differ** | **0 differ** |
-| work RAM, 8 KiB | `WRAM` | **0 differ** | **0 differ** |
+| region | domain | size | 06's claim | first differing frame | correct figure there |
+|---|---|---|---|---|---|
+| CHR image | `CHR` | **131072** | 480 / 8192 differ | 0 | **71 558 / 131 072 (54.6%)** |
+| nametables | `CIRAM (nametables)` | 4096 | 969 / 4096 | 2 | 661 |
+| work RAM | **`RAM`** | 2048 | — | **1** | 1 |
+| `WRAM` | `WRAM` | 8192 | **0 differ** | 46 | 8192 |
+| OAM | `OAM` | 256 | **0 differ** | 46 | 256 |
+| palette | `PALRAM` | 32 | 0 differ | 15 | 24 |
 
-**Work RAM and OAM are byte-identical.** The screen data is decompressed
-correctly; the damage is entirely on the output side. And it is progressive, not a
-slow draw: the cartridge is static from frame 60 to 400, the rebuild is static
-from frame 200 to 400, and what it settles on is a different picture.
+Three claims are withdrawn:
+
+1. **"work RAM, 8 KiB, 0 differ" read an unpopulated domain.** `WRAM` is `$FF` in
+   every byte until frame 45 — the "agreement" was `$FF == $FF`. The real work
+   RAM is the 2048-byte `RAM` domain, and it differs by **1767 of 2048 bytes** at
+   frame 60.
+2. **"480 / 8192 CHR bytes" was 6% of the CHR.** The `CHR` domain is 131072 bytes.
+   Over all of it, 71 558 differ. "The best constant offset explains 63 of 480,
+   which is chance" describes the 8 KiB sample, not the image.
+3. **"OAM 0 differ"** — OAM is 256 of 256 different at frame 60.
+
+So **"the game logic is correct and the damage is entirely on the PPU output side"
+is withdrawn.** The CPU side differs from frame 1.
+
+**The first divergent frame is 1, and it is one byte.** `p0`, zero page `$0008`:
+
+| frame | cartridge | rebuild |
+|---|---|---|
+| 0 | `$F7` | `$F7` |
+| 1 | `$00` | `$08` |
+
+`p0` is `x0.pds:371`, "copy of PPU register 0". `reset` (`x7.pds:922`, CPU `$F9C1`
+in both images) does `lda #$08 / sta $2000 / sei / ldx #$00 / stx $2001 / cld /
+sta p0` — and the cartridge's `reset` at the *same* `$F9C1` does `stx $08` instead,
+plus a 5-byte insertion `lda #$40 / sta $A001` at `$F9C7` that the source does not
+have. That is a real source-versus-release difference and it is class (b).
+
+**It is not the cause.** A scratch ROM with that one byte changed from `$85` to
+`$86` was run in BizHawk and its frame-60 screenshot is identical to the
+unpatched rebuild, pixel for pixel. `x0.pds:608` overwrites `p0` with `#$88` on the
+way into the game, so whatever `reset` left there does not survive. Frame 1 is a
+symptom, not the bug.
+
+**The two builds do NOT allocate zero page differently.** 06 says the cartridge
+has `t0` at `$21` and `curchrpal` at `$0180`. It does not: the cartridge contains
+our `setmmc3` byte for byte, and that routine names `ldx $0067` (`mapbnk0`) and
+`ldx $0002..$0005` (`r2..r5`) at absolute addresses that are the same in both. The
+`RAM` domain agrees at runtime. This is the third instance of the same fault --
+an address resolved from the wrong image, like `$9D6C`.
+
+**There is no `$2007` write hook.** `event.onmemorywrite` installs and **never
+fires** on quickerNES 2.11.1; the callback-object form is rejected by NLua
+(`tools/bizhawk/writes.lua`). So the `$2006` diff 06 asks for needs BizHawk's own
+trace logger driven over X11 XTEST. Per-frame snapshots are the instrument.
+
+**The CHR artwork differs from the cartridge and is not fixable from source.** Both
+ROMs are 128 KiB PRG + 128 KiB CHR-ROM (header `08 10 42 00`) and at frame 0 the
+`CHR` domain equals each ROM's own CHR image exactly. The two images have
+identical byte multisets — 0 bytes present in one and absent from the other — but
+different content at the same offsets. The first eight files are byte-identical
+or nearly so; from `60.chr` at `$7000` onward agreement decays to 8% on the
+sprite banks. That is a different revision of the artwork in the shipped
+cartridge, not a packing order this build got wrong, and the earlier "8/32 pages,
+order is wrong" reading was the 8 KiB sample again. It is class (d), it is not
+fixable from Eurocom's source, and it must not be "fixed" by pasting cartridge
+bytes into `chr.bin`.
 
 **The routine that writes the nametable is not the release's routine.**
 `unrun`/`unrunscn` (`pds-text/x5.pds:106-121`) assembles correctly -- every
@@ -274,14 +328,24 @@ frame 60: cartridge `$06D8` = `$00`. So `bmi` is never taken and the cartridge
 writes `$2006` and streams `$2007` exactly as the source does. The deferred path
 is for a state this ROM never enters.
 
-So the difference is real and it is not the bug. What is left: the corruption is on
-the PPU output side, both the nametable writes and 480 bytes of CHR-RAM writes go
-through `$2007`, and both are wrong. The 480 CHR bytes are not a misaligned copy
--- the best constant source offset explains 63 of 480, which is chance -- so it is
-neither a shifted stream nor a wrong source pointer. That leaves the `$2006`
-address setup or the MMC3 CHR bank select, and the measurement to make is a diff of
-the two images' `$2006` writes. `journal/06-the-picture-is-wrong-in-vram.md` has
-the full state, what is proven, what is retracted, and what is blocked on.
+So the difference is real and it is not the bug. What is left is **not** "the
+corruption is on the PPU output side" — that rested on the `$FF` domain and is
+withdrawn above. What is left, measured: the nametable first differs at frame 2
+and the rebuild's rows are displaced and full of `$08` where the cartridge has
+`$00` holes; `$08` is a real tile index in the cartridge, which is what a
+*mis-addressed* stream looks like rather than a *wrong-data* one. Everything
+changes at once at frame 46 (CIRAM 969 → 4001, OAM 0 → 256, CHR 71 558 → 86 704)
+and both images are static thereafter. In the cartridge at frame 46 the MMC3
+bank shadows `r0..r7` hold `$0F $28 $38 $30 $0F $2A $3A $30`; in the rebuild `r0`
+and `r1` have **never been written** (`$FF`). Those are written by the `fbnk`
+fast-bank-select macro, so from frame 46 the two images are in different code, and
+the cartridge rewrites 89 772 bytes of CHR where the rebuild rewrites none.
+
+`journal/07-the-headline-evidence-was-ff.md` has the retractions, the bisect, the
+`reset` diff, and the next three measurements in order. The first of them: the
+release's `nmi0` is **3 bytes longer** than the source's, it writes `$2006` four
+times and `$2007` 33 times per frame (`x5.pds:174-190`), and those three bytes
+are unaccounted for.
 
 **What the tracer says, and how much of it survives.** `tools/nestrace.py` reports
 that at frame 14, cycle 439 272, the `rts` at `$9D6C` pops a destroyed return
