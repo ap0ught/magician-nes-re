@@ -47,7 +47,7 @@ The `CHR` domain is **131072 bytes**, not 8192. 06 compared the first 8 KiB of i
 and reported 480/8192 (5.9%) plus "the best constant offset explains 63 of 480,
 which is chance". Both numbers describe a 6% sample.
 
-Over the whole domain: **71 558 of 131 072 bytes differ (54.6%)**. `bisect.py` now
+Over the whole domain: **71 558 of 131 072 bytes differ (54.6%)**. `regionbisect.py` now
 compares every region over its full dumped length, and prints the distinct-value
 count beside every diff for exactly this reason -- a region that is 8192 bytes of
 `$FF` compares equal to another 8192 bytes of `$FF`, so "0 differ" on it means
@@ -105,7 +105,7 @@ change at all.
 
 ## Bisect: the first frame the two images disagree
 
-`tools/bizhawk/bisect.py`, frames 0..90, both images, six domains:
+`tools/bizhawk/regionbisect.py`, frames 0..90, both images, six domains:
 
 | region | size | first differing frame | bytes there |
 |---|---|---|---|

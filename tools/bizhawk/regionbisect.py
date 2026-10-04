@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Find the first frame at which the rebuild and the cartridge disagree.
 
-    python3 tools/bizhawk/bisect.py <cartdir> <rebuildir>
+    python3 tools/bizhawk/regionbisect.py <cartdir> <rebuildir>
 
 Both directories are what tools/bizhawk/frames.lua wrote: one <region>_<frame>.bin per
 frame per memory domain. The answer is the first frame whose bytes differ, per region,
@@ -9,6 +9,11 @@ not a count at some frame late enough to be already broken.
 
 Regions are compared over their full dumped length, so the 131072-byte CHR domain is
 compared whole and not truncated to the 8 KiB the mapper happens to use.
+
+Named regionbisect rather than bisect because a file called `bisect.py` in this
+directory shadows the standard library's `bisect` for anything run from here, and
+`from PIL import Image` fails with an ImportError that has nothing to do with
+images.
 
 Two things this deliberately reports that a naive diff hides:
 

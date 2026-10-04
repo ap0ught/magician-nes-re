@@ -90,7 +90,7 @@ frame 90**. Recorded here so nobody repeats it.
 Three claims from the previous sessions did not survive the guarded harness.
 
 **RAM differs by 396 of 2048 bytes at frame 60, not 1767.** Re-taken with
-`tools/bizhawk/run.sh` asserting the core and the ROM, `bisect.py` gives 396, and
+`tools/bizhawk/run.sh` asserting the core and the ROM, `regionbisect.py` gives 396, and
 it has been between 282 and 409 at every frame from 2 to 90. There is no frame at
 which 1767 is the answer.
 

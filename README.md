@@ -109,9 +109,9 @@ also distinguishes the two ways it can fail: an assembler that exits non-zero no
 says so and prints the log tail, instead of reporting "the PRG moved".
 
 The build assembles all eight `X?.PDS` modules plus `SEQ.SRC` and exits 0.
-**39 209 of 131 072 PRG bytes (29.91%) come from the source and are identical to
+**38 982 of 131 072 PRG bytes (29.75%) come from the source and are identical to
 the cartridge.** A further 864 bytes (0.66%) are filled from the cartridge by
-`asm/patches.manifest` — see *Patch manifest* below — giving 40 059 (30.6%) in the
+`asm/patches.manifest` — see *Patch manifest* below — giving 39 832 (30.4%) in the
 `.nes`. 8 of 32 CHR 4 KiB pages match and 3 622 symbols are recovered. `reset` and
 `irq` land on the cartridge's vectors exactly and `nmi` is 3 bytes early.
 
@@ -119,8 +119,8 @@ The build prints the byte accounting on every run, and the two lines are not
 interchangeable:
 
 ```
-PRG: 40059/131072 bytes identical to the cartridge (30.6%)
-  of which from the source alone : 39209 (29.9%)
+PRG: 39832/131072 bytes identical to the cartridge (30.4%)
+  of which from the source alone : 38982 (29.7%)
   of which from the patch manifest: 864 (0.7%) across 1 region(s), 864 bytes
 ```
 
@@ -229,7 +229,7 @@ from `memory.getmemorydomainlist()`, which returns plain strings: `WRAM`, `CHR`,
 **Where the rebuild is still wrong — CORRECTED 2026-10-03.** The table below was
 measured with two harness faults and its conclusion does not survive. It is kept
 only so the correction is legible against it. `tools/bizhawk/frames.lua` plus
-`tools/bizhawk/bisect.py` now snapshot six domains at *every* frame and report the
+`tools/bizhawk/regionbisect.py` now snapshot six domains at *every* frame and report the
 first frame each one differs:
 
 | region | domain | size | 06's claim | first differing frame | correct figure there |
@@ -497,13 +497,45 @@ longer from a 43-byte insertion plus a 5-byte one against 7 bytes it dropped. Th
 to `stx p0` changed nothing.
 
 The rebuild's nametable 0 at frame 60 holds **one unbroken tile counter from `$00`
-to `$E5`**, with `$08` where the cartridge has `$00`, and no constant shift of the
-cartridge's bytes matches it (best is +64 at 14.9%). All 969 differing bytes are
-in nametable 0; `$2400`/`$2800`/`$2C00` are identical. A monotonic byte stream in
-VRAM is what a `$2006` aimed at the wrong place, or a DMA loop pointed at VRAM
-instead of CHR, looks like -- and it is not what a pattern-table mistake looks
-like. `journal/08-the-three-bytes-were-never-in-nmi0.md` has the full alignment
-and the measurements.
+to `$E5`**, with `$08` where the cartridge has `$00`. All 969 differing bytes are
+in nametable 0; `$2400`/`$2800`/`$2C00` are byte-identical.
+`journal/08-the-three-bytes-were-never-in-nmi0.md` has the full alignment.
+
+**Both of those are the source working, not a fault.** `tools/unrun.py`
+transcribes `unrun` (`X5.PDS:111-127`) literally and runs it offline over the
+source's own data:
+
+    TIT.DAT   314 compressed bytes -> 1024 screen bytes   distinct 1   08 x 1024
+    PW.DAT    292 compressed bytes -> 1024 screen bytes   distinct 1   20 x 1024
+    PAN.DAT    96 compressed bytes ->  256 screen bytes   distinct 1   20 x 256
+
+1024 = 960 tiles + 64 attributes, and 256 for the panel -- the length fields
+decode exactly. **The source's title data is a solid fill of tile `$08`**, which
+is the 158 bytes of `$08` in the rebuild's nt0 (the cartridge has 3). The
+ascending run that follows is the *level* build drawing over the fill, and it is
+present on **both** sides: the cartridge's nt0 rows 1-8 are the same unbroken
+ascending sequence. `journal/09-pointer-or-increment-is-neither.md` has the rest.
+
+**"Is the pointer wrong or the increment wrong?" -- neither.** `t2`, the
+increment the question named, differs at exactly one frame out of 96 and never
+again. `p0` (`$08`) is the first byte to differ, from frame 1, and patching the
+build to the cartridge's value (`sta p0` -> `stx p0`, one byte at `$F9D1`) moves
+the nametable divergence by **zero bytes**: 661 differing at frame 2 and 969 from
+frame 3 either way, measured both sides in BizHawk.
+
+**The data needed for this screen is not in the cartridge and not in the source.**
+`DAT/TIT.DAT`, `DAT/PW.DAT` and `DAT/MUS/MUS.MUS` do not occur anywhere in the
+131 072-byte cartridge PRG; `DAT/PAN.DAT` is present but identical for only its
+first 16 bytes. The release's `unrun` is also a different routine, at `$DB08`
+with the pointer in `$21/$22` and the `$2007` write gated on `bit $06D8`, where
+the source's is at `$DC77` with the pointer in `$13/$14`. So the picture cannot be
+made to match the cartridge from this source's data, and this is **not** a
+class-(b) manifest fill: class (b) is "the release has bytes at an address the
+source lacks", and here the bytes are not there in any form.
+
+Frame 60, unattended, `NES/SaveRAM/` cleared both sides: **44.3 %** of pixels
+identical (25 408 / 57 344). Per region: rows 0-3 88.2 %, rows 4-11 44.8 %, rows
+12-19 58.1 %, rows 20-23 44.8 %, rows 24-29 29.5 %.
 
 `crates/` has not been started, and nothing in this repository depends on it.
 
