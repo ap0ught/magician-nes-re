@@ -39,6 +39,10 @@
 # Environment:
 #   MAGICIAN_SETTLE   seconds to wait for the verdict (default 45)
 #   MAGICIAN_EXPECT   colon-separated files that must exist and be non-empty
+#   MAGICIAN_DONE     sentinel string each expected file must contain before the
+#                     wait gives up. Set it for any dumping script: without it
+#                     the wait returns on the first non-empty byte and the caller
+#                     diffs a truncated file
 #   MAGICIAN_SRAM     the SaveRAM directory (default $BIZ/NES/SaveRAM)
 #   MAGICIAN_CORE     the SystemID that must be loaded (default NES)
 
@@ -239,14 +243,28 @@ echo "run.sh: verdict ok (system=$WANT_SYSTEM, rom=$(basename "$ROM"), sha1=$ROM
 if [ -n "${MAGICIAN_EXPECT:-}" ]; then
   IFS=':' read -r -a _want <<<"$MAGICIAN_EXPECT"
   OUT_WAIT="${MAGICIAN_EXPECT_WAIT:-120}"
+  # MAGICIAN_DONE names a sentinel string that only appears once the script has
+  # finished writing. Without it the wait below returns the moment the file is
+  # non-empty, which for a dumping script is one frame in -- and the caller then
+  # diffs a truncated dump and concludes the ROM is broken.
+  DONE="${MAGICIAN_DONE:-}"
   waited=0
   while :; do
     missing=0
+    alldone=1
     for f in "${_want[@]}"; do
       [ -n "$f" ] || continue
       if [ ! -s "$f" ]; then missing=1; fi
     done
-    [ "$missing" -eq 0 ] && break
+    if [ "$missing" -eq 0 ] && [ -n "$DONE" ]; then
+      for f in "${_want[@]}"; do
+        [ -n "$f" ] || continue
+        grep -q -- "$DONE" "$f" 2>/dev/null || alldone=0
+      done
+    else
+      alldone=1
+    fi
+    [ "$missing" -eq 0 ] && [ "$alldone" -eq 1 ] && break
     [ "$waited" -ge "$OUT_WAIT" ] && break
     # Stop early once the script is done: client.exit() means nothing more is
     # coming, so waiting out the full timeout would only make failure slower.
@@ -262,6 +280,10 @@ if [ -n "${MAGICIAN_EXPECT:-}" ]; then
       missing=1
     elif [ ! -s "$f" ]; then
       echo "run.sh: FAIL -- expected output $f is 0 bytes (waited ${waited}s)" >&2
+      missing=1
+    elif [ -n "$DONE" ] && ! grep -q -- "$DONE" "$f"; then
+      echo "run.sh: FAIL -- $f never reached its sentinel '$DONE' (waited ${waited}s)." >&2
+      echo "run.sh: the script exited before finishing; this file is truncated." >&2
       missing=1
     else
       echo "run.sh: ok $f ($(stat -c %s "$f") bytes)"
