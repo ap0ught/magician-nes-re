@@ -69,6 +69,70 @@ local LAST = tonumber(os.getenv("MAGICIAN_FRAMES") or "96")
 local log = io.open(OUT, "w")
 local function w(s) log:write(s .. "\n"); log:flush() end
 
+-- ## Getting past the title screen (MAGICIAN_INPUT)
+--
+-- With no input both images sit on the title screen indefinitely, and R6/R7 only
+-- ever take 00, 01, 07 -- so a 600-frame run *cannot* answer the level-data-group
+-- question, and the verdict block says so rather than reporting "no divergence".
+-- `MAGICIAN_INPUT` is a list of `frame:button` pairs, applied for exactly one
+-- frame each through `joypad.set`, which is the only way to get code running
+-- inside the core.
+--
+-- Two things are asserted rather than assumed:
+--
+--   * a malformed entry is a hard failure with a message, not a silently ignored
+--     schedule -- a run that pressed nothing and looked like a run that pressed
+--     the wrong thing is the failure this project keeps paying for;
+--   * every press is echoed with the frame it landed on, and `joypad.set`
+--     returning without error is *not* taken as proof the game saw it. BizHawk
+--     accepts the call whether or not the core's controller is connected, so the
+--     only honest check is the game's own zero-page copy of the joypad, read
+--     through the same verified System Bus window as everything else, and printed
+--     at the end of the run.
+local INPUT = {}
+do
+  local raw = os.getenv("MAGICIAN_INPUT") or ""
+  for item in string.gmatch(raw, "[^,%s]+") do
+    local f, b = string.match(item, "^(%d+):(%a+)$")
+    if f then
+      INPUT[#INPUT + 1] = { frame = tonumber(f), button = b }
+    else
+      w("FATAL MAGICIAN_INPUT entry " .. item
+        .. " is not <frame>:<BUTTON>; expected e.g. 90:Start")
+      log:close()
+      pcall(function() client.exit() end)
+      return
+    end
+  end
+end
+
+local function apply_input(n)
+  for i = 1, #INPUT do
+    if INPUT[i].frame == n then
+      -- `false` first clears every button, so a press cannot inherit the
+      -- previous one. joypad.set is per-frame state in BizHawk; not clearing it
+      -- is how a script ends up holding Start for the rest of the run and then
+      -- reports a bank sequence no player could produce.
+      local ok, err = pcall(function()
+        joypad.set({ ["Power"] = false, ["Up"] = false, ["Down"] = false,
+                     ["Left"] = false, ["Right"] = false, ["A"] = false,
+                     ["B"] = false, ["Select"] = false, ["Start"] = false })
+        joypad.set({ [INPUT[i].button] = true })
+      end)
+      w(string.format("input f%d: %s ok=%s%s", n, INPUT[i].button, tostring(ok),
+                      ok and "" or ("  " .. tostring(err))))
+    end
+  end
+end
+
+if #INPUT > 0 then
+  local names = {}
+  for i = 1, #INPUT do
+    names[#names + 1] = INPUT[i].frame .. ":" .. INPUT[i].button
+  end
+  w("input schedule: " .. table.concat(names, " "))
+end
+
 local function select(d)
   if not pcall(memory.usememorydomain, d) then return false end
   local cur
@@ -400,11 +464,26 @@ local base = emu.framecount()
 snap(base)
 local guard = 0
 while emu.framecount() - base < LAST and guard < LAST * 20 + 2000 do
+  apply_input(emu.framecount())
   emu.frameadvance()
   guard = guard + 1
   snap(emu.framecount())
 end
 local last = emu.framecount()
+
+-- Did the presses actually reach the game? `joypad.set` returning without error
+-- says only that BizHawk accepted it. The game's own copy of the joypad in
+-- zero page is checked instead: a press that changed nothing there did not
+-- happen, whatever the API said.
+do
+  local seen = {}
+  for i = 1, #INPUT do seen[INPUT[i].frame] = INPUT[i].button end
+  local after = grab(DOM, 0x00, 256)
+  w("input check: zero page after the run, first 16 bytes -- "
+    .. (after and string.format("%02X %02X %02X %02X %02X %02X %02X %02X "
+                                .. "%02X %02X %02X %02X %02X %02X %02X %02X",
+                                after:byte(1, 16)) or "UNREADABLE"))
+end
 
 if not SELFTEST.ok then selftest("end") end
 

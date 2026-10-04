@@ -127,13 +127,36 @@ PRG: 39832/131072 bytes identical to the cartridge (30.4%)
 Only the first is evidence about the source. A rising total is otherwise
 indistinguishable from a rising number of hidden bugs.
 
-**Two of the eight module placements are pinned, and six are ASSUMED.** The build
+**Three of the eight module placements are pinned, and five are ASSUMED.** The build
 prints the whole table with the evidence for each. `X6` is pinned "by
-elimination" and `X7` from the cartridge's reset vector; `X0`, `X1`, `X2`, `X3`,
-`X4` and `X5` are assumed, and the build labels them `ASSUMED, NOT MEASURED` on
-every run. `SEQ.SRC` is at slot 5 on a measured single hit — its first 24 bytes
-occur once in 131 072, at file `$0A000` — and 29 of its position-independent code
-windows land in slot 5 at offset zero.
+elimination" and `X7` from the cartridge's reset vector; `X0`, `X1`, `X2`, `X3`
+and `X4`'s `$8000` part are assumed, and the build labels them
+`ASSUMED, NOT MEASURED` on every run. `SEQ.SRC` is at slot 5 on a measured single
+hit — its first 24 bytes occur once in 131 072, at file `$0A000` — and 29 of its
+position-independent code windows land in slot 5 at offset zero.
+
+**`X5` is now measured too, and was not before 2026-10-04.** It sits in fixed slot
+14 at its own `org $c000`, and `tools/slotalign.py --module sql` shows the first
+**768 bytes** of PRG slot 14 agreeing with the cartridge exactly — which contains
+X5's 256-byte `sql` table at slot-14 offset 0 and nowhere else. So X5's origin
+*within* its slot is 0 and is now a measurement. `asm/out/build.log` still prints
+`X5.PDS ... ASSUMED, NOT MEASURED`; that line is stale and the placement table in
+the same log already counts X4, X6 and X7 as pinned.
+
+**The same run retracted a placement claim in the opposite direction.**
+`journal/09` reported one table — the 32-byte ascending tile counter `D43`, at
+slot-5 offset `$1471` here and `$14CE` in the cartridge — and concluded "the
+placement of X5 within slot 5 is wrong". Both halves were wrong. `D43` is
+**SEQ.SRC's** (`mag.sym`: `d43 = $B471`, in MMC3 register 7's window; X5 is slot
+14 at `$C000`). And one table gives a *displacement*, not an *origin*: measured
+across slot 5 the displacement is piecewise and non-monotone — `+0x00`, `+0x09`,
+`+0x0a`, `+0x39`, `+0x5a`, `+0x5d`, `+0x6b`, `+0x75`, `+0x7f`, `+0x81` — carried
+by equal runs of 24 to 574 bytes and changed by 45 inserts and 56 deletes inside
+the slot. `+0x5d` is the *mode* of 293 single-hit tables because those tables
+cluster late in the slot, not because the module starts `$5D` late. Slot 5's
+best-agreement shift is **0** (1312 bytes, against 1025 at `+0x5d`) and its first
+90 bytes are identical, so SEQ.SRC's origin is 0 and is already what the build
+does. See `journal/10`.
 
 Per-module byte scoring of code is **not** at chance everywhere, which entry 01 of
 the journal got wrong: `X5` scores 11.8% and `X7` 45.3% at their known-good
