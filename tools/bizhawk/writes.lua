@@ -19,6 +19,20 @@
 -- A count of zero is reported as zero, not as success: an earlier probe used pcall,
 -- which returns true when the function merely ran, and reported a clean bill of
 -- health for names that do not exist.
+--
+-- SETTLED 2026-10-04 -- do not add shapes here. `buswrite.lua` read the shipped
+-- API definition (`Lua/_docs_luacats/event.d.lua`), which documents
+-- `onmemorywrite(luaf, address, name?, scope?)`, and registered eight forms
+-- including that one and `on_bus_write` with an explicit address and scope. All
+-- eight returned BizHawk's `EMPTY_UUID_STR` (`00000000-0000-0000-0000-000000000000`,
+-- its sentinel for "not registered") and none fired, including for a write the
+-- script made itself. `event.availableScopes()` returns `{}`. The cause is in
+-- BizHawk's own IL: `QuickNES.get_MemoryCallbacks()` throws
+-- `NotImplementedException` unconditionally, so there is no bounded path either,
+-- and the word "wildcard " in the log message is interpolated only when no
+-- address was supplied. There is no memory callback of any shape on this core.
+-- The bank timeline comes from per-frame System Bus polling -- see
+-- `bankprobe.lua` -- or from `tools/nestrace.py`.
 
 local OUT = os.getenv("MAGICIAN_LUA_OUT") or "/tmp/opencode/writes.txt"
 local LAST = tonumber(os.getenv("MAGICIAN_FRAMES") or "3")

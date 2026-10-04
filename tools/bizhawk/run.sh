@@ -167,6 +167,12 @@ export MAGICIAN_WANT_SYSTEM="$WANT_SYSTEM"
 export MAGICIAN_WANT_BOARD="$WANT_BOARD"
 export MAGICIAN_WANT_ROM="$(basename "$ROM")"
 export MAGICIAN_WANT_SHA1="$ROM_SHA1"
+# The absolute path as well as the basename, so a measuring script can read the
+# same file the identity check above was taken from. `bankprobe.lua` needs it to
+# prove that what the core returns for $8000 is PRG through the bank window
+# rather than an MMC3 register, which is the difference between an instrument
+# that can answer the bank-sequence question and one that cannot.
+export MAGICIAN_WANT_ROM_PATH="$ROM"
 export MAGICIAN_WANT_WINDOW_AT="$WIN_AT"
 export MAGICIAN_WANT_WINDOW_HEX="$WIN_HEX"
 PRE="$VERIFY_DIR/preamble.lua"
