@@ -749,18 +749,46 @@ table above says which of the two dumps to close it against.
 
 Two emulator findings, both measured, that a future session should not re-derive:
 
-- **`--gdi` works; `--dump-type png` and `--chromeless` do not.** BizHawk's Mono
-  build needs a GL context to run a core, and there is **no Xvfb on this machine**,
-  so PNG frame dumping produces nothing and a Lua RAM probe dies at `client.cpu`
-  because the client loop never starts. `--chromeless` still constructs the OpenGL
-  control. `--gdi` (Mono/libgdiplus) is the way to see a window. There is no
-  `xdotool` and no `wmctrl`; `python-xlib` and `PIL` are available and windows can
-  be moved over X11 directly. ImageMagick 7's `import` rejects its own filename
-  argument on this box — use `python-xlib` plus PIL for screen grabs.
+- **`--gdi` works, and BizHawk is drivable — the old "no Xvfb, so a Lua RAM probe
+  dies at `client.cpu`" claim was false.** It is repeated in
+  `tools/bizhawk_probe.sh` and it cost two sessions: it is what pushed them into
+  writing a from-scratch NES emulator, which then produced two sessions of
+  confidently wrong measurements about the rebuild's framebuffer. The truth is one
+  flag. `EmuHawkMono.sh --help` documents `--lua <path>`, which implies
+  `--luaconsole` and runs a script *inside* the emulator: `emu.frameadvance()` is
+  frame-exact, `client.screenshot(path)` writes the core's own video buffer,
+  `memory.*` reads the core's memory domains, and `client.exit()` closes the
+  session so the next launch is not swallowed by the single-instance pipe.
+  `tools/bizhawk/run.sh` wraps one such session and `journal/05` has the numbers.
+  Headful on `:0`, `--gdi`, no Xvfb installed, the X/Wayland session untouched.
+
+  `--chromeless` still constructs the OpenGL control, which is why `--gdi`
+  (Mono/libgdiplus) is what works. There is no `xdotool` and no `wmctrl`;
+  `python-xlib` and `PIL` are available and windows can be moved over X11
+  directly. ImageMagick 7's `import` rejects its own filename argument on this box
+  — use `python-xlib` plus PIL for screen grabs.
+
+  What genuinely *is* missing is **input injection**, not rendering: SDL2 takes
+  the input and the harness cannot press Start. So the reachable gate is "reaches
+  the title screen unattended", not "reaches GAME RESTORE SCREEN".
+
+- **Two traps in this harness that both produce confident nonsense**, both now
+  fixed in `tools/bizhawk/run.sh` and `tools/bizhawk/frames.lua`. A *relative* ROM
+  path is not an error — BizHawk fails to load the file and falls back to
+  NullHawk, whose Lua dies on the first domain call with "NullHawk does not
+  implement memory domains", which reads as "the ROM has no memory". And
+  `memory.usememorydomain` with an unknown name does not fall back to the default
+  domain: it leaves the *previous* selection in place, so a typo silently hands
+  you the wrong region. Selecting a domain is not enough either — the selection
+  persists, so a script that selects six regions in a setup loop and then reads
+  them in a second loop reads whichever was selected *last* under all six names.
+  That one wrote six per-frame files that all held the 32-byte palette.
+
 - **The stock cartridge's session was not a cold boot.** It showed `LEVEL CAVERNS`
   and `GOLD 1500` because the cartridge has battery-backed PRG RAM (`f6 & 2`) and
   BizHawk resumed a stale SRAM save. Any future "does it boot" comparison must
   clear SRAM on **both** sides or it compares a resumed save against a cold boot.
+  `run.sh` clears `NES/SaveRAM/*.SaveRAM*` on every launch for this reason.
 
 X7's slot is pinned to 15 from this vector evidence rather than searched (see
 `asm/build.py: PINNED_SLOTS`) — it is the only slot whose `org $fffa` reaches file `0x1FFFA`. Before

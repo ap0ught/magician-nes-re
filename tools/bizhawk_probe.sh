@@ -8,9 +8,26 @@
 #   * BizHawk's Mono build creates an OpenGLControl even under --chromeless, and
 #     it dies on X11 BadMatch on this machine. --gdi (libgdiplus) avoids GL
 #     entirely and works.
-#   * There is no Xvfb, so frame dumping yields nothing and a Lua RAM probe dies
-#     at client.cpu because the client loop never starts. A window is the only
-#     way to see the game run.
+#   * **CORRECTION.** This file used to say "there is no Xvfb, so frame dumping
+#     yields nothing and a Lua RAM probe dies at client.cpu because the client
+#     loop never starts. A window is the only way to see the game run." That was
+#     wrong, and it cost two sessions: it is what pushed them into writing a
+#     from-scratch emulator and produced two sessions of confidently wrong
+#     measurements. BizHawk *is* drivable here, headfully on :0, with no Xvfb
+#     installed and the X/Wayland session untouched. `EmuHawkMono.sh --help`
+#     documents `--lua <path>` (which implies `--luaconsole`), and from inside
+#     that script `emu.frameadvance()` is frame-exact, `client.screenshot(path)`
+#     writes the core's own video buffer, `memory.*` reads the core's memory
+#     domains, and `client.exit()` closes the session so the next launch is not
+#     swallowed by the single-instance pipe. See tools/bizhawk/run.sh and
+#     journal/05-bizhawk-is-the-instrument.md. What is genuinely missing is
+#     *input injection*, not rendering: SDL2 takes the input and the harness
+#     cannot press Start.
+#   * Both ROM and script paths must be ABSOLUTE. `run.sh` cds into the BizHawk
+#     directory, so a relative ROM path is not an error -- BizHawk fails to load
+#     the file and falls back to NullHawk, whose Lua then dies on the first memory
+#     domain call with "NullHawk does not implement memory domains". That reads
+#     as "the ROM has no memory", not "the path was wrong".
 #   * No xdotool or wmctrl, but python-xlib is present, so the windows are moved
 #     directly over X11.
 #   * ImageMagick 7's `import` rejects its own filename argument here; use

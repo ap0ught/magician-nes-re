@@ -26,8 +26,14 @@ ROM="${2:?usage: run.sh <script.lua> <rom> [logfile]}"
 LOG="${3:-/tmp/opencode/bizhawk_run.log}"
 BIZ="${BIZHAWK:-$HOME/code/games/aibeatszelda/BizHawk-2.11.1-win-x64}"
 
+# Both paths must be absolute before the `cd "$BIZ"` below. A relative ROM path is
+# not an error: BizHawk fails to load the file, falls back to NullHawk ("NullHawk does
+# not implement memory domains"), and a Lua script then dies on the first domain call
+# -- which reads as "the ROM has no memory" rather than "the path was wrong".
 [ -f "$ROM" ] || { echo "no ROM at $ROM" >&2; exit 1; }
 [ -f "$SCRIPT" ] || { echo "no script at $SCRIPT" >&2; exit 1; }
+ROM="$(readlink -f "$ROM")"
+SCRIPT="$(readlink -f "$SCRIPT")"
 [ -d "$BIZ" ] || { echo "BizHawk not at $BIZ; set BIZHAWK=/path" >&2; exit 1; }
 
 SRAM="${MAGICIAN_SRAM:-$BIZ/NES/SaveRAM}"
@@ -47,7 +53,7 @@ echo "run.sh: $ROM with $SCRIPT"
 # Every fd of the launcher subshell is detached, not just EmuHawk's: EmuHawkMono.sh
 # backgrounds two `tee` processes that inherit stdout, so redirecting only the
 # exec'd command leaves the caller's pipe held open forever.
-SCRIPT_ABS="$(readlink -f "$SCRIPT")"
+SCRIPT_ABS="$SCRIPT"
 ( cd "$BIZ" && setsid ./EmuHawkMono.sh --gdi --config "$CFG" \
       --lua "$SCRIPT_ABS" "$ROM" </dev/null >"$LOG" 2>&1 & ) \
     </dev/null >/dev/null 2>&1
