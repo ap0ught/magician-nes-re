@@ -6,11 +6,105 @@ plus a source-level rebuild of the cartridge from that source. **The Rust core h
 been started** (`crates/` does not exist); what exists is the rebuild, and it does not
 yet assemble completely. See *Status*.
 
+## The build target is Beta 1, and that changed the headline
+
+**Everything below that quotes a percentage, an address, or a "the source is
+missing this" finding was measured against the release
+(`Magician (USA).nes`, 1991-02). That was the wrong cartridge.**
+
+The source's own last-modified date is `02/03/90`. `Magician (USA) (Beta 1)
+(1990-03-02).nes` is dated 1990-03-02. They are the same build. The release is a
+year newer, and re-pinning to Beta 1 moved the headline from **30.4% to 59.9%**
+with no bytes borrowed from any cartridge:
+
+```
+PRG: 78555/131072 bytes identical to the cartridge (59.9%)
+  of which from the source alone : 78555 (59.9%)
+  of which from the patch manifest: 0
+```
+
+| | release | beta1 (current target) |
+|---|---|---|
+| PRG match | 39 832 (30.4%) | **78 555 (59.9%)** |
+| X7 anchor | `$F166` (from reset `$F9C1`) | **`$F0D5`** (from reset `$F930`) |
+| `reset` vs cartridge | 27 instructions, none identical | **31 of 31 byte-identical** |
+| nmi / reset / irq | `$F9A8` / `$F9C1` / `$F9B3`, first two suspect | **`$F917` / `$F930` / `$F922`, all exact** |
+| title screen (BizHawk, frame 60) | not measured | **nametable 1024/1024, CIRAM 4096/4096** |
+| X7's DAT bytes matching | 52.3% | **98.4%** |
+| CHR 4 KiB pages matching | 8/32 | **15/32** |
+| patch manifest regions | 1 | **0** |
+
+The six dumps are named in `asm/patches.py`'s registry and **verified against the
+bytes on disk** by `tools/carts.py` -- body SHA1, whole-file SHA1, the battery
+bit and the three vectors. `tools/cartref.py` resolves names to paths, so there
+is no literal cartridge path anywhere in `tools/`, `asm/` or the `Makefile`.
+
+Two of those dumps have facts worth knowing before anything else is measured:
+
+- **Beta 1's header byte 6 is `$40`, not `$42`. Its battery bit is CLEAR** and
+  every other dump's is set. Whether a stale save can affect a run is therefore
+  a per-dump question, read out of the header; `tools/bizhawk/run.sh` reads it
+  and refuses (rather than deleting anything) when a battery-backed dump has a
+  save it would resume.
+- **Beta 1's vectors are `nmi $F917`, `reset $F930`, `irq $F922`.** (The iNES
+  order is NMI, RESET, IRQ — RESET is in the middle.) Every other dump is at
+  least `$30` away from that except beta3/beta, and beta4 and the release share
+  the release's vectors exactly.
+
+### Findings that dissolved once Beta 1 became the target
+
+Each of these was a real, carefully measured conclusion. Each was an artifact of
+pinning to a cartridge a year newer than the source.
+
+- **The class-`e` "absent work" regions.** `TIT.DAT`, `PW.DAT` and `PAN.DAT` were
+  recorded as assets the source did not contain, with a 993-byte layout
+  divergence. Beta 1 contains **all three, byte-identical to
+  `vendor/Magician-NES/DAT/`**. The release contains only `PAN.DAT`. The
+  manifest region for `PAN.DAT` is retired; the manifest is now empty, which is
+  a finding rather than a gap.
+- **The `sam-samples-at-fc40` manifest region**, class `b`, filled from the
+  release because the release has SAM.SAM at `$FC40` while `X7.PDS:997` says
+  `$FB80`. Beta 1 has it at **`$FB80`** — the address the source states. Over
+  SAM.SAM's full 1136 bytes the source-only build matches Beta 1 **1136/1136**
+  and the release 24/1136. The region was overwriting 864 bytes that were
+  already right: a net **−850**.
+- **The renamed spell table.** The source says `RAZORSTORM`, `KISS MY AXE`,
+  `FIRE FOUNTAIN`, `POWER SHIELD`, `HEAL`, `ANTI VEN`, `MUZAK`; the guide shows
+  `BOOMERAXE`, `FIRE RING`, `FIRE SPRAY`, `POW SHIELD`, `MEDITATE`,
+  `SOUND TEST`. **Beta 1 carries the source's own names, in the source's order.**
+  The guide documents the release. See `tools/spelltab.py`.
+- **The X7 `$FB80` overrun.** With the release's anchor, X7's code ran 16 bytes
+  past its own `if last>$fb80` guard. Re-anchored, it does not.
+- **All five quoted RAM addresses.** `curchrpal` `$0180`, `obtyp` `$048C`,
+  `ninflag` `$06C9`, `lastz` `$06FA`, `jt` `$2C` are the release's. Read out of
+  Beta 1's own encoding of `dotitle`, they are `$04D4`, `$04F4`, `$071A`,
+  `$0742`, `$002E` — and `initdma`/`initcols` come out at `$F8BD`/`$EEC7`, which
+  is exactly where our assembly puts them. See `tools/rammap.py`.
+- **The CHR revision problem and the "missing" title artwork.** `TIT0.CHR` sits
+  at CHR offset 57344 in Beta 1, byte-identical to where our own build puts it.
+
+### Findings that survived
+
+- **`initcols` is reached through the fixed `$E000` window**, so X6 must be in
+  slot 15. Now measured rather than assumed: `reset`'s `jsr` operand is `$EEC7`
+  in both images and `initcols` assembles at `$EEC7`.
+- **X5, X6 and X7 compete for slot 15's 8 KiB.** Still true, and now *derived*
+  rather than hand-placed: X7's start comes from the cartridge's reset vector,
+  X6's length is measured with no ceiling applied, and X6 fills exactly the gap.
+  `X5_CEILING $E605 → $E4DE`, `X6_CEILING $F166 → $F0D5`, both computed.
+- **The title screen's PPU state.** Palette, attributes and the pattern table in
+  use are byte-identical to Beta 1; see *Status* for the one scanline that is not.
+- **The `ijvl`/`ijvh` table before the scene descriptors is still unexplained.**
+  Our build emits 108 bytes of word/byte tables where Beta 1 has 36 bytes of
+  different content, and that is the whole of the **+72-byte** offset still
+  putting `TIT.DAT`/`PW.DAT`/`PAN.DAT` 72 bytes late. Bounded, not fixed.
+
 Three goals, in the order they pay off:
 
 1. **Rebuild the cartridge from the original source** (`asm/`). Eurocom's PDS 1.26 assembly,
    the binary level data and the CHR artwork, assembled by a PDS-compatible assembler written
-   here. It assembles, it loads, and it runs to a black screen: 30.4% of the PRG matches, the
+   here. It assembles, it loads, and it runs to a black screen: **59.9%** of the PRG
+   matches beta1 (it was 30.4% against the release -- see above), the
    reset and IRQ vectors match exactly, and the boot address chain is self-consistent. It gets
    as far as frame 14, where one `rts` returns through a destroyed stack frame and everything
    after that is downstream of it. What is left is that the released code differs from this
@@ -148,19 +242,25 @@ also distinguishes the two ways it can fail: an assembler that exits non-zero no
 says so and prints the log tail, instead of reporting "the PRG moved".
 
 The build assembles all eight `X?.PDS` modules plus `SEQ.SRC` and exits 0.
-**38 982 of 131 072 PRG bytes (29.75%) come from the source and are identical to
-the cartridge.** A further 864 bytes (0.66%) are filled from the cartridge by
-`asm/patches.manifest` — see *Patch manifest* below — giving 39 832 (30.4%) in the
-`.nes`. 8 of 32 CHR 4 KiB pages match and 3 622 symbols are recovered. `reset` and
-`irq` land on the cartridge's vectors exactly and `nmi` is 3 bytes early.
+**78 555 of 131 072 PRG bytes (59.9%) come from the source and are identical to
+beta1** — that is the whole of it. `asm/patches.manifest` is empty and fills
+nothing; see *Patch manifest* below for why that is a finding rather than a gap.
+15 of 32 CHR 4 KiB pages match and 3 623 symbols are recovered. `nmi`, `reset` and
+`irq` all land on beta1's vectors exactly, and `reset` is byte-identical to it
+for its first 31 instructions.
+
+Against the release — the old target — the same build is 39 832 (30.4%), of which
+38 982 is source-only and 864 bytes came from one class-`b` manifest region. The
+numbers are kept side by side throughout this file because the difference between
+them is the most useful thing in it.
 
 The build prints the byte accounting on every run, and the two lines are not
 interchangeable:
 
 ```
-PRG: 39832/131072 bytes identical to the cartridge (30.4%)
-  of which from the source alone : 38982 (29.7%)
-  of which from the patch manifest: 864 (0.7%) across 1 region(s), 864 bytes
+PRG: 78555/131072 bytes identical to the cartridge (59.9%)
+  of which from the source alone : 78555 (59.9%)
+  of which from the patch manifest: 0 (asm/patches.manifest has no regions)
 ```
 
 Only the first is evidence about the source. A rising total is otherwise
@@ -504,9 +604,11 @@ the BizHawk measurements above; none of it is evidence about either ROM.
   sense that fixing the palette would fix the screen. The palette reaches the PPU
   correctly and the nametable is empty.
 
-Byte-match against the release is **39 832 / 131 072 (30.4%)**, of which
-**38 982 (29.7%) is source-only** and 864 bytes (0.7%) come from the one
-class-b manifest region. That number went *down* from 29.9%'s 39 204 in an earlier
+Byte-match against beta1 is **78 555 / 131 072 (59.9%)**, all of it source-only,
+with no manifest regions at all. Against the release — the previous target — the
+same build is **39 832 / 131 072 (30.4%)**, of which **38 982 (29.7%) is
+source-only** and 864 bytes (0.7%) came from the one class-`b` manifest region,
+which turned out to be beta1's absence rather than the source's. That number went *down* from 29.9%'s 39 204 in an earlier
 round of fixes, and that is the right outcome: byte-match against a later release
 rewards a wrong-but-self-consistent build, and the fix that lowered it
 (`lda (zp),y` was being assembled as `lda (zp,x)`, 54 statements in all eight
