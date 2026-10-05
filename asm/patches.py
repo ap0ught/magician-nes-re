@@ -59,20 +59,77 @@ OUT = ROOT / "asm" / "out"
 # the user's machine and nothing else; `--cart-dir` overrides it.
 CART_DIR = pathlib.Path("/extdrive/backups/SHARE/roms/nes")
 
-# The known dumps, by the name a manifest region uses. Both are 262160 bytes with
-# the same 16-byte header; only the body differs, and the body SHA1 is the only
-# thing that tells them apart. `sha1` is over the body -- header stripped -- which
-# is what the digests in README.md and PROVENANCE.md section 1 record.
+# The known dumps, by the name a manifest region uses. All of them are 262160
+# bytes; the body SHA1 is the only thing that tells them apart. `sha1` is over the
+# body -- header stripped -- which is what the digests in README.md and
+# PROVENANCE.md section 1 record. `sha1_full` is over the whole file and is what
+# BizHawk's `MAGICIAN_EXPECT_SHA1` wants.
+#
+# `battery` is **not written down from memory**: it is cross-checked below against
+# the header bit on disk, because Beta 1 is the one dump with the battery bit
+# CLEAR and every assumption in this repo about PRG RAM being battery-backed was
+# derived from the release. A stale `NES/SaveRAM/` therefore cannot affect Beta 1,
+# and a tool that *relies* on battery semantics (rather than merely wiping it) is
+# wrong for it.
 CARTS: dict[str, dict[str, object]] = {
+    "beta1": {
+        "file": "Magician (USA) (Beta 1) (1990-03-02).nes",
+        "sha1": "af51e12dbcd6acbdc914f0c63ed67d79165ce304",
+        "sha1_full": "6e46ba92ebbeb472ea9064f4f6bd17dfa4eb723a",
+        "battery": False,
+        "vectors": (0xF917, 0xF930, 0xF922),   # nmi, reset, irq
+        "note": "1990-03-02, the build this source came from",
+    },
+    "beta2": {
+        "file": "Magician (USA) (Beta 2).nes",
+        "sha1": "e8d8e26ced71709f6a5d3cb5147174dfe50971cf",
+        "sha1_full": "14b85752df78eab5694657880fc8342d405d8990",
+        "battery": True,
+        "vectors": (0xFA05, 0xFA1B, 0xFA0D),
+        "note": "a different branch entirely: vectors are ~$80 higher than any other",
+    },
+    "beta3": {
+        "file": "Magician (USA) (Beta 3).nes",
+        "sha1": "2a0a444dae8b5b02f4e5f1b789e16356f3ab08f0",
+        "sha1_full": "c597699940067bb40ed0c820c059c65bf73c2a23",
+        "battery": True,
+        "vectors": (0xF96E, 0xF984, 0xF976),
+        "note": "byte-identical to `beta` below; kept as its own name because the "
+                "two files on disk are distinct paths",
+    },
+    "beta4": {
+        "file": "Magician (USA) (Beta 4).nes",
+        "sha1": "80c7ffa9bddf50fafd39afc5c4f49d4a9486ba7d",
+        "sha1_full": "edc1be65679c179cdb4f7b3c8ba97a40060ccd13",
+        "battery": True,
+        "vectors": (0xF9AB, 0xF9C1, 0xF9B3),
+        "note": "shares the release's vectors exactly",
+    },
     "release": {
         "file": "Magician (USA).nes",
         "sha1": "bd806d7f7c318b8012433250ca10aa8387a962bb",
+        "sha1_full": "7b0da149c3892b9aec3e97400b79e1089cb8cc47",
+        "battery": True,
+        "vectors": (0xF9AB, 0xF9C1, 0xF9B3),
+        "note": "1991-02, a year later; not the build this source came from",
     },
     "beta": {
         "file": "Magician (USA) (Beta).nes",
         "sha1": "2a0a444dae8b5b02f4e5f1b789e16356f3ab08f0",
+        "sha1_full": "c597699940067bb40ed0c820c059c65bf73c2a23",
+        "battery": True,
+        "vectors": (0xF96E, 0xF984, 0xF976),
+        "note": "byte-identical body to `beta3`",
     },
 }
+
+# The build's target. **Beta 1**, because the source's own last-modified date is
+# 02/03/90 and Beta 1 is dated 1990-03-02 -- they are the same build. Every
+# release-derived measurement in this repo (the X7 anchor, the MMC3 slot pins, the
+# ceiling arithmetic, the "absent work" regions, the SAM.SAM address) was taken
+# against a cartridge a year newer than the source, and re-deriving against Beta 1
+# is what dissolved most of them.
+DEFAULT_CART = "beta1"
 
 # The classification every region must carry. These are the cases from
 # `README.md`'s "A gap is not one thing", and the point of recording one is that
