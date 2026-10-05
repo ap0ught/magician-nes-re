@@ -160,24 +160,28 @@ def main() -> int:
     run = Run(route.name, rom=ROM, label=LABEL, log=say,
               verify=not args.no_replay)
     try:
-        with run:
-            say("=== RUN ===")
-            for i, seg in enumerate(route.segments):
-                say("")
-                say(f"[{i + 1}/{len(route.segments)}] {seg.name}")
-                run.segment(seg, tries=args.tries or None)
-        result = run.result
+        run.start(route)              # installs the route, so snapshots carry it
+        say("=== RUN ===")
+        for i, seg in enumerate(route.segments):
+            say("")
+            say(f"[{i + 1}/{len(route.segments)}] {seg.name}")
+            run.segment(seg, tries=args.tries or None)
+        result = run.finish()
     except ActionFailed as e:
         failure = f"{type(e).__name__}: {e}"
         say("")
         say(f"ASSERTION FAILED: {failure}")
         say("  THIS IS THE FAILING SEGMENT. Every segment above it held on MAIN.")
-        result = run.result
     except BridgeError as e:
         failure = f"BridgeError: {e}"
         say("")
         say(f"BRIDGE FAILED: {failure}")
-        result = run.result
+    finally:
+        # Always close: BizHawk's single-instance pipe means the next launch
+        # would be diverted into a window that is still up, and a run that dies
+        # with its emulator open poisons every run after it.
+        run.close()
+    result = run.result
 
     say("")
     say("=== SEGMENT COST ===")

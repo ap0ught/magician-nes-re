@@ -50,6 +50,14 @@ FIRST_MAPIND = 0x01
 # `rec`, so the frames are recorded and can be spliced into MAIN's log, and it
 # never touches `emu.step` directly, which would put them there immediately.
 
+def _brief(image: bytes) -> str:
+    """The four fields that say whether a transition was accepted or not."""
+    v = ram.decode(image)
+    return (f"phase={v['phase']}({ram.PHASE_NAMES.get(v['phase'], '?')}) "
+            f"curlev=${v['curlev']:02X} mapind={v['mapind']} "
+            f"plr=({ram.plrx(image)},{ram.plry(image)})")
+
+
 def pulse_until(rng, rec, button: str, done, budget: int) -> tuple[int, bool]:
     """Press/release in short bursts until `done` holds, or the budget runs out.
 
@@ -85,21 +93,46 @@ def p_pulse(button: str, done, leads=(0, 30, 60, 120)):
     """
     def factory():
         def policy(emu, rec, rng, max_frames):
-            lead = rng.choice(list(leads))
+            # Draw a lead-in, then check it against the cut BEFORE spending it.
+            # Measured on Beta 1: with a 42-frame best in hand, four of six
+            # attempts died at 0 frames because their lead-in draw was 60 or 120
+            # and `OverBudget` fired before the button was ever pressed. The rng
+            # had already decided the answer; the policy just could not ask.
+            room = rec.remaining(max_frames)
+            fits = [n for n in leads if n < room]
+            lead = rng.choice(fits) if fits else None
+            if lead is None:
+                return (f"{button}: NO lead-in in {list(leads)} fits the "
+                        f"{room}-frame cut, so this attempt says nothing and "
+                        f"spends nothing")
             rec.step((), lead)
-            used, held = pulse_until(rng, rec, button, done, max_frames - lead)
-            return (f"{button} after {lead}f of lead-in, pulsed {used}f "
-                    f"(held={held})")
+            budget = room - lead
+            used, held = pulse_until(rng, rec, button, done, budget)
+            if held:
+                return f"{button} after {lead}f of lead-in, pulsed {used}f"
+            # Say WHICH of the two very different things happened. `held=False`
+            # on its own is the note this project spent a day being misled by:
+            # the 30-frame lead-in attempts on all four transitions were CUT OFF
+            # at the 42-frame budget, not rejected by the game. into_level's
+            # ended at `phase=2 curlev=$10 mapind=1` -- the A had been accepted
+            # and the screen was still fading. Reading "held=False" as "that
+            # approach does not work" would have thrown away the better lead-in.
+            return (f"{button} after {lead}f of lead-in, pulsed {used}f and did "
+                    f"not reach the success test within the {budget}-frame "
+                    f"budget -- that is the CUT, not a verdict on the approach: "
+                    f"{_brief(rec.emu.work_ram())}")
         return policy
     return factory
 
 
 def p_title(done):
-    def policy(emu, rec, rng, max_frames):
-        rec.step((), rng.choice([0, 10, 30, 60]))
-        used, held = pulse_until(rng, rec, "A", done, max_frames)
-        return f"title ready after {used}f (held={held})"
-    return policy
+    def factory():
+        def policy(emu, rec, rng, max_frames):
+            rec.step((), rng.choice([0, 10, 30, 60]))
+            used, held = pulse_until(rng, rec, "A", done, max_frames)
+            return f"title ready after {used}f (held={held})"
+        return policy
+    return factory
 
 
 def p_walk():
@@ -110,24 +143,39 @@ def p_walk():
     attempt with the player's position unchanged -- recorded with its note, not
     discarded.
     """
-    def policy(emu, rec, rng, max_frames):
-        d = rng.choice(["Left", "Right", "Up", "Down"])
-        img0 = rec.emu.work_ram()
-        p0 = (ram.plrx(img0), ram.plry(img0))
-        held = rng.choice([40, 60, 70, 80, 100])
-        rec.step((d,), held)
-        img1 = rec.emu.work_ram()
-        p1 = (ram.plrx(img1), ram.plry(img1))
-        return f"{d} for {rec.frames}f: {p0} -> {p1}" + \
-               ("" if p0 != p1 else "   DID NOT MOVE (wall?)")
-    return policy
+    # A FIXED 70-frame hold, and the reason it is fixed is the first run's
+    # ledger. With the hold drawn at random, the first success set the cutoff at
+    # whatever it happened to be, and every later attempt that drew longer was
+    # cut at 0 frames -- so three `Down` attempts and one `Left` reached the
+    # ledger and Right and Up were never tried at all. One number, the measured
+    # one, makes every attempt cost the same, and then the ledger is a survey of
+    # the four directions instead of a survey of the rng.
+    #
+    # 70 is journal 12's measurement on Beta 1: holding a direction for 70
+    # frames moves the player 68-70 pixels.
+    HOLD = 70
+
+    def factory():
+        def policy(emu, rec, rng, max_frames):
+            d = rng.choice(["Left", "Right", "Up", "Down"])
+            img0 = rec.emu.work_ram()
+            p0 = (ram.plrx(img0), ram.plry(img0))
+            rec.step((d,), HOLD)
+            img1 = rec.emu.work_ram()
+            p1 = (ram.plrx(img1), ram.plry(img1))
+            return f"{d} for {HOLD}f: {p0} -> {p1}" + \
+                   ("" if p0 != p1 else "   DID NOT MOVE (wall?)")
+        return policy
+    return factory
 
 
 def p_notes(lines):
-    def policy(emu, rec, rng, max_frames):
-        rec.step((), 1)
-        return "; ".join(lines)
-    return policy
+    def factory():
+        def policy(emu, rec, rng, max_frames):
+            rec.step((), 1)
+            return "; ".join(lines)
+        return policy
+    return factory
 
 
 def walk_prepare(start: bytes):
@@ -176,11 +224,18 @@ def first_town() -> Route:
     # must reach phase $0a at curlev $E2.
     map_done = (ram.pred("phase", "eq", ram.PHASE_MAP),
                 ram.pred("curlev", "eq", ram.START_LEVEL))
+    # NOT first_success. The first attempt to work is not the question here: the
+    # lead-in before the press is dead air in the run, and on the first Beta 1
+    # run every transition drew the LONGEST lead-in (120f) because that is what
+    # the rng gave attempt 1 and the search then stopped. 120 frames x four
+    # transitions is 360 of 769 frames standing still. Asking instead of taking
+    # costs 8 attempts and is the difference between a route and a first draft.
     r.add("new_game", p_pulse("Start", map_done), holds(*map_done),
-          tries=6, max_frames=600, first_success=True,
+          tries=8, max_frames=600, first_success=False,
           why=f"START out of the title must reach phase $0A at curlev "
               f"${ram.START_LEVEL:02X}. PULSED, because waitbut reads the "
-              f"START EDGE")
+              f"START EDGE. Searched, not first-success: the lead-in before the "
+              f"press is dead air and the shortest working one is worth finding")
 
     # A out of the map screen into the playing level. This is the segment where
     # Beta 1 and our rebuild come apart: Beta 1 reaches g00 at logical level
@@ -189,14 +244,23 @@ def first_town() -> Route:
                   ram.pred("curlev", "eq", FIRST_LEVEL),
                   ram.pred("mapind", "eq", FIRST_MAPIND))
     r.add("into_level", p_pulse("A", level_done), holds(*level_done),
-          tries=6, max_frames=900, first_success=True,
+          tries=8, max_frames=900, first_success=False,
           why=f"the playing level (g00) at curlev ${FIRST_LEVEL:02X} and mapind "
               f"{FIRST_MAPIND}. PULSED: g0a reads the fire A EDGE. MEASURED on "
               f"Beta 1; our rebuild computes ${FIRST_LEVEL * 2:02X} and wedges "
               f"in g03")
 
-    r.add("walk", p_walk(), walk_prepare, tries=8, max_frames=140,
-          first_success=False, prepare=True,
+    # 12 tries, not 8. The first run stopped at 6 on the accept-after rule with
+    # three `Down` attempts against a wall and one `Left` that worked -- Right and
+    # Up were never sampled, because the stop rule fired before the map had been
+    # walked. `walk` is the one segment here where the answer is genuinely a map
+    # and not a transition, so it is the one that should not be cut short.
+    # accept_after == tries: this search is a SURVEY, not a minimisation, so it
+    # must not stop early. It found `Down` is a wall at (60,140) and `Left` is
+    # not, on the first run -- and then stopped, because the accept-after rule
+    # had been satisfied, with Right and Up unsampled.
+    r.add("walk", p_walk(), walk_prepare, tries=12, max_frames=90,
+          first_success=False, prepare=True, accept_after=12,
           why="walk in one direction and hold it. MEASURED on Beta 1: 70 frames "
               "moves the player 68-70 pixels. Every attempt asserts the position "
               "CHANGED, so a wall fails the attempt instead of passing it")
@@ -207,13 +271,13 @@ def first_town() -> Route:
     inv_done = (ram.pred("phase", "eq", ram.PHASE_INVENTORY),
                 ram.pred("curlev", "eq", 0xE0))
     r.add("inventory", p_pulse("Start", inv_done), holds(*inv_done),
-          tries=6, max_frames=600, first_success=True,
+          tries=8, max_frames=600, first_success=False,
           why="START opens the inventory, which is level $E0 (g08), not an "
               "overlay: phase AND curlev are both asserted")
 
     back_done = (ram.pred("phase", "eq", ram.PHASE_MAIN),)
     r.add("inventory_close", p_pulse("Start", back_done), holds(*back_done),
-          tries=6, max_frames=600, first_success=True,
+          tries=8, max_frames=600, first_success=False,
           why="START again leaves the inventory and puts MAIN back in the town")
 
     r.add("deferred",

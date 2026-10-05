@@ -62,6 +62,12 @@ class Segment:
     why: str = ""
     first_success: bool = False
     prepare: bool = False
+    # Attempts without improvement before a search that already has a line stops
+    # and takes it. 0 means the search default. A segment raises it when the
+    # POINT of the search is to survey rather than to minimise -- see `walk`,
+    # which is not looking for the shortest way to move, it is finding out which
+    # of the four directions this town lets you go.
+    accept_after: int = 0
 
     def describe_success(self) -> str:
         doc = (self.success.__doc__ or "").strip().splitlines()
@@ -75,11 +81,13 @@ class Route:
 
     def add(self, name: str, factory, success, *, tries: int = 8,
             max_frames: int = 900, settle: int = 0, why: str = "",
-            first_success: bool = False, prepare: bool = False) -> "Route":
+            first_success: bool = False, prepare: bool = False,
+            accept_after: int = 0) -> "Route":
         if any(s.name == name for s in self.segments):
             raise ValueError(f"route {self.name!r} already has a segment called {name!r}")
         self.segments.append(Segment(name, factory, success, tries, max_frames,
-                                     settle, why, first_success, prepare))
+                                     settle, why, first_success, prepare,
+                                     accept_after))
         return self
 
     def digest(self) -> str:

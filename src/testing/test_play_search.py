@@ -473,12 +473,45 @@ check("11d: `walk`'s success test is built from the starting position, and it "
       and "moved from (40" in (wtest.__doc__ or ""),
       f"prepare={walk.prepare} doc={wtest.__doc__!r}")
 
-# ============================ 12. the search layer's own coverage is asserted
+# ================================ 12. the savestate wire format, both directions
+# The first live run of this died on it: `save`'s reply is `ok state=<n> <path>`,
+# and `_answers` had `save` filed with the integer replies, so it rejected a
+# correct answer. `save` and `load` had been listed in that group from the day
+# the bridge grew them and nothing called them for weeks.
+save_ok = "ok state=1073 /logs/checkpoints/_states/m/title_start.state"
+load_ok = "ok frame=4242"
+check("12a: `save`'s real reply shape -- `ok state=<n> <path>` -- is accepted",
+      BizHawk._answers(f"save /logs/x.state", save_ok))
+check("12b: a `save` reply that lost its path, or its size, or named no command, "
+      "is refused",
+      not BizHawk._answers("save /logs/x.state", "ok state=1073")
+      and not BizHawk._answers("save /logs/x.state", "ok state=/logs/x.state 1073")
+      and not BizHawk._answers("save /logs/x.state", "ok 1073"),
+      str([BizHawk._answers("save /logs/x.state", r)
+           for r in ("ok state=1073", "ok state=/logs/x.state 1073", "ok 1073")]))
+check("12c: `load`'s real reply -- `ok frame=<n>` -- is accepted, and a reply "
+      "that reports no frame is refused",
+      BizHawk._answers(f"load /logs/x.state", load_ok)
+      and not BizHawk._answers("load /logs/x.state", "ok"),
+      load_ok)
+check("12d: the two savestate commands do not accept each other's replies -- a "
+      "`load` answered by something that was never a load",
+      not BizHawk._answers("load /logs/x.state", save_ok))
+
+# ============================ 13. this file's own coverage is asserted
 # A suite that runs zero checks and exits 0 is the exact failure this project
-# keeps hitting, so the count is compared against what this file declares.
-EXPECTED = 29
-check(f"12: this file ran exactly {EXPECTED} checks -- a file that matched "
-      f"nothing would otherwise report all green", _n == EXPECTED, f"ran {_n}")
+# keeps hitting, so the number of checks is compared against what this file
+# declares -- and it is the LAST check, so it cannot itself change the count.
+#
+# `_n + 1`, not `_n`: `check()` increments the counter, so the count at the moment
+# this expression is EVALUATED is one short of the count once the check has run.
+# Written as `_n` it compared 33 against 33 and passed while the file actually ran
+# 34 -- a coverage assertion that is off by one in the direction that always
+# passes, which is the worst direction for it to be wrong in.
+EXPECTED = 34
+check(f"13: this file ran exactly {EXPECTED} checks -- a file that matched "
+      f"nothing would otherwise report all green",
+      _n + 1 == EXPECTED, f"ran {_n + 1}")
 
 print(f"\n{_n - _fails}/{_n} checks passed")
 sys.exit(1 if _fails else 0)

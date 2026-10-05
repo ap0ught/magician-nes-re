@@ -376,8 +376,25 @@ class BizHawk:
             return bool(m) and len(m.group(3)) == int(m.group(2)) * 2
         if head in ("ram",):
             return _hex_ok(resp)
-        if head in ("step", "stepu", "frame", "domains", "save", "load", "reset"):
+        if head in ("step", "stepu", "frame", "domains", "reset"):
             return _is_int_line(resp)
+        if head == "load":
+            # `ok frame=<n>`, and the field is REQUIRED. `_is_int_line`
+            # accepts a bare "ok", which for `load` is a bridge that did not
+            # say where it put the machine -- and `load_state` would then
+            # KeyError on it. The integer group above has the same looseness
+            # for `step`, where a bare "ok" is harmless because the frame
+            # comes back from `frame` afterwards; here it is the whole answer.
+            return bool(re.match(r"^ok frame=\d+$", resp))
+        if head == "save":
+            # `ok state=<n> <path>` -- the path is echoed back and is not a
+            # number, so _is_int_line rejects a perfectly good reply. This is
+            # the third time this file has been bitten by the same shape (after
+            # `snapshot` and `screenshot`), and the third time the reply was
+            # RIGHT and the checker was wrong. `save` was listed with the
+            # integer replies from the day the bridge grew it and nothing called
+            # it for weeks, so nothing noticed.
+            return bool(re.match(r"^ok state=\d+ \S+$", resp))
         if head == "snapshot":
             # `ok files=<n> frame=<n> manifest=<path>` -- the path is not a
             # number, so _is_int_line rejects a perfectly good reply.

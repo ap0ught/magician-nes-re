@@ -232,6 +232,22 @@ class Recorder:
     def frames(self) -> int:
         return len(self.inputs)
 
+    def remaining(self, default: int) -> int:
+        """How many more frames this attempt may usefully spend.
+
+        A policy that draws a parameter it has not measured -- a lead-in before a
+        button press, a hold length -- should be able to see the cut before it
+        draws. Without this the measured cost on Beta 1 was four attempts per
+        transition that did nothing at all: after a 42-frame best, every attempt
+        whose lead-in draw was 60 or 120 raised `OverBudget` before it had
+        pressed anything, and the ledger said "over budget at 0 frames" four
+        times instead of saying which lead-in it had picked. The information was
+        free -- the rng had already decided it -- and it was being thrown away
+        because the policy had no way to ask.
+        """
+        limit = self.cap() if self.cap is not None else None
+        return default if limit is None else max(0, limit - len(self.inputs))
+
 
 def _where(image: bytes) -> str:
     """Short description of a state, for the attempt ledger.

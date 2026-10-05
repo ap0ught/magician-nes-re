@@ -120,7 +120,7 @@ every address `src/play/` uses:
   evidence; that is the only exemption, because prose citing `$0036` is how a
   measurement gets recorded.
 
-`test_play_actions.py` (28 checks) pins the action contract against a fake
+`test_play_actions.py` (29 checks) pins the action contract against a fake
 emulator, because the contract is about the *failure* path and a failure cannot
 be produced on demand by a real game. The fake routes through
 `BizHawk._pulse_until` — the real implementation — so the pulsing logic under
@@ -136,6 +136,42 @@ suite that passes immediately proves nothing:
   `step_until` disagreed about the one property a caller assumes they share.
 * `_pulse_until` with `pulse == 0` computed `min(0, …) == 0`, never advanced, and
   spun forever. The real `step_until` never reaches it with 0; the fake does.
+
+## `test_play_search.py`
+
+33 checks, and it is the file that pins the *failure modes* rather than the
+features, because the search layer is the only part of `src/play/` that has to
+survive a policy misbehaving without taking the run with it.
+
+* **`OverBudget` is a `BaseException` and not an `Exception`**, and a policy's
+  `except Exception` provably cannot catch it (1a-1e). This is not a style
+  choice: every policy in both this project and the one it was ported from is a
+  `try: … except Exception: return "gave up"` wrapper, and an `Exception` would
+  be swallowed by one of those, leaving `emu.inputs` pointing at the scout's
+  list and the next attempt recording into a log nobody reads.
+* **The `finally` still runs** (2), and **the budget is enforced through
+  `emu.step` as well as `rec.step`** (3), so calling an action instead of
+  stepping directly is not a way around the cut.
+* **Every attempt is a record**, including the failures (4a-4e), and an attempt
+  the budget cut off is a failure even when it had already reached the success
+  test (4e — see the bug table below).
+* **The runner splices by replaying**, not by appending (7a-7e), re-checks the
+  success test on MAIN, snapshots before and after, and writes the ledger with
+  the losers in it.
+* **`save`/`load`'s wire format**, both directions (12a-12d), after the first
+  live run died on it.
+* **The route's shape**: names, order, the digest, `tries=0` for a segment with
+  no choices, and `walk`'s `prepare` factory (11a-11d).
+
+Four checks in this file were red when written, and three of them were real
+defects rather than a wrong expectation:
+
+| check | what it caught |
+|---|---|
+| 1c | `Recorder.__exit__` returned `True` — the context manager swallowed `OverBudget`, the one thing it must never do |
+| 4e | `note != "over budget"` decided success. When the note grew a frame count in it, every cut-off attempt was scored a **success** |
+| 7b | the winner's inputs were appended to MAIN's log instead of replayed through `emu.step`: log length right, frame counter wrong, and the log will not replay |
+| 8 | the fake's `load_state` restored RAM but not the frame counter, which would have made 7b pass for the wrong reason |
 
 ## What it does not do
 

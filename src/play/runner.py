@@ -88,7 +88,7 @@ class Run:
         self.outdir.mkdir(parents=True, exist_ok=True)
 
     # -- lifecycle -------------------------------------------------------
-    def start(self) -> None:
+    def start(self, route: Route | None = None) -> None:
         stale = BizHawk.running_emuhawk()
         if stale:
             raise BridgeError(
@@ -103,6 +103,13 @@ class Run:
                 "list of scouts and will use it on a machine that can hold more "
                 "than one window; here there is one machine, and a scout is a "
                 "savestate on it.")
+        # The route is installed BEFORE the emulator exists, because every
+        # snapshot records the route's segment digest and `snapshot()` is called
+        # before the first segment. Installed afterwards, every checkpoint in the
+        # run reads `segment_list_sha1=-`, the guard that refuses a foreign
+        # checkpoint is inert for the whole run, and nothing says so.
+        if route is not None:
+            install(route)
         self.emu = BizHawk(rom=self.rom, log_name=f"{self.name}_{self.label}",
                            route=self.name, run=self._free_run_tag())
         self.emu.fast()
@@ -112,6 +119,11 @@ class Run:
         self.log(f"  ram map digest {ram.map_digest()} "
                  f"({len(ram.all_fields())} fields)")
         self.log(f"  segment list {self.digest}")
+        if self.digest == "-":
+            raise ValueError(
+                "no route is installed, so every snapshot this run writes would "
+                "record `segment_list_sha1=-` and the checkpoint guard would be "
+                "inert. Pass the route to Run.start(route) or Run.run(route).")
 
     def _free_run_tag(self) -> str:
         """A checkpoint namespace this run has not used before.
@@ -142,7 +154,6 @@ class Run:
                 self.emu = None
 
     def __enter__(self) -> "Run":
-        self.start()
         return self
 
     def __exit__(self, *exc) -> None:
@@ -214,7 +225,8 @@ class Run:
             res = search.random_search(
                 emu, st, seg.factory, test, tries=tries,
                 max_frames=seg.max_frames, settle=seg.settle, log=self.log,
-                label=seg.name, first_success=seg.first_success)
+                label=seg.name, first_success=seg.first_success,
+                accept_after=seg.accept_after or search.ACCEPT_AFTER)
             self._ledger(seg, res)
         else:
             # `tries=0` means "this segment has no choices", and running the
@@ -224,7 +236,9 @@ class Run:
             res = search.random_search(emu, st, seg.factory, test,
                                        tries=1, max_frames=seg.max_frames,
                                        settle=seg.settle, log=self.log,
-                                       label=seg.name, first_success=True)
+                                       label=seg.name, first_success=True,
+                                       accept_after=seg.accept_after
+                                       or search.ACCEPT_AFTER)
             self._ledger(seg, res)
         if res.best is None:
             self._write_ledger(seg, res)
@@ -263,6 +277,8 @@ class Run:
     # -- the route -------------------------------------------------------
     def run(self, route: Route) -> "Run":
         install(route)
+        if self.emu is None:
+            self.start(route)
         for i, seg in enumerate(route.segments):
             self.log("")
             self.log(f"[{i + 1}/{len(route.segments)}] {seg.name}")
