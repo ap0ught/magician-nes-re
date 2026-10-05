@@ -94,13 +94,98 @@ fi
 
 # The identity the emulator will be asked to confirm.
 #
-# The SHA1 is of the file on disk, and is only what gets printed: this build of
-# BizHawk has no client.getromhash(), so the shell cannot be the one to compare
+# Every byte-level derivation below -- header bytes 4/5/6, the three vectors,
+# their order, the window that contains them, and that window's file offset --
+# is `tools/bizhawk/identity.py`. It was bash, and two of the worst quiet
+# failures in this project were in it: a `head -c 1 | tail -c +5` that read no
+# byte at all and so reported **three zero vectors**, and a vector order of
+# NMI/IRQ/RESET instead of NMI/RESET/IRQ. Both printed a number and raised
+# nothing. The arithmetic now lives in one place where a wrong value is an
+# exception, and `src/testing/test_identity.py` pins each of those.
+#
+# The SHA1 is of the file on disk, and is only what gets printed here: this build
+# of BizHawk has no client.getromhash(), so the shell cannot be the one to compare
 # it. What the emulator is asked to compare is the ROM *window* below -- bytes cut
 # out of the requested file and read back out of the loaded cartridge through the
 # core's own "System Bus" domain. That is a byte-for-byte identity check that a
 # fallback core or a wrong path cannot pass.
-ROM_SHA1="$(sha1sum "$ROM" | cut -d' ' -f1)"
+#
+# `identity.py` prints KEY=VALUE lines; they are read here without `eval`, so a
+# path with a space or an `=` in it cannot become shell syntax.
+IDENT_RAW=""
+IDENT_ERR="$(mktemp "${TMPDIR:-/tmp}/magician-identity.XXXXXX")"
+if ! python3 "$ROOT/tools/bizhawk/identity.py" "$ROM" >"$IDENT_ERR.raw" 2>"$IDENT_ERR"; then
+  sed 's/^/run.sh: /' "$IDENT_ERR" >&2
+  echo "run.sh:        the identity of $ROM could not be derived, so nothing" >&2
+  echo "run.sh:        about this run can be trusted. Nothing was launched." >&2
+  rm -f "$IDENT_ERR" "$IDENT_ERR.raw"
+  exit 1
+fi
+IDENT_RAW="$(cat "$IDENT_ERR.raw")"
+rm -f "$IDENT_ERR" "$IDENT_ERR.raw"
+while IFS='=' read -r _k _v; do
+  case "$_k" in
+    sha1) ROM_SHA1="$_v" ;;
+    hdr) HDR="$_v" ;;
+    prg_len) PRG_LEN="$_v" ;;
+    chr_len) CHR_LEN="$_v" ;;
+    vec_nmi) VEC_NMI="$_v" ;;
+    vec_reset) VEC_RESET="$_v" ;;
+    vec_irq) VEC_IRQ="$_v" ;;
+    win_at) WIN_AT="$_v" ;;
+    win_len) WIN_LEN="$_v" ;;
+    win_off) WIN_OFF="$_v" ;;
+    win_hex) WIN_HEX="$_v" ;;
+    battery) HAS_BATTERY="$_v" ;;
+    save_stem) SAVE_STEM="$_v" ;;
+  esac
+done <<<"$IDENT_RAW"
+for _k in ROM_SHA1 HDR PRG_LEN CHR_LEN VEC_NMI VEC_RESET VEC_IRQ \
+          WIN_AT WIN_LEN WIN_OFF WIN_HEX HAS_BATTERY SAVE_STEM; do
+  if [ -z "${!_k:-}" ]; then
+    echo "run.sh: FAIL -- identity.py did not report $_k, so the run would" >&2
+    echo "run.sh:        proceed on an unknown ROM. Refusing rather than" >&2
+    echo "run.sh:        guessing; that is how three zero vectors were reported." >&2
+    exit 1
+  fi
+done
+# And the derived values are re-checked here, in the shell, against the same
+# ranges identity.py enforces. Belt and braces: if this file is ever edited to
+# parse the KEY=VALUE lines wrongly, the two disagree and the run stops.
+# NOTE the `$((0x...))`: bash's `[` does not parse hex in -lt/-gt. A bare `0x`
+# makes it print "integer expected" and the test then *passes*, which defeats
+# the guard entirely.
+for _k in VEC_NMI VEC_RESET VEC_IRQ; do
+  case "${!_k}" in
+    ''|*[!0-9]*) echo "run.sh: FAIL -- $_k is '${!_k}', not a number." >&2; exit 1 ;;
+  esac
+  if [ "${!_k}" -lt "$((0xC000))" ] || [ "${!_k}" -gt "$((0xFFFF))" ]; then
+    echo "run.sh: FAIL -- $_k = \$${!_k} is outside the fixed window (\$C000-\$FFFF)." >&2
+    exit 1
+  fi
+done
+if [ "$PRG_LEN" -lt "$((0x8000))" ] || [ "$PRG_LEN" -gt "$((0x100000))" ]; then
+  echo "run.sh: FAIL -- PRG length is $PRG_LEN bytes, outside 32 KiB..1 MiB." >&2
+  echo "run.sh:        A PRG length of 0 is what a failed read of header byte 4" >&2
+  echo "run.sh:        looks like, and it is what this harness once reported" >&2
+  echo "run.sh:        three zero vectors from. It is an error, never a result." >&2
+  exit 1
+fi
+if [ "${#WIN_HEX}" -ne $((WIN_LEN * 2)) ]; then
+  echo "run.sh: FAIL -- the identity window is ${#WIN_HEX} hex characters," >&2
+  echo "run.sh:        not $((WIN_LEN * 2)) for $WIN_LEN bytes. A window that" >&2
+  echo "run.sh:        read fewer bytes than it claims still reads real" >&2
+  echo "run.sh:        cartridge bytes, so nothing downstream can tell." >&2
+  exit 1
+fi
+
+# The vector line, in the order the vectors are actually stored. NMI/RESET/IRQ,
+# not NMI/IRQ/RESET: RESET is the middle word at $FFFC. This used to be read as
+# NMI, IRQ, RESET, which swaps two labels and produces three numbers that all
+# look fine. `src/testing/test_run_sh.py` asserts this line against a synthetic
+# ROM whose six vector bytes are all different, so a swap cannot pass.
+printf 'run.sh: vectors from the file: nmi=$%04X reset=$%04X irq=$%04X\n' \
+  "$VEC_NMI" "$VEC_RESET" "$VEC_IRQ"
 
 # The window check below proves BizHawk loaded *the file that was pointed at*. It
 # cannot prove that file is the one the caller had in mind -- a tampered ROM is
@@ -115,127 +200,12 @@ if [ -n "${MAGICIAN_EXPECT_SHA1:-}" ]; then
   echo "run.sh: sha1 matches MAGICIAN_EXPECT_SHA1"
 fi
 
-# The identity window: a fixed-window read of the nmi/irq/reset trampolines, taken
-# out of the requested file and read back out of the loaded cartridge through the
-# core's own "System Bus" domain. A byte-for-byte identity check that a fallback
-# core or a wrong path cannot pass.
-#
-# **The window is derived from the ROM's own vectors, not written down.** It used
-# to be hard-coded at $F9A8, which was the *rebuild's* nmi against the *release*.
-# The six dumps of this title do not agree on where those trampolines are:
-#
-#   beta1    nmi $F917  irq $F922  reset $F930
-#   beta2    nmi $FA05  irq $FA0D  reset $FA1B
-#   beta3    nmi $F96E  irq $F976  reset $F984
-#   beta4    nmi $F9AB  irq $F9B3  reset $F9C1
-#   release  nmi $F9AB  irq $F9B3  reset $F9C1
-#
-# A hard-coded $F9A8 is inside beta1's X7 but nowhere near beta2's, so it reads
-# real cartridge bytes and simply fails, or worse passes against the wrong dump.
-# The vectors are the last 6 bytes of PRG, so they are read out of the file itself
-# and the window is placed to cover all three entry points.
-HDR=0
-PRG_LEN=0
-if [ "$(head -c 3 "$ROM" 2>/dev/null)" = "NES" ]; then
-  # Header byte 4 -- the 5th byte -- is the PRG size in 16 KiB units. It is the
-  # FIFTH byte, so it has to be read as `head -c 5 | tail -c 1`: the previous
-  # `head -c 1 | tail -c +5` asked for byte 5 of a one-byte stream, produced
-  # nothing, and made PRG_LEN 0 -- which sent the vector read to offset 10, i.e.
-  # the header's zero padding, and reported three zero vectors without complaint.
-  # That is the project's recurring bug: a plausible number about the wrong bytes.
-  # So PRG_LEN is now range-checked below, and the vectors are range-checked after
-  # that, and neither can be wrong quietly.
-  HDR=16
-  PRG_NIB=$(head -c 5 "$ROM" | tail -c 1 | xxd -p)
-  case "$PRG_NIB" in
-    ''|*[!0-9a-fA-F]*)
-      echo "run.sh: FAIL -- could not read header byte 4 of $ROM as hex (got '$PRG_NIB')." >&2
-      exit 1 ;;
-  esac
-  PRG_LEN=$(( 0x$PRG_NIB * 16384 ))
-fi
-# `$((0x...))` and not a bare `0x...`: bash's `[` does not parse hex in
-# -lt/-gt. It prints "integer expected" and the test then *passes*, which would
-# defeat the guard entirely -- the failure mode this file exists to prevent.
-if [ "$PRG_LEN" -lt "$((0x8000))" ] || [ "$PRG_LEN" -gt "$((0x100000))" ]; then
-  echo "run.sh: FAIL -- PRG length is $PRG_LEN bytes." >&2
-  echo "run.sh:        Every dump of this title is 128 KiB. A value outside 32 KiB" >&2
-  echo "run.sh:        ..1 MiB means the header was misread, and every offset" >&2
-  echo "run.sh:        derived from it below would be wrong." >&2
-  exit 1
-fi
-VEC_OFF=$((HDR + PRG_LEN - 6))
-# The iNES vector order is NMI ($FFFA), RESET ($FFFC), IRQ/BRK ($FFFE) -- note
-# that RESET is in the middle. Reading the three little-endian words in the order
-# NMI, IRQ, RESET swaps two labels and produces numbers that all look fine.
-#
-# All three on ONE line. Emitting one per line and reading them with `read a b c`
-# looks right and is not: `read` consumes a single line, so the other two are
-# discarded and every vector comes out empty.
-VEC_LINE="$(od -An -tu1 -j "$VEC_OFF" -N 6 "$ROM" | awk '
-  { for (i = 1; i <= NF; i++) v[NR, i] = $i }
-  END {
-    if (NR < 1) exit 1
-    printf "%d %d %d\n", v[1,1] + v[1,2]*256, v[1,3] + v[1,4]*256, v[1,5] + v[1,6]*256
-  }')"
-if [ -z "$VEC_LINE" ]; then
-  echo "run.sh: FAIL -- read no vectors from $ROM at file offset $(printf '%#x' "$VEC_OFF")." >&2
-  exit 1
-fi
-read -r VEC_NMI VEC_RESET VEC_IRQ <<<"$VEC_LINE"
-# Belt and braces: a non-numeric or empty vector must stop the run here, not
-# become a window offset that happens to read real cartridge bytes.
-for v in VEC_NMI VEC_RESET VEC_IRQ; do
-  case "${!v:-}" in
-    ''|*[!0-9]*) echo "run.sh: FAIL -- $v is '${!v}', not a number, read from $ROM." >&2
-                exit 1 ;;
-  esac
-  if [ "${!v}" -lt "$((0xC000))" ] || [ "${!v}" -gt "$((0xFFFF))" ]; then
-    echo "run.sh: FAIL -- $v = \$${!v} is outside slot 15 (\$C000-\$FFFF)." >&2
-    echo "run.sh:        These dumps are MMC3 with a 128 KiB PRG, so all three" >&2
-    echo "run.sh:        vectors live in the fixed \$E000 window. A value out of" >&2
-    echo "run.sh:        range means the offset arithmetic above is wrong." >&2
-    exit 1
-  fi
-done
+# `identity.py` also prints header byte 6 so the SaveRAM decision below is
+# derived per dump rather than asserted in a comment. Beta 1's is $40, so its
+# battery bit is CLEAR and nothing in NES/SaveRAM/ can affect a run against
+# it; the release's is $42 and set.
+echo "run.sh: PRG $PRG_LEN bytes, CHR $CHR_LEN bytes, battery bit \"$([ "$HAS_BATTERY" = 1 ] && echo SET || echo CLEAR)\""
 
-# The window starts a little below the lowest of the three so the whole prologue
-# is covered, and is then *checked* to contain all three. This assertion is the
-# point: an off-by-16 in the file offset below is silent, because the bytes read
-# back are still real cartridge bytes -- just the ones 16 earlier.
-WIN_LEN=48
-WIN_AT=$(( VEC_NMI - 8 ))
-for v in VEC_NMI VEC_RESET VEC_IRQ; do
-  t=${!v}
-  if [ "$t" -lt "$WIN_AT" ] || [ "$t" -ge $((WIN_AT + WIN_LEN)) ]; then
-    echo "run.sh: FAIL -- the identity window \$$(printf '%04X' "$WIN_AT")+$$WIN_LEN" >&2
-    echo "run.sh:        does not contain $v = \$$(printf '%04X' "$t")." >&2
-    echo "run.sh:        widen WIN_LEN or move WIN_AT; do not paper over it." >&2
-    exit 1
-  fi
-done
-# CPU addresses in slot 15 ($C000-$FFFF) sit at PRG offset +$10000, and the PRG
-# starts after the 16-byte iNES header, so the file offset is that plus $HDR.
-WIN_OFF=$((WIN_AT + 0x10000 + HDR))
-if [ "$(stat -c %s "$ROM")" -ge $((WIN_OFF + WIN_LEN)) ]; then
-  WIN_HEX="$(dd if="$ROM" bs=1 skip=$WIN_OFF count=$WIN_LEN status=none | xxd -p -c 256)"
-else
-  echo "run.sh: $ROM is too small to hold the fixed window at file offset $(printf '%#x' "$WIN_OFF")" >&2
-  exit 1
-fi
-printf 'run.sh: vectors from the file: nmi=$%04X reset=$%04X irq=$%04X\n' \
-  "$VEC_NMI" "$VEC_RESET" "$VEC_IRQ"
-
-# Battery-backed PRG RAM, per dump, from the header bit -- never assumed. Beta 1's
-# header byte 6 is $40, so its battery bit is CLEAR and every other dump's is $42
-# and set. It used to be written in this script's header comment as a fact about
-# "the cartridge", which was true of the release and false of the target.
-HAS_BATTERY=0
-if [ "$HDR" = "16" ]; then
-  F6=$(od -An -tu1 -j 6 -N 1 "$ROM" | tr -d ' ')
-  if [ $(( F6 & 2 )) -ne 0 ]; then HAS_BATTERY=1; fi
-  echo "run.sh: header byte 6 = \$$(printf '%02X' "$F6"), battery bit $([ "$HAS_BATTERY" = 1 ] && echo SET || echo CLEAR)"
-fi
 
 # ------------------------------------------------------------------- SaveRAM
 # Nothing here is deleted.
@@ -268,6 +238,11 @@ SRAM="${MAGICIAN_SRAM:-$BIZ/NES/SaveRAM}"
 # reach it; a two-line copy of it in isolation works. Whatever the parser is
 # doing, an external command and a command substitution are not needed to strip a
 # path, and this version is verifiable.
+#
+# `identity.py` also reports a `save_stem`, and this recomputes it the long way.
+# The two agree by construction (both take the basename and drop the last
+# extension); the local form is kept because it is the one this file's parser has
+# been shown to handle, and `src/testing/test_run_sh.py` checks the two agree.
 SAVE_STEM="${ROM##*/}"
 SAVE_STEM="${SAVE_STEM%.*}"
 echo "run.sh: save stem would be '$SAVE_STEM'"
@@ -366,10 +341,34 @@ if [ ! -s "$VERIFY" ]; then
 fi
 
 cat "$VERIFY"
-if ! grep -q '^verdict ok$' "$VERIFY"; then
+# A verdict passes only if it says `verdict ok` **and** contains no `verdict FAIL`
+# line anywhere. `grep -q '^verdict ok$'` on its own is not enough: it matches as
+# soon as ONE such line is present, so a file carrying both an ok and a FAIL --
+# which a preamble that appends rather than replaces would produce -- is
+# accepted. The preamble writes one or the other, so this cannot arise from it
+# today; it is the sort of hole that is cheap to close now and expensive to
+# discover later. `src/testing/test_run_sh.py` builds exactly that file.
+if grep -q '^verdict FAIL' "$VERIFY" || ! grep -q '^verdict ok$' "$VERIFY"; then
   echo >&2
-  echo "run.sh: FAIL -- the emulator is not running what was asked for:" >&2
-  grep '^verdict FAIL' "$VERIFY" | sed 's/^/run.sh:   /' >&2
+  # Three different things can get here, and they need three different messages.
+  # Collapsing them into "the emulator is not running what was asked for" is
+  # worse than useless: a preamble that wrote its notes and then died leaves
+  # `verdict FAIL` lines absent, and the operator is sent looking for a core
+  # problem that is not there. `src/testing/test_run_sh.py` checks the third
+  # case specifically.
+  if grep -q '^verdict FAIL' "$VERIFY"; then
+    echo "run.sh: FAIL -- the emulator is not running what was asked for:" >&2
+    grep '^verdict FAIL' "$VERIFY" | sed 's/^/run.sh:   /' >&2
+  elif grep -q '^verdict' "$VERIFY"; then
+    echo "run.sh: FAIL -- the verdict has a line starting 'verdict' that is" >&2
+    echo "run.sh:        neither 'verdict ok' nor 'verdict FAIL ...'." >&2
+    grep '^verdict' "$VERIFY" | sed 's/^/run.sh:   /' >&2
+  else
+    echo "run.sh: FAIL -- the preamble wrote notes but never a verdict." >&2
+    echo "run.sh:        It got as far as printing 'want_system' and stopped," >&2
+    echo "run.sh:        which is a Lua error in the preamble, not a wrong core" >&2
+    echo "run.sh:        and not a wrong ROM. The full verdict file follows." >&2
+  fi
   echo "run.sh: log follows" >&2
   cat "$LOG" >&2
   exit 3
