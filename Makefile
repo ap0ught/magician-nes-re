@@ -6,6 +6,9 @@
 #   make verbose    per-file incbin trace
 #   make gaps       the committed stock-vs-rebuild comparison and gap map
 #   make probe      run the rebuilt ROM beside the cartridge in BizHawk
+#   make movie      parse the TAS movie and emit the input table (needs MOVIE)
+#   make replay     replay MOVIE into $(ROM) in BizHawk and report the sync frame
+#   make guard      fail if a cartridge, a movie, or vendor/ is staged
 #   make testsuite  run tools/nestrace.py against koute's nes-testsuite
 #   make clean      remove generated output
 #
@@ -43,7 +46,8 @@ CART ?= $(shell python3 tools/cartref.py)
 TS ?= /tmp/opencode/pinky/nes-testsuite
 TS_FRAMES ?= 120
 
-.PHONY: all extract assemble rom check verbose gaps probe testsuite clean
+.PHONY: all extract assemble rom check verbose gaps probe testsuite clean guard \
+        movie replay install-hooks
 
 all: extract assemble rom
 
@@ -117,6 +121,59 @@ testsuite:
 		exit 2; \
 	}
 	$(PYTHON) tools/nestrace.py --testsuite "$(TS)" --ts-frames $(TS_FRAMES)
+
+# ---------------------------------------------------------------- the movie
+# A verified 44 003-frame FCEUX `.fm2`: FatRatKnight's "NES Magician in 12:12.18",
+# submission 2237S. It is third-party and copyrighted, so it is NEVER committed
+# and never has a default inside the tree -- MOVIE is a path on this machine, and
+# tools/fm2.py's DEFAULT_MOVIE is under /tmp.
+#
+# The parser refuses any cartridge whose md5(PRG+CHR) is not the one the movie
+# was recorded on, which is the release and nothing else. For the rebuild -- the
+# whole point of `make replay` -- that refusal is expected and is overridden
+# with a recorded reason, which ends up in the generated Lua and therefore in
+# every replay log.
+#
+#   make movie                       parse and verify, against $(CART) (Beta 1:
+#                                    expected to be REFUSED -- the movie is
+#                                    release-timed)
+#   make movie ROM=/path ROM=R       verify against a named dump instead
+MOVIE  ?= /tmp/opencode/tas/Magician (U)-FatRatKnight GoodEnd+subtitle.fm2
+ROMY   ?= $(ROM)
+REPLAY_ANYWAY ?= Task 4: our rebuild against a release-timed movie
+MOVEOUT := tools/bizhawk/out
+
+# `ROM=` may carry spaces (every dump filename does), so it is quoted and cannot
+# be a two-word split. `REPLAY_ANYWAY` is a reason, not a flag, and is always
+# passed -- there is no way to get an unlabelled mismatch past this.
+movie:
+	@mkdir -p $(MOVEOUT)
+	$(PYTHON) tools/fm2.py "$(MOVIE)" --rom "$(ROMY)" --expect-frames 44003 \
+	    $(if $(filter-out "$(ROM)",$(ROMY)),--replay-anyway "$(REPLAY_ANYWAY)") \
+	    --lua $(MOVEOUT)/movie.lua --bin $(MOVEOUT)/movie.padbin
+
+# Replay MOVIE into $(ROM) and report how many frames it stays in sync.
+# FRAMES caps the run; SYNC_FIRST=1 stops at the first RAM divergence instead of
+# running to the end, which is what makes the "how far does it get" question
+# cheap enough to ask repeatedly.
+FRAMES ?= 44003
+replay: movie
+	tools/bizhawk/replay.sh "$(ROMY)" "$(FRAMES)" $(if $(SYNC_FIRST),sync-first,)
+
+guard:
+	@tools/guard_staged.sh
+
+# Wire the guard into this checkout's pre-commit. It is a local file, so it is
+# not committed -- the guard itself is `tools/guard_staged.sh`.
+install-hooks:
+	@mkdir -p .git/hooks
+	@printf '%s\n' '#!/usr/bin/env bash' \
+	    'set -uo pipefail' \
+	    '"$$(cd "$$(dirname "$${BASH_SOURCE[0]}")/../.." && pwd)/tools/guard_staged.sh" || {' \
+	    '  echo "pre-commit: refusing to commit cartridge/movie/vendor content" >&2; exit 1; }' \
+	    > .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "installed .git/hooks/pre-commit -> tools/guard_staged.sh"
 
 clean:
 	rm -rf asm/out pds-text
