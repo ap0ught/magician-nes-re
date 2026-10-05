@@ -154,7 +154,10 @@ if [ "$(head -c 3 "$ROM" 2>/dev/null)" = "NES" ]; then
   esac
   PRG_LEN=$(( 0x$PRG_NIB * 16384 ))
 fi
-if [ "$PRG_LEN" -lt 0x8000 ] || [ "$PRG_LEN" -gt 0x100000 ]; then
+# `$((0x...))` and not a bare `0x...`: bash's `[` does not parse hex in
+# -lt/-gt. It prints "integer expected" and the test then *passes*, which would
+# defeat the guard entirely -- the failure mode this file exists to prevent.
+if [ "$PRG_LEN" -lt "$((0x8000))" ] || [ "$PRG_LEN" -gt "$((0x100000))" ]; then
   echo "run.sh: FAIL -- PRG length is $PRG_LEN bytes." >&2
   echo "run.sh:        Every dump of this title is 128 KiB. A value outside 32 KiB" >&2
   echo "run.sh:        ..1 MiB means the header was misread, and every offset" >&2
@@ -187,7 +190,7 @@ for v in VEC_NMI VEC_RESET VEC_IRQ; do
     ''|*[!0-9]*) echo "run.sh: FAIL -- $v is '${!v}', not a number, read from $ROM." >&2
                 exit 1 ;;
   esac
-  if [ "${!v}" -lt 0xC000 ] || [ "${!v}" -gt 0xFFFF ]; then
+  if [ "${!v}" -lt "$((0xC000))" ] || [ "${!v}" -gt "$((0xFFFF))" ]; then
     echo "run.sh: FAIL -- $v = \$${!v} is outside slot 15 (\$C000-\$FFFF)." >&2
     echo "run.sh:        These dumps are MMC3 with a 128 KiB PRG, so all three" >&2
     echo "run.sh:        vectors live in the fixed \$E000 window. A value out of" >&2
@@ -255,7 +258,19 @@ fi
 # there either. MAGICIAN_SRAM still names the directory to *look* in.
 SRAM="${MAGICIAN_SRAM:-$BIZ/NES/SaveRAM}"
 # BizHawk names the save after the ROM's filename, stem only.
-SAVE_STEM="$(basename "$ROM"); SAVE_STEM="${SAVE_STEM%.*}"
+#
+# Pure parameter expansion, no `basename`. The obvious
+# `SAVE_STEM="$(basename "$ROM")"; SAVE_STEM="${SAVE_STEM%.*}"` does not work
+# here and `bash -n` does not catch it: `set -x` shows the line is reached and
+# then produces **no trace at all** -- not the `++ basename` line, not the
+# `+ SAVE_STEM=` line -- and the next `echo` fails with "SAVE_STEM: unbound
+# variable". Inserting an `echo` immediately before it prints, so control does
+# reach it; a two-line copy of it in isolation works. Whatever the parser is
+# doing, an external command and a command substitution are not needed to strip a
+# path, and this version is verifiable.
+SAVE_STEM="${ROM##*/}"
+SAVE_STEM="${SAVE_STEM%.*}"
+echo "run.sh: save stem would be '$SAVE_STEM'"
 if [ "$HAS_BATTERY" = "0" ]; then
   echo "run.sh: battery bit CLEAR -- BizHawk keeps no save for $SAVE_STEM," \
        "so there is no stale state to clear. NES/SaveRAM untouched."
@@ -263,8 +278,13 @@ elif [ -d "$SRAM" ] && compgen -G "$SRAM/$SAVE_STEM.SaveRAM*" >/dev/null; then
   echo "run.sh: FAIL -- battery bit SET and $SRAM/$SAVE_STEM.SaveRAM exists," >&2
   echo "run.sh:        so BizHawk would resume it and this run's memory reads" >&2
   echo "run.sh:        would not be from a cold boot." >&2
-  echo "run.sh:        Move that file aside yourself, or point MAGICIAN_SRAM at a" >&2
-  echo "run.sh:        directory that has none. This script will not delete it." >&2
+  echo "run.sh:        BizHawk names the save after the ROM's filename, so the" >&2
+  echo "run.sh:        clean way out is to run a ROM whose filename has no save" >&2
+  echo "run.sh:        yet -- copy it to a scratch directory under a fresh name." >&2
+  echo "run.sh:        Pointing MAGICIAN_SRAM elsewhere does NOT work: it changes" >&2
+  echo "run.sh:        where this script looks, not where BizHawk writes, so the" >&2
+  echo "run.sh:        stale save would still be resumed and the run would still" >&2
+  echo "run.sh:        not be from a cold boot. This script will not delete it." >&2
   ls -la "$SRAM/$SAVE_STEM.SaveRAM"* >&2
   exit 4
 else
