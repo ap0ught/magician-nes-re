@@ -321,20 +321,75 @@ class RouteEmu(FakeEmu):
         super().__init__()
         self.seg = 0
         self.fail_at_seg = fail_at_seg
+        self.states: dict[str, bytes] = {}
+        self.frames_at: dict[str, int] = {}
 
     def snapshot(self, name):
         seen.append(name)
         return super().snapshot(name)
 
+    def save_state(self, name):
+        self.states[name] = bytes(self.img)
+        self.frames_at[name] = self.frame
+        return pathlib.Path(tempfile.mkstemp(suffix=".state")[1])
+
+    def load_state(self, name):
+        self.img = bytearray(self.states[name])
+        self.frame = self.frames_at[name]
+        return self.frame
+
+
+# The route's executor is `runner.Run`, not `Route.execute` any more: a segment
+# is searched by a scout and its winner replayed into MAIN, and that is the
+# runner's job. The properties checks 10-11 pin are the runner's, and they are
+# pinned HERE as well as in test_play_search.py because this one is about the
+# failure path and that one is about the ledger.
+import tempfile  # noqa: E402
+
+from play.runner import Run  # noqa: E402
+
+
+class RouteRun(Run):
+    def __init__(self, emu):
+        self._stub_emu = emu
+        self.log = lambda *a: None
+        self.outdir = pathlib.Path(tempfile.mkdtemp())
+        self.name = "fake_route"
+        self.label = "fake"
+        self.rom = pathlib.Path("/fake/rom.nes")
+        self.done = []
+        self.reports = []
+        self.emu = emu
+        self.result = {}
+
+    def _emu(self):
+        return self._stub_emu
+
+
+def p_ok(emu, rec, rng, max_frames):
+    rec.step((), 1)
+    return "ok"
+
+
+def p_boom(emu, rec, rng, max_frames):
+    rec.step((), 1)
+    raise RuntimeError("boom")
+
+
+def p_unsolvable(emu, rec, rng, max_frames):
+    rec.step((), 1)
+    return "not there"
+
 
 r = route_mod.Route("fake_route")
-r.add("one", lambda e: 0, "first")
-r.add("two", lambda e: 0, "second")
-r.add("boom", lambda e: (_ for _ in ()).throw(RuntimeError("boom")), "third")
-r.add("four", lambda e: 0, "fourth")
-re_ = RouteEmu()
+r.add("one", lambda: p_ok, lambda image: True, tries=0)
+r.add("two", lambda: p_ok, lambda image: True, tries=0)
+r.add("boom", lambda: p_boom, lambda image: True, tries=0)
+r.add("four", lambda: p_ok, lambda image: True, tries=0)
+rr = RouteRun(RouteEmu())
 try:
-    r.execute(re_, log=lambda *a: None)
+    for seg in r.segments:
+        rr.segment(seg)
     check("10: a route stops at the first failing segment", False, "it carried on")
 except RuntimeError:
     check("10: a route stops at the first failing segment", True)
@@ -343,12 +398,30 @@ except RuntimeError:
 # it produced.
 check("10b: a checkpoint is taken BEFORE every segment and after every segment "
       "that completes",
-      seen == ["00_one_pre", "00_one_post", "01_two_pre", "01_two_post",
-               "02_boom_pre", "02_boom_FAILED"], str(seen))
+      seen == ["one_pre", "one_post", "two_pre", "two_post",
+               "boom_pre", "boom_FAILED"], str(seen))
 check("10c: and a FAILED checkpoint is written for the segment that raised -- "
       "for ANY exception, not only a failed assertion",
-      "02_boom_FAILED" in seen, str(seen))
-check("10d: the segments after the failure did not run", "03_four_pre" not in seen)
+      "boom_FAILED" in seen, str(seen))
+check("10d: the segments after the failure did not run", "four_pre" not in seen)
+
+# 10e, and it is new: a segment nobody can solve is a failure with a ledger, not
+# a segment that carries on with the least-bad attempt.
+seen.clear()
+r2 = route_mod.Route("fake_unsolvable")
+r2.add("nope", lambda: p_unsolvable, lambda image: False, tries=3)
+rr2 = RouteRun(RouteEmu())
+raised10e = None
+try:
+    rr2.segment(r2.segments[0])
+except ActionFailed as e:
+    raised10e = str(e)
+led = rr2.outdir / "nope.attempts.txt"
+check("10e: a segment with no successful attempt RAISES, names where its attempts "
+      "are, and has already written them",
+      raised10e is not None and led.exists() and "nope.attempts.txt" in raised10e
+      and sum(1 for l in led.read_text().splitlines() if l.strip().startswith("seed")) == 3,
+      f"raised={raised10e} ledger={led.exists()}")
 
 # ============================ 11. a checkpoint name is never silently reused
 emu = FakeEmu()
@@ -363,18 +436,18 @@ check("11: a checkpoint name is refused the second time rather than "
       "can check", raised is not None)
 # ============================================= 12. the segment list digest
 a = route_mod.Route("a")
-a.add("x", lambda e: 0)
-a.add("y", lambda e: 0)
+a.add("x", lambda: p_ok, lambda image: True)
+a.add("y", lambda: p_ok, lambda image: True)
 b = route_mod.Route("b")
-b.add("x", lambda e: 0)
-b.add("y", lambda e: 0)
+b.add("x", lambda: p_ok, lambda image: True)
+b.add("y", lambda: p_ok, lambda image: True)
 c = route_mod.Route("c")
-c.add("y", lambda e: 0)
-c.add("x", lambda e: 0)
+c.add("y", lambda: p_ok, lambda image: True)
+c.add("x", lambda: p_ok, lambda image: True)
 check("12: two routes with the same segment list share a digest, and reordering "
       "them changes it", a.digest() == b.digest() and a.digest() != c.digest())
 d = route_mod.Route("d")
-d.add("x", lambda e: 0)
+d.add("x", lambda: p_ok, lambda image: True)
 check("12b: adding a segment changes the digest, which is what makes a "
       "checkpoint from one route unusable in another",
       d.digest() != a.digest())

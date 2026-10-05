@@ -602,7 +602,8 @@ class BizHawk:
                 f.write(f"{frame}\t{text}\n")
         return p
 
-    def load_inputs(self, path: pathlib.Path) -> list[tuple[str, ...]]:
+    @staticmethod
+    def load_inputs(path: pathlib.Path) -> list[tuple[str, ...]]:
         """Read a recorded input log. Asserts the frame count in its header.
 
         A frame that pressed nothing is written `-` and reads back as an empty
@@ -776,6 +777,54 @@ class BizHawk:
                 f"{got.get('segment_list_sha1')} and this run's is {want}. "
                 "Loading it would put state into a run that never reached it.")
         return d
+
+    # ------------------------------------------------------- savestates
+    # A scout needs to start every attempt from the SAME bytes, and BizHawk
+    # allows exactly one emulator per session, so "another copy of MAIN" is a
+    # savestate on disk rather than a second window. These two are the only
+    # places a state is moved, and they deliberately do NOT touch `self.inputs`:
+    # loading a state is not rewinding the log, it is a separate question, and
+    # conflating them is how a scout's frames end up in MAIN's log.
+    def state_path(self, name: str) -> pathlib.Path:
+        return CHECKPOINTS / f"_states" / f"{self.route or 'noroute'}" / \
+            f"{self.run or 'run'}" / f"{name}.state"
+
+    def save_state(self, name: str) -> pathlib.Path:
+        """Write a savestate. Refuses to overwrite an existing name."""
+        if not name or any(c.isspace() for c in name):
+            raise ValueError(f"state name {name!r} contains whitespace; the "
+                             "bridge's `save` command takes one token")
+        p = self.state_path(name)
+        if p.exists():
+            raise FileExistsError(
+                f"{p} already exists. A savestate is written once: two different "
+                "states under one name is a claim nothing can check.")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        r = _kv(self.cmd(f"save {p}"))
+        n = int(r["state"])
+        if n <= 0 or not p.exists() or p.stat().st_size != n:
+            raise BridgeError(
+                f"save_state({name}): the bridge says {n} bytes, the file says "
+                f"{p.stat().st_size if p.exists() else 'missing'}")
+        self.note(f"savestate {name} at frame {self.frame}")
+        return p
+
+    def load_state(self, name: str) -> int:
+        """Load a savestate written by `save_state`. Returns the frame count.
+
+        The input log is left exactly as it is. `input_log_valid` is untouched
+        too: a state produced by a prefix of the log is still consistent with
+        that prefix, and the replay-from-power-on proof in `Run.finish()` is what
+        establishes that the log as a whole reproduces the run.
+        """
+        p = self.state_path(name)
+        if not p.exists():
+            raise FileNotFoundError(
+                f"no savestate {p}. A scout that cannot find its start state is "
+                "not a scout that is searching the wrong thing -- it is a scout "
+                "that is searching nothing.")
+        self.frame = int(_kv(self.cmd(f"load {p}"))["frame"])
+        return self.frame
 
     # -------------------------------------------------------------- shutdown
     def close(self) -> None:
