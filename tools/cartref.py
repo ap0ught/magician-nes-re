@@ -72,4 +72,19 @@ def env_or_default(env: str = "MAGICIAN_CART") -> Path:
 
 
 if __name__ == "__main__":
+    # A named dump, for the commands that need one other than the build's target.
+    # Added because the alternative is a literal path in a document, and this
+    # project has already lost five sessions to a literal pointing at the wrong
+    # cartridge: `journal/11` needs "the release" by name, and the release is the
+    # dump FatRatKnight's movie was recorded on
+    # (md5(PRG+CHR) 560d31ce9c7ef5f905e26351df48ee62).
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        try:
+            print(cart(sys.argv[1]))
+        except KeyError:
+            known = ", ".join(sorted(patches.CARTS))
+            print(f"cartref: no dump named {sys.argv[1]!r}; known: {known}",
+                  file=sys.stderr)
+            raise SystemExit(2)
+        raise SystemExit(0)
     print(DEFAULT_CART)

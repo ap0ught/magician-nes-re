@@ -73,6 +73,8 @@ end
 local OUT = os.getenv("MAGICIAN_REPLAY_OUT") or "/tmp/opencode/replay"
 local LAST = tonumber(os.getenv("MAGICIAN_FRAMES") or "0")
 local PADCHECK = (os.getenv("MAGICIAN_PADCHECK") or "1") ~= "0"
+-- The list is still called SHOTS for continuity with earlier runs; it produces
+-- domain dumps, not PNGs. See the note at the dump site for why.
 local SHOTS = os.getenv("MAGICIAN_REPLAY_SHOTS") or ""
 local ANCHOR_DUMPS = (os.getenv("MAGICIAN_REPLAY_ANCHORS") or "1") ~= "0"
 
@@ -159,9 +161,9 @@ w(string.format("  pad table   %s (%d frames, #table=%d)", PADLUA, MOVIE_FRAMES,
 w(string.format("  run to      frame %d of %d", LAST, MOVIE_FRAMES))
 w(string.format("  subtitle anchors in movie: %d", #SUBS))
 
--- Frame -> screenshot. Parsed from a comma list, and a malformed entry is fatal
--- rather than ignored: a shot list that silently dropped three frames is a report
--- with three missing pictures and no mention of it.
+-- Frame -> video dump. Parsed from a comma list, and a malformed entry is fatal
+-- rather than ignored: a list that silently dropped three frames is a report with
+-- three missing pictures and no mention of it.
 local shotat = {}
 for tok in string.gmatch(SHOTS, "[^,%s]+") do
   local n = tonumber(tok)
@@ -309,52 +311,81 @@ end
 --
 -- `jt` is $002E, read out of the cartridge's own encoding of `dotitle`
 -- (`ldx #jt / sta $00,x`) by tools/rammap.py, which agrees with our own assembly.
--- The eight bytes $002E-$0035 are what `joykey` extracts one latch bit per button
--- into, and `dlr` at $0036-$003B is the debounced copy that only changes after two
--- consecutive equal readings of `lr`..`lr+5`.
 --
--- WHICH byte is WHICH button is *measured*, not assumed, by the run itself. The
--- first 600-frame release replay recorded, per frame, which of $002E-$0035 were
--- non-zero alongside the single button the movie pressed, and the correlation was
--- unambiguous across all eight buttons:
+-- WHICH byte is WHICH button is **measured**, by tools/bizhawk/padprobe.lua: press
+-- exactly one button for sixty frames after forty idle ones and a forty-frame
+-- settle, then record which of $002E-$0035 moved. Against `Magician (USA).nes` it
+-- reported, with no ambiguity between any pair of buttons:
 --
---     offset 0 or 6 non-zero  <->  Left or Right pressed
---     offset 1 or 7 non-zero  <->  Down or Up pressed
---     offset 2 non-zero       <->  Start          offset 3 -> Select
---     offset 4 non-zero       <->  B              offset 5 -> A
+--     press A        -> $0033 = 01        press B        -> $0032 = 01
+--     press Select   -> $0031 = 01        press Start     -> $0030 = 01
+--     press Up       -> $002F = FF        press Down      -> $002F = 01
+--     press Left     -> $002E = FF        press Right     -> $002E = 01
+--     baseline, nothing pressed for 140 frames: all eight bytes zero.
 --
--- (offsets 0 and 6 both track the L/R pair because `jk0` exits at the first press
--- and leaves the accumulator in one of two states; the source's own `lr`/`ud`
--- pairing accounts for exactly that.)
+-- So the four face buttons get a byte each and a value of 1, and the two direction
+-- *pairs* share a byte and are told apart by the value: $FF for the first of the
+-- pair (Left, Up) and $01 for the second (Right, Down).
 --
--- This independently reproduces the source's own symbol names, which is the check
--- that makes it more than a fit:
+-- ## A correction, in place
 --
---     $002E-$002F  lr   Right, Left      (lr  = "left/right", 2 bytes)
---     $0030-$0031  ud   Down,  Up        (ud  = "up/down",     2 bytes)
---     $0032        sta  Start
---     $0033        sel  Select
---     $0034        fireb B
---     $0035        firea A
+-- An earlier version of this comment claimed the measured map "independently
+-- reproduces the source's own symbol names" -- `sta`=Start at $0032, `sel`=Select
+-- at $0033, `fireb`=B at $0034, `firea`=A at $0035. **It does not, and that claim
+-- was wrong.** The measurement puts Start at $0030 and A at $0033, four bytes from
+-- where the `zp` block puts them, and the `zp` block is a bare run of
+-- `zp name,size` counters with no connection to which byte a running game uses.
 --
--- So the table below is stated three ways -- from the cartridge's encoding of jt,
--- from the source's `zp` block, and from the running core -- and all three agree.
--- It is written out rather than recomputed because a 44 003-frame run cannot be
--- re-derived after the fact, and an unstated assumption in the middle of a replay
--- is the thing this file exists to avoid.
+-- Why the two cannot be reconciled by reading the source: `jk0` does not store one
+-- bit per button at all. It rotates a single accumulator left once per *unpressed*
+-- read and returns at the first press, so the accumulator holds one bit, and
+-- `joykey` unpacks that value into eight bytes with `asl`/`bcc`/`iny`/`sty jt,x`.
+-- Reading that as "bit 7 is A and bit 0 is Right, so jt+7 is A" is wrong, and
+-- wrong in a way that still produces plausible non-zero bytes -- which is how it
+-- survived a run that reported 73.6% agreement and read like cartridge behaviour.
 --
--- `jt` is the *live* latch copy and `dlr` the debounced one. A one-frame press is
--- visible in `jt` immediately and in `dlr` only if the game polls it twice, so
--- `gamebtns` is decoded from `jt` and the debounced copy is reported alongside.
+-- The probe is the authority because it is the only one of the three that asks the
+-- hardware. These tables are written from its output; `PADPROBE_TXT` names where to
+-- re-read it, and replay_check.py reports the agreement rate so a wrong table shows
+-- up as a number rather than as a silence.
+--
+-- `jt` is the live latch copy; `dlr` at $0036-$003B is the debounced one. The probe
+-- found the debounced region moves only for the directions -- $003A for Left/Right,
+-- $003B for Up/Down -- and never for A, B, Select or Start, so only those two cells
+-- are decoded and the rest is reported as raw hex. Inventing a debounced layout for
+-- the other four would be inventing a witness.
 local JT = 0x2E
 local DLR = 0x36
--- index 0 = $002E, in the order the bytes actually mean
-local LIVE_ORDER = { "Right", "Left", "Down", "Up", "Start", "Select", "B", "A" }
-local LIVE_BIT = { Right = 0x80, Left = 0x40, Down = 0x20, Up = 0x10,
-                   Start = 0x08, Select = 0x04, B = 0x02, A = 0x01 }
--- $0036-$003B, from `dlr,x` <- `lr,x` with lr = $0030
-local DEB_ORDER = { "Down", "Up", "Start", "Select", "B", "A" }
-local DEB_BIT = { Down = 0x20, Up = 0x10, Start = 0x08, Select = 0x04, B = 0x02, A = 0x01 }
+
+-- (offset from $002E, value -> button), as data with the address in it, so it can
+-- be read against padprobe.txt line by line.
+local LIVE = {
+  { off = 5, val = 0x01, name = "A" },        -- $0033
+  { off = 4, val = 0x01, name = "B" },        -- $0032
+  { off = 3, val = 0x01, name = "Select" },   -- $0031
+  { off = 2, val = 0x01, name = "Start" },    -- $0030
+  { off = 1, val = 0xFF, name = "Up" },        -- $002F
+  { off = 1, val = 0x01, name = "Down" },      -- $002F
+  { off = 0, val = 0xFF, name = "Left" },      -- $002E
+  { off = 0, val = 0x01, name = "Right" },     -- $002E
+}
+local PADBIT = { A = 0x01, B = 0x02, Select = 0x04, Start = 0x08,
+                 Up = 0x10, Down = 0x20, Left = 0x40, Right = 0x80 }
+-- The debounced copy: directions only, as measured.
+local DEB = {
+  { off = 5, val = 0xFF, name = "Up" },        -- $003B
+  { off = 5, val = 0x01, name = "Down" },
+  { off = 4, val = 0xFF, name = "Left" },      -- $003A
+  { off = 4, val = 0x01, name = "Right" },
+}
+
+local function decode_pad(s, entries)
+  local bits = 0
+  for _, e in ipairs(entries) do
+    if s:byte(JT + e.off + 1) == e.val then bits = bits | (PADBIT[e.name] or 0) end
+  end
+  return bits
+end
 
 local RAM_BYTES = 8192
 
@@ -450,6 +481,20 @@ local function ram_bytes()
   return s
 end
 
+-- Is any byte-pair in a hex string non-zero?
+--
+-- Written as a loop over 2-character pairs because the obvious one-liner,
+-- `hex:gsub("00", "") ~= hex`, is *true for the all-zero string*: removing every
+-- "00" from "0000000000000000" leaves "", which differs from the original, so the
+-- test reports a non-zero byte where every byte is zero. That is how the
+-- cross-check below managed to fail frame 1 with the decoder working perfectly.
+local function hexany(hex, n)
+  for i = 1, n do
+    if hex:sub((i - 1) * 2 + 1, (i - 1) * 2 + 2) ~= "00" then return true end
+  end
+  return false
+end
+
 local function hexat(s, first, n)
   local t = {}
   for i = 0, n - 1 do
@@ -468,6 +513,7 @@ local last_h1, last_h2, last_nz = nil, nil, nil
 local jt_nonzero = 0
 local movie_pressed = 0
 local both_idle = 0
+local jt_decoded_zero = 0
 local disagree = 0
 local shots_taken = 0
 
@@ -582,6 +628,21 @@ for f = 0, LAST - 1 do
     jt8 = hexat(wb, JT, 8)
     step(f, "jt8=" .. jt8)
     dlr6 = hexat(wb, DLR, 6)
+    -- Decode through the measured table. These two lines MUST be here for the
+    -- `game` column to mean anything: a previous version of this file omitted
+    -- exactly this block -- a patch whose search string had the wrong
+    -- indentation matched nothing, and was not checked -- and produced a
+    -- 5000-frame run whose `game` column was $00 on every row and whose
+    -- verdict read, in plain text,
+    --
+    --     FAIL the game never registered a single press
+    --
+    -- while the `jt8` column in the very same file held a press on 2624 of
+    -- those frames. A decoder that decodes nothing reports nothing seen, and
+    -- nothing seen is indistinguishable from a broken injector. The cross-check
+    -- further down fails the run on the first such frame.
+    gamebtns = decode_pad(wb, LIVE)
+    debbtns = decode_pad(wb, DEB)
     if last_h1 ~= h1 or last_h2 ~= h2 or last_nz ~= nz then transitions = transitions + 1 end
     last_h1, last_h2, last_nz = h1, h2, nz
   else
@@ -628,6 +689,20 @@ for f = 0, LAST - 1 do
     if want ~= 0 and gamebtns ~= 0 then jt_nonzero = jt_nonzero + 1 end
     if want == 0 and gamebtns == 0 then both_idle = both_idle + 1 end
     if want ~= gamebtns then disagree = disagree + 1 end
+    -- Two views of one fact, required to agree. `jt8` is the raw hex of $002E-$0035;
+    -- `gamebtns` is those bytes decoded through the button table. A non-zero byte
+    -- decoding to $00 means the DECODER is broken, not the injector, and it is
+    -- checked on every frame of every replay so it cannot be discovered by
+    -- reading a verdict.
+    if hexany(jt8, 8) and gamebtns == 0 then
+      jt_decoded_zero = jt_decoded_zero + 1
+      if jt_decoded_zero == 1 then
+        bail(string.format(
+          "frame %d: the cartridge's pad bytes at $002E-$0035 are %s -- not all "
+          .. "zero -- but decoding them gave $00. The DECODER is broken, not the "
+          .. "injector; read the tables, not this verdict.", f, jt8))
+      end
+    end
   end
 
   -- "the game is idle" and "nothing happened" are distinguished at the end, by
@@ -657,12 +732,66 @@ for f = 0, LAST - 1 do
   end
 
   if shotat[f] then
-    -- `client.screenshot` takes a *directory* and is the one call in this file
-    -- that leaves the emulator. It is wrapped because a failure here must not
-    -- lose the series: the pictures are the least load-bearing output and the
-    -- frame log is the most.
-    pcall(function() client.screenshot(OUT .. "/shots/") end)
+    -- ## Why there is no screenshot here
+    --
+    -- `client.screenshot()` HANGS this build of EmuHawk. Measured, not guessed:
+    -- a 44 003-frame run with `SHOTS=150,2832,...` stopped at frame 129 and the
+    -- log then reads "Mono process hang detected, sending kill signal"; the same
+    -- ROM with no shot list runs 5 000 frames cleanly. It was previously wrapped
+    -- in a pcall, which is the right instinct for an ordinary failure and exactly
+    -- the wrong one here: a hang is not an error a pcall can catch.
+    --
+    -- So the picture is taken the way the rest of this project takes one -- by
+    -- reading the video memory the core itself exposes. `tools/bizhawk/title.lua`
+    -- already established that route and that the domains work; this is the same
+    -- dump at a chosen frame, and it is reproducible, diffable, and does not
+    -- leave the emulator.
     shots_taken = shots_taken + 1
+    local base = string.format("%s/shots/f%06d", OUT, f)
+    local function dumpdom(domain, n, ext)
+      if not select(domain) then return false end
+      -- invalidate the cached domain: dumpdom just switched it
+      local fh = io.open(base .. ext, "wb")
+      if not fh then return false end
+      local ok, s2 = pcall(memory.read_bytes_as_binary_string, 0, n)
+      if ok and type(s2) == "string" then fh:write(s2); fh:close(); return true end
+      fh:close()
+      return false
+    end
+    -- Unquoted keys. "nametable" = ... is not valid Lua in ANY version -- the
+    -- table-constructor grammar wants a Name or a bracketed expression -- and
+    -- luac on this machine rejected it. (BizHawk's Lua is older and would have
+    -- rejected it too; the local luac check in replay.sh is what caught it
+    -- before a fifteen-minute run spent finding out the hard way.)
+    local have = { nametable = dumpdom("CIRAM (nametables)", 4096, ".nt.bin"),
+                   chr       = dumpdom("CHR VROM", 131072, ".chr.bin"),
+                   oam       = dumpdom("OAM", 256, ".oam.bin"),
+                   palette   = dumpdom("PALRAM", 32, ".pal.bin") }
+    if select("System Bus") then
+      local fh = io.open(base .. ".ppu.txt", "w")
+      if fh then
+        fh:write("PPU registers at frame " .. f .. "\n")
+        local order = { 0x2000, 0x2001, 0x2005, 0x2006, 0x2002 }
+        for _, a in ipairs(order) do
+          local okr, v = pcall(memory.read_u8, a)
+          fh:write(string.format("  $%04X = %s\n", a,
+                    okr and string.format("$%02X", (tonumber(v) or 0) % 256) or "??"))
+        end
+        fh:close()
+      end
+      -- $2002 is read LAST on purpose: reading it clears the vblank flag and
+      -- resets the PPU address latch, so reading it first perturbs the very
+      -- registers the dump exists to record. This perturbs the run and says so.
+      fh = io.open(base .. ".txt", "w")
+      if fh then
+        fh:write(string.format("frame %d\npad $%02X  cartridge %02X\n", f, want, gamebtns))
+        local names = {}
+        for k, v in pairs(have) do if v then names[#names + 1] = k end end
+        table.sort(names)
+        fh:write("dumped: " .. table.concat(names, ", ") .. "\n")
+        fh:close()
+      end
+    end
   end
 end
 end)
@@ -685,12 +814,13 @@ w(string.format("  frames advanced      %d", advances))
 w(string.format("  joypad.set calls     %d (returned cleanly %d, raised %d)",
                 pad_calls, pad_ok, pad_bad))
 w(string.format("  RAM transitions      %d", transitions))
+w(string.format("  jt8 non-zero but decoded $00: %d frames (must be 0)", jt_decoded_zero))
 w(string.format("  cartridge saw a press on %d of the %d frames where the movie "
                 .. "pressed something", jt_nonzero, movie_pressed))
 w(string.format("  both idle (no press asked, none seen) %d", both_idle))
 w(string.format("  exact cartridge/movie pad agreement %d of %d frames (%.2f%%)",
                 LAST - disagree, LAST, 100.0 * (LAST - disagree) / LAST))
-w("                  -- the exact-match rate is expected to be below 100%%: `jk0`")
+w("                  -- the exact-match rate is expected to be below 100%: `jk0`")
 w("                     stops at the FIRST pressed button, so two buttons pressed")
 w("                     in one frame decode as one. tools/replay_check.py measures")
 w("                     what the agreement looks like over a +/-1 frame window.")
