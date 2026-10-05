@@ -184,7 +184,13 @@ def field(name: str, length: int, comment: str, *symbols: str,
     """
     if not comment.strip():
         raise ValueError(f"field {name!r} has no comment saying what it means")
-    if length < 1 or length > 16:
+    if length < 1 or length > 128:
+        # The upper bound is 128 because `eflags` IS 128 bytes (`zp eflags,
+        # maxe/2` with `maxe equ $100`, x0.pds:243 + 566), so the guard used to
+        # be 16 and it refused a field the assembler had named. It is still a
+        # sanity bound rather than a real limit: the whole of the game's RAM is
+        # $0000-$07FF, and `field()` separately refuses anything that runs past
+        # it.
         raise ValueError(f"field {name!r} has length {length}")
     if not symbols:
         raise ValueError(
@@ -277,6 +283,230 @@ field("doorflg", 1, "hidden doors enabled; cleared by clrall() (x5.pds:545-547)"
       "doorflg")
 field("perflag", 1, "permanent game flags -- events that stay done (x0.pds:415)", "perflag")
 field("tmpflag", 1, "temporary game flags, reset per level (x0.pds:416)", "tmpflag")
+field("tmpflag1", 1, "a second byte of temporary flags, distinct from tmpflag "
+      "(x0.pds:421). Its bit names are not written down in the recovered source, "
+      "so nothing in this file asserts on it", "tmpflag1")
+field("valsav", 2, "the NEW value of manacur or wealth, computed before it is "
+      "moved into place. `chkmana` (x7.pds:198-205) does manacur minus the "
+      "requested cost into valsav and `upmana` then copies it back, so while "
+      "the spell screen is charging for a rune `manacur - valsav` IS the cost "
+      "the game just computed -- which is how the spell cost gets MEASURED "
+      "instead of argued about", "valsav")
+field("mclock", 1, "mana regain timer. `tickmana` (x7.pds:244-254) runs only on "
+      "the one-second tick (`ora second / bne`) and does `dec mclock / bpl "
+      "tickfw` before `inc manacur`, so mclock's own period sets the regen rate. "
+      "It is not in `initvars`, so its starting value is a measurement, not "
+      "something this file claims", "mclock")
+field("fooddel", 1, "food drain timer, one per second tick (x7.pds:264-273); "
+      "`dec fooddel,x / bpl` then reload from `fwdels`, so fooddel's period is "
+      "how fast `food` falls", "fooddel")
+field("waterdel", 1, "water drain timer, same shape as fooddel, x[1] of that "
+      "loop (x7.pds:264-273)", "waterdel")
+field("uflg", 1, "0 = interaction is allowed right now, non-zero = inhibited. "
+      "`faced`/`faceu` set it (PROBS.SRC) and the player handler's "
+      "interaction path starts `ldy uflg / bne !c0` (x4.pds:310-311), so this "
+      "byte says whether the game is LISTENING for a talk this frame", "uflg")
+field("dflg", 1, "0 = searching is allowed, non-zero = inhibited; the twin of "
+      "uflg for the DOWN direction (x4.pds:274-276 `!ser`)", "dflg")
+field("intflg", 1, "set once a talk has been attempted and cleared when UP is "
+      "released, so 'only test once till released from up' (x4.pds:313-315). "
+      "Non-zero means a talk was already offered on this press", "intflg")
+field("serflg", 1, "the same one-shot guard for searching a body (x4.pds:275)",
+      "serflg")
+field("intmsg", 1, "which line of a multi-line conversation the wise man or the "
+      "tree is on (x0.pds:591, x4.pds:378-395)", "intmsg")
+field("begmsg", 1, "which line the beggar is on (x0.pds:592, x4.pds:854-859)",
+      "begmsg")
+field("panph", 1, "panel phase: 0 = printing, non-zero = scrolling the panel "
+      "text up. `emptypan` branches on it (x7.pds:117-118)", "panph")
+field("pantyp", 1, "the panel message TYPE: the high bit selects compressed "
+      "vs uncompressed and bits 5-6 the message base ($0C interaction, $0F "
+      "misc, ...); `addmsg` sets it and `emptypan` tests bit 7 "
+      "(x7.pds:126-133, 141)", "pantyp")
+field("eflags", 128, "the main-level EVENT flags, 4 bits each, 256 events. "
+      "`flag1`/`get4`/`set4` (x7.pds:403-431) index it with the event number the "
+      "trigger carried, which is how the game remembers 'this message has been "
+      "shown' and 'this chest has been taken' for the current level", "eflags")
+field("pulind", 1, "which of the eight spell-screen colour-pulse patterns is "
+      "showing (x6.pds:378-390)", "pulind")
+field("puldel", 1, "frames between spell-screen colour pulses (x6.pds:376-378)",
+      "puldel")
+
+
+# ------------------------------------------------------- the game's quest flags
+# Eurocom named the first town's quests, and the names are in the recovered
+# source rather than in a guide:
+#
+#     pds-text/x0.pds:252-259   ;Temporary flags reset each game
+#       drink  equ $01   ;1=plr has bought drink in pub
+#       asked  equ $02   ;1=vicar has asked plr to deliver letter
+#       flask  equ $04   ;1=vicar given plr flask of holy water
+#       pool   equ $08   ;1=holy water dropped in pool
+#       bless2 equ $10   ;1=second vicar blessed plr
+#       bonus  equ $20   ;1=plr collected subgame bonus
+#       twin   equ $40   ;1=twin spell cast
+#       fount  equ $80   ;1=plr entered fountain
+#     pds-text/x0.pds:262-264   ;Permanent flags saved in password
+#       gotlet  equ $01  ;1=got vicar's letter
+#       sentlet equ $02  ;1=posted vicar's letter
+#       ringana equ $04  ;1=ring of ana used
+#       amsheeld equ $08 ;1=amulet of sheeld used
+#       ammor   equ $10  ;1=amulet of mor used
+#
+# THE MASKS ARE NOT ADDRESSES, and that is the whole reason this is an API and
+# not a table of fields. The assembler emitted each `equ $01` into mag.sym as a
+# symbol whose VALUE is 1, so `sym("drink")` is 1 -- and $0001 is a real byte of
+# zero page holding the joypad accumulator `jt`. A `field()` per flag would have
+# declared thirteen bytes at $0001-$0010 and every assertion made against them
+# would have been about the joystick and the power-rune constants. So the mask
+# is resolved from the symbol table, checked to be a single bit, and tested
+# against the byte the source says holds it.
+#
+# Which byte holds them is not a guess either: `sset`/`sclr`/`stst`
+# (x5.pds:783-792) all `ora`/`and`/`bit tmpflag`, and `once` (x2.pds:445-446)
+# does the same to `perflag`. The shop script language's `set`/`clr`/`tst`/
+# `setp`/`clrp` (SHOPDAT.SRC:68-77) are those same routines, so `drink` and
+# `asked` are set by shop scripts and `gotlet`/`sentlet` by the permanent twin.
+QUEST_FLAGS: dict[str, tuple[str, str]] = {
+    "drink": ("tmpflag", "the player has bought a drink in the pub. Set by the "
+                        "pub's tankard icon, `set,drink` (SHOPDAT.SRC:83)"),
+    "asked": ("tmpflag", "the vicar has asked the player to deliver the letter. "
+                         "The church's `set,asked` (SHOPDAT.SRC:113)"),
+    "flask": ("tmpflag", "the vicar has given the player a flask of holy water "
+                         "(SHOPDAT.SRC:115)"),
+    "pool": ("tmpflag", "the holy water has been dropped in the pool; `pcoa` "
+                        "`bit tmpflag` tests it (x5.pds:522-524)"),
+    "bless2": ("tmpflag", "the second vicar has blessed the player"),
+    "bonus": ("tmpflag", "the player has collected the subgame bonus"),
+    "twin": ("tmpflag", "the twin spell has been cast"),
+    "fount": ("tmpflag", "the player has entered the fountain"),
+    "gotlet": ("perflag", "the player is carrying the vicar's letter; the post "
+                          "office's `tst,gotlet` (SHOPDAT.SRC:104)"),
+    "sentlet": ("perflag", "the letter has been posted; the post office's "
+                           "`setp,sentlet` (SHOPDAT.SRC:105)"),
+    "ringana": ("perflag", "the ring of ana has been used, once only"),
+    "amsheeld": ("perflag", "the amulet of sheeld has been used, once only"),
+    "ammor": ("perflag", "the amulet of mor has been used, once only"),
+}
+
+
+def flag_mask(name: str) -> int:
+    """The bit this quest flag occupies, resolved from the symbol table.
+
+    Raises for a name the assembler never emitted, and for a value that is not
+    a single bit. Both refusals are load-bearing: a mask of 0 would make
+    `flag_pred(..., True)` vacuously true, and a mask above $80 would mean the
+    symbol we matched is an address that happens to share the name.
+    """
+    if name not in QUEST_FLAGS:
+        raise KeyError(
+            f"{name!r} is not one of the quest flags the source names: "
+            + ", ".join(sorted(QUEST_FLAGS)))
+    mask = sym(name)
+    if mask < 1 or (mask & (mask - 1)) != 0:
+        raise ValueError(
+            f"quest flag {name!r} resolved to {mask:#x}, which is not a single "
+            "bit. `x0.pds:252-264` writes these as bit masks, and a mask of two "
+            "or more bits would silently mean two different flags at once.")
+    return mask
+
+
+def flag_host(name: str) -> Field:
+    """The byte this quest flag lives in."""
+    if name not in QUEST_FLAGS:
+        raise KeyError(f"{name!r} is not a quest flag the source names: "
+                       + ", ".join(sorted(QUEST_FLAGS)))
+    return f(QUEST_FLAGS[name][0])
+
+
+def flag_set(name: str, image: bytes) -> bool:
+    return bool(f(QUEST_FLAGS[name][0]).get(image) & flag_mask(name))
+
+
+def flag_pred(name: str, want: bool = True) -> Pred:
+    """A predicate on the quest flag -- one address, so the bridge can take it."""
+    return Pred(flag_host(name), "bne" if want else "bclr", flag_mask(name))
+
+
+# ------------------------------------------------------- carried item counters
+# `addinv` (x7.pds:442-451) is `get2` -> `cmp #$03 / bcs` -> `set2`, so a carried
+# item is a 2-BIT count, four per byte, and the game's own cap is three. That is
+# the walkthrough's "you can carry 3 of every type" as a fact from the source
+# rather than a claim from a guide, and it is also the reason an item predicate
+# needs a mask rather than an equality: a count of 1, 2 or 3 all mean "carrying
+# some of it", and only 0 means not.
+#
+# The indices are the source's own object numbers (x2.pds:346-355 comments, and
+# MISC.SRC's `obtxt` is the string table the inventory screen reads at the same
+# index). test_play_ram.py check 20c proves each index against that table, so a
+# shifted number here cannot pass.
+ITEMS: dict[str, int] = {
+    "water_flask": 0x00,
+    "bread": 0x01,
+    "chicken": 0x02,
+    "ham": 0x03,
+    "vegetables": 0x04,
+    "pouch_of_coins": 0x05,
+    "ultimate_potion": 0x11,
+    "key": 0x12,
+    "holy_water": 0x13,
+    "magic_charm": 0x14,
+    "sunglasses": 0x1A,
+    "walking_stick": 0x1B,
+    "letter": 0x1C,
+    "rune_stone": 0x1D,
+}
+ITEM_CAP = 3            # `cmp #$03 / bcs` -- addinv's own refusal
+
+
+def item_bits(ob: int) -> int:
+    """Item `ob`'s low bit, counted from the start of the whole `invop` field.
+
+    Absolute, not byte-relative: `invop` is nine bytes read as one little-endian
+    integer, so item 4's pair is at bits 8-9 and not at bits 0-1. Getting this
+    wrong is invisible for the first four items and wrong for every other one,
+    which is why src/testing/test_play_ram.py check 20 fills the rest of the
+    byte with noise.
+    """
+    if not 0x00 <= ob < 0x24:
+        raise ValueError(
+            f"object ${ob:02X} is outside the 00..23 range `invop` covers. The "
+            "range above it is the SCROLL table (x7.pds:476-481 `cmp #$24 / "
+            "bcs`), which is `invsc` and holds 1-BIT flags, not counts -- so a "
+            "scroll's carried-ness is a different question with a different "
+            "answer and is not answered by this function.")
+    return 8 * (ob // 4) + 2 * (ob % 4)
+
+
+def item_mask(ob: int, bits: int = 0b11) -> int:
+    """The bits of `invop` that hold item `ob`'s count."""
+    return (bits & 0x03) << item_bits(ob)
+
+
+def carried(ob: int, image: bytes) -> int:
+    """How many of item `ob` the player is carrying, 0..3."""
+    shift = item_bits(ob)
+    return (f("invop").get(image) >> shift) & 0x03
+
+
+def carried_pred(ob: int, at_least: int = 1) -> Pred:
+    """A single-address predicate: "at least `at_least` of item `ob`".
+
+    Single address on purpose. The bridge evaluates one address per predicate,
+    so "this item's bits in this byte are non-zero" is expressible and "the
+    count is exactly 2" is not -- for that, read the field and compare.
+    """
+    if at_least < 1:
+        raise ValueError(f"at_least={at_least}; 0 items is 'not carried', which "
+                         "is the mask being clear, not a count question")
+    if at_least == 1:
+        return Pred(f("invop"), "bne", item_mask(ob))
+    if at_least == 2:
+        # 2 is 10 and 3 is 11: the low bit is set in 3 only, the high bit in
+        # both, so "the high bit, or the low bit" is everything from 2 up and
+        # still excludes 1.
+        return Pred(f("invop"), "bne", item_mask(ob, 0b01) | item_mask(ob, 0b10))
+    return Pred(f("invop"), "band", item_mask(ob))
 
 # ------------------------------------------------------------------ the player
 # `x0.pds:242-243`: `maxob equ $04` / `pi equ maxob-1`, so the PLAYER is object
@@ -383,8 +613,12 @@ field("ninflag", 1, ">0 = infinite mana (x0.pds:539). The password screen sets i
 field("invhand", 1, "inventory slot in the player's hand; $FF = empty "
       "(x1.pds:13, x6.pds:77-82)", "invhand")
 field("invind", 1, "inventory cursor (x6.pds:170-178)", "invind")
-field("invop", 7, "object inventory flags (x0.pds:540), 7 bytes = 28 bits for "
-      "the 0x1C object types", "invop")
+field("invop", 9, "object/potion inventory counts: 36 TWO-BIT counters, four per "
+      "byte (x0.pds:566 `zp invop,mxin/4` with `mxin equ $24`). It is 9 bytes, "
+      "not the 7 an earlier version of this file declared -- the symbol table "
+      "settles it, because `invsc` follows at $0707 and $06FE + 9 = $0707. "
+      "`addinv`/`delinv`/`tstinv` all read and write it through `get2`/`set2`",
+      "invop")
 field("invsc", 5, "scroll inventory flags, 5 bytes", "invsc")
 field("invsp", 5, "spell book flags, 5 bytes. `invsc`/`invsp` are separate tables "
       "over the same 40 spell slots -- scrolls learned and spells learned "
@@ -688,8 +922,25 @@ _OPS = {
     "le": lambda a, b: a <= b,
     "gt": lambda a, b: a > b,
     "ge": lambda a, b: a >= b,
-    "band": lambda a, b: (a % b == 0) if b > 0 else False,
-    "bne": lambda a, b: (a % b != 0) if b > 0 else False,
+    # BITWISE, and this is a correction rather than a style choice. These two
+    # ops exist to ask "is this BIT of this byte set", which is what the game's
+    # own `bit tmpflag` (x5.pds:523) and `and #%00001100` (x4.pds:376) do and
+    # what every quest flag assertion needs. Written as `a % b`, `band` with
+    # mask 1 is vacuously TRUE for every value -- every integer is a multiple
+    # of 1 -- so "the player has bought the goat's milk" would have held from
+    # power-on in every state, silently. And `bne` with a 2-bit mask said that
+    # a count of 3 was "not carried", which is backwards: `addinv` refuses a
+    # FOURTH (`get2 / cmp #$03 / bcs`, x7.pds:444-446), so 3 is carrying as
+    # much of it as the game allows. src/testing/test_play_ram.py checks 18/18b
+    # are the cases that distinguish the two readings, and they were written
+    # first and watched fail.
+    "band": lambda a, b: (a & b) == b if b > 0 else False,
+    "bne": lambda a, b: (a & b) != 0 if b > 0 else False,
+    # "this bit is CLEAR". Neither of the two above says it: `band` asks for
+    # every bit of the mask to be set and `bne` for at least one. "The vicar has
+    # NOT asked yet" is a question the ladder asks before every step of that
+    # quest, and there is no way to spell it without a third op.
+    "bclr": lambda a, b: (a & b) == 0 if b > 0 else False,
 }
 
 

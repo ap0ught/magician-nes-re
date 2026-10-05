@@ -163,10 +163,17 @@ check("6: no two fields claim one byte unless the SYMBOL TABLE itself gives that
       str(bad_dup))
 
 # ============================================== 7. field() refuses the unusable
+# The length bound is 128 because `eflags` is 128 bytes (`zp eflags, maxe/2`
+# with `maxe equ $100`). The bound used to be 16, which was simply wrong: the
+# source has `submap,$6e` (110 bytes) and `panbuf,panxmax*panymax` (168), so a
+# 16-byte ceiling refused real fields. The example below is therefore 200, not
+# 99 -- and 99 was accepted the moment the bound moved, which is the honest
+# shape of that correction: the guard was tightened-then-loosened rather than
+# moved for a reason.
 raised = 0
 for bad, why in ((lambda: ram.field("_t1", 1, "", "phase"), "empty comment"),
                  (lambda: ram.field("_t2", 1, "has a comment",), "no symbol"),
-                 (lambda: ram.field("_t3", 99, "bad length", "phase"), "bad length")):
+                 (lambda: ram.field("_t3", 200, "bad length", "phase"), "bad length")):
     try:
         bad()
     except (ValueError, KeyError):
@@ -222,7 +229,11 @@ cases = [
     ("phase", "lt", 0x60, True), ("phase", "le", 0x5F, True),
     ("phase", "gt", 0x5E, True), ("phase", "ge", 0x5F, True),
     ("phase", "lt", 0x5E, False), ("phase", "ge", 0x60, False),
-    ("phase", "band", 16, False), ("phase", "bne", 16, True),
+    # $5F = %01011111, so bit 4 IS set: `band 16` is true and `bne 16` is
+    # true. Written as modulo arithmetic both of these were false/true for the
+    # wrong reason -- 95 % 16 is 15, which says nothing about bit 4.
+    ("phase", "band", 16, True), ("phase", "bne", 16, True),
+    ("phase", "band", 32, False), ("phase", "bne", 32, False),
 ]
 bad = []
 for fname, op, val, want in cases:
@@ -247,7 +258,7 @@ except ValueError as e:
 # reference implementation vs the wire encoding, on every op and a spread of
 # values, decoded back out of the encoding by hand
 mis = []
-for op in ("eq", "ne", "lt", "le", "gt", "ge", "band", "bne"):
+for op in ("eq", "ne", "lt", "le", "gt", "ge", "band", "bne", "bclr"):
     for fname in ("phase", "manacur", "shopind"):
         for val in (0, 1, 0x5F, 0x32, 0x64, 2, 3):
             p = ram.pred(fname, op, val)
@@ -264,13 +275,14 @@ for op in ("eq", "ne", "lt", "le", "gt", "ge", "band", "bne"):
                 lua = {"eq": lambda x: x == v, "ne": lambda x: x != v,
                        "lt": lambda x: x < v, "le": lambda x: x <= v,
                        "gt": lambda x: x > v, "ge": lambda x: x >= v,
-                       "band": lambda x: x % v == 0 if v else False,
-                       "bne": lambda x: x % v != 0 if v else False}[o]
+                       "band": lambda x: (x & v) == v if v else False,
+                       "bne": lambda x: (x & v) != 0 if v else False,
+                       "bclr": lambda x: (x & v) == 0 if v else False}[o]
                 got = p.field.get(probe) if l == 2 else probe[a]
                 if lua(got) != p.holds(probe):
                     mis.append(f"{p} python={p.holds(probe)} lua={lua(got)}")
 check(f"12: the Python predicate and the bridge's decoding of its own wire "
-      f"format agree on all {8 * 3 * 7 * 3} combinations of op x field x value "
+      f"format agree on all {9 * 3 * 7 * 3} combinations of op x field x value "
       "x RAM state", not mis, "; ".join(mis[:4]))
 
 check("13: the wire encoding is DECIMAL in every field, because the bridge's "
@@ -423,6 +435,177 @@ check(f"17: every action module claiming MEASURED ({', '.join(claims)}) has a "
       f"recon findings artefact on disk ({', '.join(artifacts) or 'NONE'})",
       bool(claims) and bool(artifacts),
       "run `python3 src/play/recon.py --label beta1 --rom <Beta 1 path>` first")
+
+# ============================ 18. `band`/`bne` are BITWISE, not modulo
+#
+# These two ops exist to test a BIT in a byte -- that is what the game's own
+# `bit tmpflag` / `and #%00001100` do, and it is what a flag assertion needs.
+# Written as `a % b`, `band` with mask 1 is vacuously true for every value,
+# because every integer is a multiple of 1. So "the player has bought the
+# goat's milk" -- mask $01, the very first quest flag -- would have been true
+# from power-on, in every state, silently, and a ladder that asserted on it
+# would climb for free. `bne` with mask 3 is wrong in the other direction: it
+# calls "3 carried" NOT carried, which is the opposite of the game's rule
+# (`addinv` refuses a fourth: `get2 / cmp #$03 / bcs` -- x7.pds:444-446).
+img_b = image(tmpflag=0x02)
+check("18: band/bne test BITS. band with mask 1 is false for a byte with bit 0 "
+      "clear ($02), which modulo arithmetic would call true",
+      not ram.pred("tmpflag", "band", 1).holds(img_b)
+      and ram.pred("tmpflag", "band", 2).holds(img_b))
+check("18b: ...and bne with a 2-bit mask is true for a count of 3, which is "
+      "'carrying some of it' -- modulo says 3%3==0, i.e. not carried",
+      ram.pred("invop", "bne", 0x0C).holds(image(invop=0x0C))
+      and ram.pred("invop", "bne", 0x0C).holds(image(invop=0x04))
+      and not ram.pred("invop", "bne", 0x0C).holds(image(invop=0x00)))
+
+# ==================================== 19. the quest flags Eurocom already named
+# `pds-text/x0.pds:252-264`:
+#     ;Temporary flags reset each game
+#     drink  equ $01   ;1=plr has bought drink in pub
+#     asked  equ $02   ;1=vicar has asked plr to deliver letter
+#     ...
+#     ;Permanent flags saved in password
+#     gotlet equ $01   ;1=got vicar's letter
+#     sentlet equ $02  ;1=posted vicar's letter
+# THE MASKS ARE NOT ADDRESSES. `mag.sym` carries `drink = $0001` because an
+# `equ $01` went into a table that otherwise holds addresses, and $0001 is a
+# real zero-page byte -- the joypad accumulator `jt`. So a flag API that took
+# an address here would assert on the joystick. These checks pin that the
+# resolved mask is a single bit and that the byte it is tested against is the
+# one `field()` declared from a symbol, not the mask itself.
+try:
+    masks = {n: ram.flag_mask(n) for n in ram.QUEST_FLAGS}
+except Exception as e:                       # noqa: BLE001
+    masks = {}
+    check("19: every quest flag name resolves to a mask", False,
+          f"{type(e).__name__}: {e}")
+else:
+    onebit = all(m and (m & (m - 1)) == 0 for m in masks.values())
+    check(f"19: all {len(masks)} quest flag names resolve, and every mask is a "
+          "single bit -- so `asked` cannot silently become an address", onebit,
+          str(masks))
+hosts = {}
+for n in ram.QUEST_FLAGS:
+    hosts[n] = ram.flag_host(n).addr
+check("19b: the temporary flags are all tested against `tmpflag` and the "
+      "permanent ones against `perflag` -- two host bytes -- and neither host "
+      "byte IS a flag's mask, which is the whole point of not declaring them as "
+      "fields",
+      len(set(hosts.values())) == 2
+      and not (set(hosts.values()) & set(masks.values())),
+      str(hosts))
+# The mask must never be reachable as a FIELD address: if `field()` had been
+# asked to declare `drink`, it would sit at $0001, which is `jt`.
+declared = {f.addr for f in ram.all_fields()}
+check("19c: no quest-flag mask is also a declared RAM field address, i.e. none "
+      "of them was declared as if it were an address",
+      not (set(masks.values()) & declared))
+p_set = ram.flag_pred("drink", True)
+p_clr = ram.flag_pred("drink", False)
+check("19d: flag_pred builds a predicate on the HOST byte with the mask in it, "
+      "and both polarities work",
+      p_set.field.name == "tmpflag" and p_set.value == masks["drink"]
+      and p_set.holds(image(tmpflag=0x01)) and not p_set.holds(image(tmpflag=0x00))
+      and p_clr.holds(image(tmpflag=0x00)))
+
+# ===================================== 20. the 2-bit inventory item counters
+# `addinv` (x7.pds:442-451) calls `get2`, which reads a 2-bit field: four item
+# types per byte, and `cmp #$03 / bcs` refuses a fifth. So the count for item
+# `n` is `(invop[n//4] >> (2*(n%4))) & 3`, and the game's own cap is 3 -- which
+# is the walkthrough's "you can carry 3 of every type", now a fact from the
+# source rather than a claim.
+#
+# The byte is filled in two ways per case: the item's own bits set to the count
+# under test, and every OTHER bit pattern in the byte set to its opposite, so a
+# count of 1 that only works because the rest of the byte happens to be zero
+# fails here. This test caught a wrong ITEM INDEX (key was 0x11, which is the
+# ultimate potion) rather than a wrong extractor.
+bad_items = []
+for name, ob in sorted(ram.ITEMS.items(), key=lambda kv: kv[1]):
+    byte = ram.f("invop").addr + ob // 4
+    shift = (ob % 4) * 2
+    if not 0 <= ob <= 0x4B:
+        bad_items.append(f"{name} ${ob:02X} out of the 00..4B range")
+        continue
+    for count in (0, 1, 2, 3):
+        # every bit in the BYTE that is not this item's pair, set to its
+        # opposite, so the extraction cannot be passing because the rest of the
+        # byte happened to be zero. The mask here is byte-relative; ram.py's
+        # item_mask is measured from the start of the whole nine-byte field.
+        pair = 0x03 << shift
+        noise = 0xFF & ~pair
+        raw = noise | (count << shift)
+        img_i = bytearray(0x800)
+        img_i[byte] = raw
+        got = ram.carried(ob, bytes(img_i))
+        if got != count:
+            bad_items.append(f"{name} byte=${raw:02X} -> {got}, wanted {count}")
+check(f"20: the {len(ram.ITEMS)} named items extract their own 2-bit count out "
+      "of `invop` with every other bit in the byte set to its opposite, and the "
+      "game's cap of 3 (`cmp #$03 / bcs`, x7.pds:445) is what the extractor "
+      "reports", not bad_items, "; ".join(bad_items[:4]))
+check("20b: carried_pred is a single predicate on one named field -- the bridge "
+      "evaluates one address per predicate, so a two-address test cannot be "
+      "sent",
+      len({p.field.name for p in (ram.carried_pred(ram.ITEMS["key"]),
+                                  ram.carried_pred(ram.ITEMS["sunglasses"]),
+                                  ram.carried_pred(ram.ITEMS["walking_stick"]))}) == 1
+      and all(isinstance(p, ram.Pred) for p in
+              (ram.carried_pred(ram.ITEMS["key"]),
+               ram.carried_pred(ram.ITEMS["sunglasses"]))))
+try:
+    ram.carried_pred(ram.ITEMS["key"], 0)
+    ok("20c: carried_pred(at_least=0) is REFUSED -- 0 items is the mask being "
+       "clear, not a count question", False)
+except ValueError:
+    ok("20c: carried_pred(at_least=0) is refused", True)
+
+# Every item index must be the index of its own NAME in the source's string
+# table, or the number beside it is a guess. `obtxt` is what the inventory
+# screen reads at that index, so it is the authority -- and it is written with
+# both `dc "WHOLE NAME"` and `db "SUN",hyp,"GLASSE","S"`, where `hyp` is a
+# line feed used to break a long name across two lines. A parser that only
+# matched `dc` silently drops every wrapped name and shifts every index after
+# it, which is the failure this check exists to prevent.
+obtxt = msc[msc.index("obtxt\t"):]
+obtxt = obtxt[:obtxt.index("\n\n")]
+obtxt_names = []
+for line in obtxt.split("\n"):
+    if not line.startswith(("obtxt", "\tdc", "\tdb")):
+        continue
+    obtxt_names.append("".join(re.findall(r'"([^"]*)"', line)).replace(" ", ""))
+check("20d: the source's own `obtxt` table parses to the 34 names it declares "
+      f"(00..21, the last being blank) including the wrapped ones -- it gave "
+      f"{len(obtxt_names)}",
+      len(obtxt_names) == 34 and obtxt_names[0] == "WATERFLASK"
+      and obtxt_names[26] == "SUNGLASSES" and obtxt_names[27] == "WALKINGSTICK",
+      str(obtxt_names[:6]) + " ...")
+unverified = []
+for name, ob in ram.ITEMS.items():
+    if ob >= len(obtxt_names):
+        unverified.append(f"{name} ${ob:02X} past the end of obtxt")
+        continue
+    printed = obtxt_names[ob]
+    words = [w for w in name.lower().split("_") if w != "of"]
+    if not all(w in printed.lower() for w in words):
+        unverified.append(f"{name} -> ${ob:02X} is {printed!r}")
+check(f"20e: every one of the {len(ram.ITEMS)} item indices names the same "
+      "object in the source's own string table", not unverified, str(unverified))
+
+# ==================================== 21. the fields the ladder needs exist
+need = ("mclock", "fooddel", "waterdel", "valsav", "uflg", "dflg", "intflg",
+        "serflg", "intmsg", "begmsg", "eflags", "panhead", "pantail",
+        "tmpflag", "perflag", "invop", "obeno", "obchr", "shopdat", "ynflag",
+        "deathtyp", "drinks", "food", "water", "gametime", "manatop")
+absent = [n for n in need if n not in ram._FIELDS]
+check(f"21: all {len(need)} RAM locations the quest ladder asserts on are "
+      "declared with a name and a comment", not absent, str(absent))
+# `valsav` is what settles the spell-cost disagreement: `chkmana` (x7.pds:198-205)
+# computes manacur - cost into valsav and `upmana` moves it back, so
+# manacur - valsav IS the cost the game just charged, readable at any frame.
+check("21b: `valsav` is a 2-byte field, because `chkmana` writes both halves "
+      "before `upmana` copies them to manacur",
+      ram.f("valsav").length == 2)
 
 ok(f"the file ran every check above ({_n} checks)", _fails == 0)
 if _fails:

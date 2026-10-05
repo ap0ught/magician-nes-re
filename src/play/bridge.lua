@@ -23,7 +23,8 @@
 --   fast / normal / reset / quit
 --
 -- A PRED is `<addr>:<len>:<op>:<value>` with op one of
--- eq ne lt le gt ge band bne, and several are ANDed. Predicates are evaluated
+-- eq ne lt le gt ge band bne bclr, and several are ANDed. band/bne/bclr are
+-- BITWISE and their value field is a MASK, not a compare target. Predicates are
 -- here, inside the core, on every frame of a `stepu`, because that is the only
 -- way to walk thousands of frames without a socket round trip per frame.
 --
@@ -218,11 +219,16 @@ local function parsepred(s)
   elseif op == "gt" then f = function(x) return x > v end
   elseif op == "ge" then f = function(x) return x >= v end
   -- band/bne take the MASK in the value field, not a compare target, which is
-  -- why they cannot live in the table form the rest use.
-  elseif op == "band" then f = function(x) return x % v == 0 end
-  elseif op == "bne" then f = function(x) return x % v ~= 0 end
+  -- why they cannot live in the table form the rest use. They are BITWISE,
+  -- matching ram.py's `_OPS` and the game's own `bit tmpflag`: modulo here
+  -- would make `band` with mask 1 vacuously true, so "has the player bought the
+  -- goat's milk" would hold in every state. test_play_ram.py check 12 feeds
+  -- both implementations the same cases, so the two cannot drift apart.
+  elseif op == "band" then f = function(x) return (x & v) == v end
+  elseif op == "bne" then f = function(x) return (x & v) ~= 0 end
+  elseif op == "bclr" then f = function(x) return (x & v) == 0 end
   else return nil, "unknown predicate op: " .. tostring(op) end
-  if (op == "band" or op == "bne") and v <= 0 then
+  if (op == "band" or op == "bne" or op == "bclr") and v <= 0 then
     return nil, "mask must be > 0 for " .. op .. ": " .. tostring(v)
   end
   return { addr = a, len = l, test = f, text = s }
