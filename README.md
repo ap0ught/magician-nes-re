@@ -48,12 +48,23 @@ can tell the two apart by header, so every address, every label from the source 
 replayed input applies to exactly one of them: the release, pinned above. See
 `PROVENANCE.md`.
 
-**Which dump to build against was measured, not assumed** (`GAPMAP.md`). Whole-PRG
-the Beta is ahead by 177 bytes — 0.14 percentage points, a tie. But on the two modules whose
-placement is actually *measured*, the release is three to six times better (X1: 9.82%
-against 1.97%; X2 at its measured placement: 12.12% against 3.98%), and only X7's level data
-favours the Beta. **The pin stays on the release.** `asm/patches.py` carries both dumps with
-their digests and every manifest region names one, so switching is a one-line change.
+**Which dump to build against is settled by the vectors, not by a byte count.** Our rebuild's
+`reset=$F9C1` and `irq=$F9B3` match the release *byte-exactly* and match the Beta on neither;
+the Beta sits a uniform `$3D` (61) below the release on all three. Our `nmi` is `$F9A8`, three
+bytes below the release's `$F9AB`, and the reason is exact: our trampoline carries one extra
+`LDA $2002` (`AD 02 20`) that the release dropped — delete those three bytes and the two
+handlers are identical. So **the source is on the release's branch**, and the pin stays on the
+release for a stated reason rather than a scored one. See `PROVENANCE.md` §7.
+
+> **RETRACTED (2026-10-04).** This paragraph used to read: *"Whole-PRG the Beta is ahead by 177
+> bytes — 0.14 percentage points, a tie"* and *"on the two modules whose placement is actually
+> measured, the release is three to six times better"*. The first measurement is
+> arithmetically correct and answers a different question: a byte count over 131 072 bytes is
+> dominated by X7's 60 618 bytes of level data, which is precisely what changed most between a
+> 02/03/90 development build and a 02/1991 cartridge. The second is still true and is what
+> `tools/slotalign.py` measures. Neither says anything about lineage; the vectors do.
+> `asm/patches.py` carries both dumps with their digests and every manifest region names one,
+> so switching is a one-line change.
 
 The cartridge is the user's own. It is never committed; see `LEGAL.md`.
 
@@ -71,10 +82,38 @@ The `.PDS` files are binary containers produced by the 1989 Atari ST toolchain P
 `tools/pds_extract.py` decodes them to plain text into `pds-text/` (git-ignored, regenerated).
 13,082 logical lines of source, with every routine, RAM variable, macro and data format named.
 
+## The source is split in two: Eurocom's, and ours
+
+This is a maintainable source tree for the game, not a reproduction of one cartridge. The two
+halves are kept apart on purpose:
+
+| | |
+|---|---|
+| `vendor/Magician-NES/` | **Eurocom's, read-only**, pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a` and byte-identical to it. `git status vendor/` must stay empty. Re-syncable from upstream at any time. |
+| `src/magician/` | **Ours.** Everything we author. Assembled by the same assembler (`asm/pds6502.py`), in the same PDS dialect, in the same build. |
+| `asm/build.py` → `OUR_MODULES` | The manifest of what we add and where each module goes. A file in `src/magician/` with no entry is a hard error, not a silent no-op. |
+
+**To do QoL work, edit `src/magician/`.** Not `vendor/`. Our modules are assembled *last*, so
+every symbol Eurocom defines is resolved when they run and nothing of ours can perturb a vendor
+module's layout. `src/magician/README.md` has the details; `src/magician/TITLE.SRC` is a worked
+example that replaces the title screen by overlaying one label, with no change to `vendor/` at
+all.
+
+The split was proved inert rather than assumed: `TITLE.SRC` first shipped holding Eurocom's own
+decoded scene, and the PRG came out byte-identical to a build made before `src/magician/` existed
+(`sha1 57fb2365a2783947edb6ce5e5686a5e7957f0a4c` both ways).
+
+One trap before you index anything: `sptxt` (`MISC.SRC:765`) and `spells` (`MISC.SRC:819`) are
+the spell name/order/MP tables and they are index-addressed, but **the source's index order is
+the source's own** — the release renamed and reordered the spells. Establish the
+source-index → release-index mapping before any index-based spell edit, or you will edit a
+different spell than you meant to. See `PROVENANCE.md` §8.
+
 ## Layout
 
 ```
-vendor/Magician-NES/   Eurocom's source, vendored, unmodified
+vendor/Magician-NES/   Eurocom's source, vendored, READ-ONLY, pinned bf653a4
+src/magician/          OURS. Everything we author; assemble this, not vendor/
 tools/pds_extract.py   PDS container -> plain text
 tools/                 build and analysis helpers
 asm/                   PDS-compatible assembler + cartridge build
@@ -198,6 +237,35 @@ with their evidence instead, because filling those would destroy the evidence of
 the bug.
 
 ## Status
+
+**Our authored title screen renders, and the proof is in bytes.** A BizHawk 2.11.1 quickerNES run
+of our build at frame 60 has a live CIRAM nametable that is **960/960 tile bytes and 64/64
+attribute bytes identical to `src/magician/title/nametable.txt` and `attributes.txt`**. That is
+the grid in this repository, through our packer, through our overlay on `titdat`, through
+Eurocom's own `dotitle` and `unrun`, into the PPU — measured in the emulator's own memory
+domain rather than inferred from pixels.
+
+    python3 tools/titletest.py                        # the gate; must pass
+    python3 tools/scenerender.py ours /tmp/t.png      # draw the grid
+    MAGICIAN_FRAMES=60 tools/bizhawk/run.sh tools/bizhawk/title.lua asm/out/magician-rebuilt.nes
+
+Frame-60 pixel match against the cartridge is **40.8%** overall (23394/57344): rows 0-3 88.2%,
+rows 12-19 58.1%, rows 24-29 29.5%, left half 52.8%, right half 28.8%. That number is the weak
+one and the nametable comparison is the strong one; the bottom rows match worst because the
+cartridge carries two copyright text lines there and our CHR bank has no tiles for them. The two
+screens are different revisions of the artwork (`PROVENANCE.md` §8) and no authoring closes that.
+`src/magician/title/notes.md` has the full account.
+
+### The tools this added
+
+| tool | what it is for |
+|---|---|
+| `tools/datcodec.py` | The `.DAT` scene format, decoded and re-encoded, with `selftest` proving a byte-identical round trip of Eurocom's own three files. Start here. |
+| `tools/titletest.py` | The gate. Fails if the ROM does not carry our scene, if it will not decode back to the grid, if a named tile has no art, or if the attributes are degenerate. |
+| `tools/scenerender.py` | Draws a scene, because a 32x30 grid of hex bytes cannot be looked at. |
+| `tools/bizhawk/title.lua` | Dumps nt0, attributes, PALRAM and CHR through memory **domains**. `tools/bizhawk/frame.lua`'s `$2006`/`$2007` poke route silently returns `$00` on this core and reports it as `0 of 1024 non-zero` — a failed read wearing the costume of a measurement. |
+
+### The rebuild as a whole
 
 **The rebuild shows a picture.** Not a black screen and not one flat colour. In
 BizHawk 2.11.1's quickerNES at frame 60, unattended, with `NES/SaveRAM/` cleared:

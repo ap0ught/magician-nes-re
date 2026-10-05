@@ -613,6 +613,25 @@ this source does not contain.
 
 ### The Beta dump is a better oracle than the release
 
+> **RETRACTED, 2026-10-04.** The conclusion this subsection drew — that the Beta is
+> the better oracle for this source — **is wrong, and the measurement underneath it
+> cannot support it.** See §7. What survives: the Beta *is* a uniform `$3D` below
+> the release on all three vectors, and the per-bank table is arithmetically
+> correct. What does not survive is reading it as lineage. A byte count over 131
+> 072 bytes is dominated by X7's 60 618 bytes of level data, and level data is
+> exactly what moved between a February 1990 development build and a February
+> 1991 cartridge, so "the Beta is ahead by 177 bytes" measures the level data and
+> nothing else. Our rebuild's `reset` and `irq` match the release byte-exactly and
+> the Beta on neither. Keep the table below for what it is — a per-bank
+> comparison — and take the lineage from the vectors.
+>
+> Original text, kept so the retraction can be checked against what it replaced:
+> *"**The Beta matches this source better than the release does, in six of the
+> eight banks**, consistently and by small margins. That is the expected direction
+> — the source is dated 02/03/90, so the Beta is presumably the closer of the two
+> later builds — and it is worth knowing before spending effort chasing
+> differences from the release that are simply later changes."*
+
 Re-run on the fixed build, per 16 KiB bank, `tools`-free (`/tmp` script, figures
 below). `Magician (USA) (Beta).nes` has the same header shape and 107 684 of
 131 072 PRG bytes in common with the release (82.2%).
@@ -834,3 +853,173 @@ but it is the only check here that compares content rather than timestamps, and
 nothing runs it. There is no generated documentation in this repository, so there
 is no documentation gate to add; if one is ever added it must be content-based,
 not mtime-based.
+
+---
+
+## 7. Lineage: which dump is this source a build of?
+
+**The source is on the release's branch. It is three bytes of `nmi` away from the
+release and `$3D` away from the Beta on every vector.** This replaces an earlier
+claim in this file — and in `README.md` — that the two were "a tie" and that the
+Beta was the better oracle. Both were wrong, and both came from measuring the
+wrong thing.
+
+### The evidence: the three vectors
+
+Read from the last six bytes of each 128 KiB PRG:
+
+| | `nmi` | `reset` | `irq` |
+|---|---|---|---|
+| release | `$F9AB` | `$F9C1` | `$F9B3` |
+| Beta | `$F96E` | `$F984` | `$F976` |
+| **this rebuild** | **`$F9A8`** | **`$F9C1`** | **`$F9B3`** |
+| Beta − release | `−$3D` | `−$3D` | `−$3D` |
+| rebuild − release | `−3` | **0** | **0** |
+
+Two of the three match the release byte-exactly, and none match the Beta. The
+Beta is a *uniform* `$3D` below the release on all three, which is one shift of
+X7 inside slot 15 rather than a code difference — and this rebuild is not there,
+on any of them.
+
+### Why our `nmi` is three bytes lower, exactly
+
+Not noise. Disassembled at the vectors:
+
+    release  $F9AB:  48 8a 48 98 48 6c 09 00 48 8a 48 98 48 8d 00 e0 …
+    ours     $F9A8:  48 8a 48 98 48 ad 02 20 6c 09 00 48 8a 48 98 48 8d …
+
+Both open by saving A, X and Y (`48 8a 48 98 48`). Then:
+
+* ours executes `ad 02 20` — **`LDA $2002`**, three bytes, reading PPU status to
+  clear the address latch;
+* the release does not.
+
+Delete those three bytes and the two handlers are identical. So the source's NMI
+trampoline carries one extra instruction the release dropped, which puts its
+entry three bytes earlier in the fixed window and accounts for the entire gap.
+
+### Why the old numbers said otherwise
+
+> **RETRACTED.** This file said: *"The Beta matches this source better than the
+> release does, in six of the eight banks"*, from a per-16-KiB-bank byte table
+> showing 30.2% against 29.9%, and *"Whole-PRG the Beta is ahead by 177 bytes —
+> 0.14 points, a tie"*. It also said the source is *"dated 02/03/90, so the Beta
+> is presumably the closer of the two later builds"*.
+
+Both measurements are arithmetically fine and answer a different question. A
+byte-count over 131 072 bytes is dominated by X7's level data — 60 618 of the
+bytes the build scores on — and level data is exactly the region that changed
+most between a February 1990 development build and a February 1991 cartridge. A
+177-byte lead over that much data says which dump has more level bytes in common,
+and nothing at all about which branch the source was built from. The Beta is not
+"closer because later": it is 61 bytes of X7 placement away on every vector, and
+this source is not with it.
+
+**The pin stays on the release**, and now for a stated reason rather than a
+scored one. `tools/slotalign.py --slot 7` is the tool that settles placement
+questions; `tools/datcodec.py selftest` settles the scene format.
+
+## 8. Delta table: every measured difference, with its class
+
+So the next person does not re-derive any of this. Classes are the five in
+`asm/patches.manifest`, whose meanings are:
+
+| class | meaning | filled from the cartridge? |
+|---|---|---|
+| `a` | placement bug — the source is right, the module is in the wrong 8 KiB slot | **no** — that destroys the evidence |
+| `b` | a hole — the source emits *nothing* here and the release emits bytes | yes |
+| `c` | assembler bug — the source is present and `pds6502.py` mis-assembles it | **no** — fix the assembler |
+| `d` | data / CHR packing order — separate from code | yes |
+| `e` | occupied with different content — the source *does* emit bytes, they are wrong, and no re-placement fixes it because the asset is not in this source in any form | yes |
+
+`b` and `e` are both filled and are **not** the same finding: `b` says the source
+stopped short, `e` says the source was working from different data. `b` is not to
+be reused for anything else.
+
+### The measured differences
+
+| # | difference | class | evidence |
+|---|---|---|---|
+| 1 | `PAN.DAT` is **present and byte-identical**, at the wrong address: ours `prg.bin $EE05`, cartridge `$F1E6`, offset by **993 bytes** (`$3E1`) | `e` | 96/96 bytes identical; 73/73 24-byte slices found in cartridge PRG |
+| 2 | `TIT.DAT` is **absent from the cartridge**: **0 of 291** 24-byte slices match anywhere in cartridge PRG or CHR | `e` | measured over both halves of the `.nes` |
+| 3 | `PW.DAT` likewise absent: **0 of 269** slices (263 distinct) match anywhere | `e` | as above |
+| 4 | `unrun` **replaced**, +53 bytes: release `$DB09`–`$DB85` = 125 B against ours `$DC77`–`$DCBD` = 71 B. Different pointer pair (`$21/$22` vs `$13/$14`) and it gates `$2006`/`$2007` on `$06D8` | `e` | disassembly of both |
+| 5 | The run length is **`(count & $7F) + 4`** but both the source *and* the release assemble `adc #$03` | `c` | see §9 |
+| 6 | CHR art is **a different revision**: `TIT0.CHR` 160/170 slices (94%), `TIT1.CHR` 152/170 (89%), `TIT2.CHR` 98/170 (58%). `MAP.CHR` is 170/170 (100%) | `e` | 24-byte slices against cartridge PRG+CHR |
+| 7 | The spell tables are **renamed and reordered**. Source `sptxt` (`MISC.SRC:765`) is `RAZOR, AXOR, BOULDER, SCARY, VEN, FIREBALL, LIGHTNING, RAZORSTORM, KISS MY AXE, FIRESTORM, FIRE FOUNTAIN, DEATH RING, DISPELL, EXORCISE, REPELLENT, PSYCHIC, HELP, PHYS SHIELD, VEN SHIELD, FIRE SHIELD, POWER SHIELD, HEAL, ANTI VEN, FLY, JUMP, FLEET FOOT, SLOWMO, UNUSED, FEATHERLITE, IRON BOOTS, REVEAL, UNUSED`; the release has `SPEAR`, `BOOMERAXE`, `FIRE RING`, `FIRE SPRAY`, `POW SHIELD`, `MEDITATE`, `SOUND TEST` where the source has `SCARY`, `RAZORSTORM`, `KISS MY AXE`, `FIRE FOUNTAIN`, `POWER SHIELD`, `HEAL`, `ANTI VEN`, `MUZAK` | `e` | source order read from `MISC.SRC`; release names from the cartridge's own table |
+| 8 | X7 init-data diverges by **993 bytes** (`$3E1`) — the same offset as #1, so it is one relocation | `e` | `tools/slotalign.py --slot 7` |
+| 9 | Our `nmi` carries an extra 3-byte `LDA $2002` the release lacks | `e` | see §7 |
+
+Items 2, 3, 4 and 6 are what the title screen is made of, and they are the reason
+the title screen is ours to write rather than the cartridge's to copy: the asset
+simply is not in this source.
+
+### Where QoL work goes
+
+**All of it goes in `src/magician/`.** `vendor/Magician-NES/` is read-only and
+pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a`. `src/magician/README.md`
+describes the split and `asm/build.py`'s `OUR_MODULES` is the manifest of what we
+add and where it goes.
+
+**The spell tables are the trap.** `sptxt` (`MISC.SRC:765`) and `spells`
+(`MISC.SRC:819`, "packed spell rune nybbles", 44 `hex` entries) are the spell
+name, order and MP tables. They are index-addressed everywhere they are used —
+`getscd` at `X5.PDS:635` does `lda #<sptxt` with the spell number in Y — and
+**the source's index order is the source's own**. The release renamed and
+reordered the spells (row 7). So any index-based QoL edit to a spell — renaming
+one, reordering, changing an MP cost — needs the source-index → release-index
+mapping established *first*. Editing index 7 without it does not fail; it edits
+whichever spell happens to live there.
+
+## 9. The scene format's run length is one byte out in both dumps
+
+Recorded here rather than only in `tools/datcodec.py`, because it is the kind of
+finding that gets re-derived wrongly.
+
+The packed `.DAT` format's header is `counter_lo, counter_hi, token`, and the
+main loop runs while the counter's high byte is non-zero, so the byte count is
+`$10000 − (lo | hi<<8)`. That part is unambiguous. The record's run length is
+where the two dumps and the data disagree:
+
+```
+and #$7F      ; A = count & $7F
+adc #$03      ; A = (count & $7F) + 3      <- what both dumps assemble
+tax           ; X = that
+...
+sta $2007 / php / adc #$00 / plp / inc / dex / bne $2007
+```
+
+`$DC92-$DC96` in our build, `$DB44-$$DB48` in the release — the identical
+sequence. And the byte loop writes exactly `X` bytes.
+
+The data says **+4**. Three independent ways, all in
+`tools/datcodec.py selftest`:
+
+* **The declared length.** The header is the cruncher's own statement of how many
+  bytes its stream decodes to. `+4` gives 1024/1024/256 for `TIT`/`PW`/`PAN` with
+  the input consumed to its last byte. `+3` falls 50/47/15 bytes short — exactly
+  one per run record (50, 47 and 15 runs) — and leaves the decoder reading past
+  the end of the packed data.
+* **Row alignment.** `TIT.DAT`'s first record is `E0 7C 08`. At `+4` that is 128
+  bytes, four whole 32-tile rows of blank, and the ascending ramp that follows
+  starts at `$00` on row 4. At `+3` it is 127, row 3 ends `… 08 00`, and the ramp
+  starts at `$01`.
+* **Centring.** `PW.DAT` row 5 is the string `GAME RESTORE CODES`. At `+4` it sits
+  at columns 7–24 — 7 spaces, 18 glyphs, 7 spaces. At `+3` it starts at column 5
+  and leaves a stray `$0B` at column 31.
+
+This is a **class `c`** finding — an assembler or source-level off-by-one that
+both dumps carry — with the note that fixing it in the assembler changes the
+image, so it is recorded and *not* applied as a patch. Our codec implements the
+format the data is in.
+
+Two more things about `unrun` that reading the source casually gets wrong, both
+now derived in `tools/datcodec.py`:
+
+* the input pointer advances by **`t0 += y + 1`**, not `t0 += y`. `sec` is there
+  to supply the `+1` that `adc` adds, not to clear a borrow. Modelling it as
+  `t0 += y` is what made an earlier session report `TIT.DAT` as "a solid fill of
+  tile `$08`" and conclude the title screen had to be written from scratch. It
+  had not; the transcription was wrong.
+* `count & $80` means "repeat, **+1 each byte**", because `sta $2007` precedes
+  `adc #$00` and `dex / bne` branches back to the store rather than the load.
