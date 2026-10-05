@@ -431,10 +431,14 @@ def p_talk(rng, rec, max_frames, presses=(1, 2, 3)):
         dx, dy = _delta(me, them)
         if abs(dx) <= 0x28 and dy == 0:
             break
-        if rec.remaining(max_frames) <= 40:
+        room = rec.remaining(max_frames) - 40
+        if room <= 1:
             break
-        rec.step((toward(me, them),), 6)
-        used += 6
+        # Step most of the remaining gap rather than 6 frames at a time: 1
+        # px/frame is measured, and each poll is a socket round trip.
+        n = max(1, min(room, abs(dx) - 0x28))
+        rec.step((toward(me, them),), n)
+        used += n
     img = rec.emu.work_ram()
     me = (ram.plrx(img), ram.plry(img))
     dx, dy = _delta(me, them)
@@ -513,17 +517,24 @@ def p_enter_shop(rng, rec, max_frames, shop=None):
     img = rec.emu.work_ram()
     start = ram.plrx(img)
     note = [f"door {shop} is x {lo}..{hi}, player starts at {start}"]
-    # Walk east or west in short taps so the player stops INSIDE the box rather
-    # than stepping past it: the boxes are 32 pixels wide and a 70-frame hold is
-    # 70 pixels, which is more than two of them.
-    for _ in range(400):
+    # ONE STEP for the whole gap, then a short correction. This used to be
+    # `step 8` in a loop with `work_ram()` after every one, which is 180 socket
+    # round trips and 700 kB of bridge log for a single walk to the church --
+    # and BizHawk stopped answering after about 1500 of them, so the attempt
+    # died on a timeout with the walk half finished. The player moves about one
+    # pixel per frame (MEASURED on Beta 1: 70 frames, 68-70 pixels), so the
+    # distance IS the number of frames and there is nothing to poll for.
+    for _ in range(8):
         img = rec.emu.work_ram()
         x = ram.plrx(img)
         if lo <= x <= hi:
             break
-        if rec.remaining(max_frames) <= 60:
+        room = rec.remaining(max_frames) - 60
+        if room <= 8:
             break
-        rec.step(("Right",) if x < lo else ("Left",), 8)
+        gap = (lo - x) if x < lo else (hi - x)
+        n = max(1, min(room, gap))
+        rec.step(("Right",) if x < lo else ("Left",), n)
     img = rec.emu.work_ram()
     x = ram.plrx(img)
     note.append(f"reached x={x} {'INSIDE' if lo <= x <= hi else 'OUTSIDE'} "
@@ -547,10 +558,12 @@ def p_enter_shop(rng, rec, max_frames, shop=None):
             # accepted and a press that has been ignored look identical one
             # frame later, and the honest reading of `curlev` already matching
             # `shoplev` is that the door OPENED.
-            for _ in range(140):
-                if rec.remaining(max_frames) <= 8:
+            # 24 frames at a time, not 8: the fade is about ninety frames and
+            # each poll is a socket round trip.
+            for _ in range(8):
+                if rec.remaining(max_frames) <= 24:
                     break
-                rec.step((), 8)
+                rec.step((), 24)
                 img = rec.emu.work_ram()
                 if ram.f("phase").get(img) == ram.PHASE_SHOP:
                     break
