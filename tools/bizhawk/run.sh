@@ -16,7 +16,8 @@
 #   * a core other than the one requested       -> exit 3
 #   * a ROM whose SHA1 is not the one requested -> exit 3
 #   * no memory domains (NullHawk)             -> exit 3
-#   * a stale NES/SaveRAM left behind           -> exit 4
+#   * a stale NES/SaveRAM left behind           -> exit 4 (only if this ROM has a
+#                                                   battery bit; Beta 1 does not)
 #   * an expected output that is missing or 0 B -> exit 5
 #
 # BizHawk 2.11.1 facts this depends on, all measured on this machine:
@@ -33,8 +34,9 @@
 #   * Only ONE instance may run: the second is diverted to the first through the
 #     single-instance pipe and never shows a window. Run these serially.
 #   * NES/SaveRAM is written by BizHawk, not by us; the cartridge itself is only
-#     ever read. Wiping the SRAM is required, not cosmetic -- the cartridge has
-#     battery-backed PRG RAM and a stale save resumes the previous session.
+#     ever read. Whether a stale save can affect a run is a property of the
+#     dump's battery bit, which is read out of header byte 6 per ROM. Beta 1's
+#     bit is CLEAR, so nothing is cleared and nothing in NES/SaveRAM is touched.
 #
 # Environment:
 #   MAGICIAN_SETTLE   seconds to wait for the verdict (default 45)
@@ -113,24 +115,104 @@ if [ -n "${MAGICIAN_EXPECT_SHA1:-}" ]; then
   echo "run.sh: sha1 matches MAGICIAN_EXPECT_SHA1"
 fi
 
-# $F9A8-$F9DF is the fixed window holding the nmi/irq/reset trampolines and the
-# head of `reset`. It is always banked in on MMC3, and it is the region where the
-# rebuild and the cartridge first differ (the release has no `lda $2002` in `nmi`,
-# so its nmi vector is $F9AB and not $F9A8) -- which makes it a fingerprint that
-# can tell the two ROMs apart as well as tell a real load from a fallback.
-WIN_AT=$((0xF9A8))
-WIN_LEN=48
-# CPU $F9A8 is the last 16 KiB of a 128 KiB PRG, so it sits at PRG offset
-# $1F9A8. The PRG starts *after* the 16-byte iNES header, so the offset into the
-# file on disk is that plus 16. Getting this wrong by 16 is silent: the bytes read
-# back are real cartridge bytes from $F998, they just are not the ones asked for,
-# and the comparison fails with a first difference at byte 0 for no visible reason.
+# The identity window: a fixed-window read of the nmi/irq/reset trampolines, taken
+# out of the requested file and read back out of the loaded cartridge through the
+# core's own "System Bus" domain. A byte-for-byte identity check that a fallback
+# core or a wrong path cannot pass.
+#
+# **The window is derived from the ROM's own vectors, not written down.** It used
+# to be hard-coded at $F9A8, which was the *rebuild's* nmi against the *release*.
+# The six dumps of this title do not agree on where those trampolines are:
+#
+#   beta1    nmi $F917  irq $F922  reset $F930
+#   beta2    nmi $FA05  irq $FA0D  reset $FA1B
+#   beta3    nmi $F96E  irq $F976  reset $F984
+#   beta4    nmi $F9AB  irq $F9B3  reset $F9C1
+#   release  nmi $F9AB  irq $F9B3  reset $F9C1
+#
+# A hard-coded $F9A8 is inside beta1's X7 but nowhere near beta2's, so it reads
+# real cartridge bytes and simply fails, or worse passes against the wrong dump.
+# The vectors are the last 6 bytes of PRG, so they are read out of the file itself
+# and the window is placed to cover all three entry points.
 HDR=0
+PRG_LEN=0
 if [ "$(head -c 3 "$ROM" 2>/dev/null)" = "NES" ]; then
-  # The byte after the magic is the PRG size in 16 KiB units; the CHR size follows.
-  # A raw .bin has no header and is indexed from 0.
+  # Header byte 4 -- the 5th byte -- is the PRG size in 16 KiB units. It is the
+  # FIFTH byte, so it has to be read as `head -c 5 | tail -c 1`: the previous
+  # `head -c 1 | tail -c +5` asked for byte 5 of a one-byte stream, produced
+  # nothing, and made PRG_LEN 0 -- which sent the vector read to offset 10, i.e.
+  # the header's zero padding, and reported three zero vectors without complaint.
+  # That is the project's recurring bug: a plausible number about the wrong bytes.
+  # So PRG_LEN is now range-checked below, and the vectors are range-checked after
+  # that, and neither can be wrong quietly.
   HDR=16
+  PRG_NIB=$(head -c 5 "$ROM" | tail -c 1 | xxd -p)
+  case "$PRG_NIB" in
+    ''|*[!0-9a-fA-F]*)
+      echo "run.sh: FAIL -- could not read header byte 4 of $ROM as hex (got '$PRG_NIB')." >&2
+      exit 1 ;;
+  esac
+  PRG_LEN=$(( 0x$PRG_NIB * 16384 ))
 fi
+if [ "$PRG_LEN" -lt 0x8000 ] || [ "$PRG_LEN" -gt 0x100000 ]; then
+  echo "run.sh: FAIL -- PRG length is $PRG_LEN bytes." >&2
+  echo "run.sh:        Every dump of this title is 128 KiB. A value outside 32 KiB" >&2
+  echo "run.sh:        ..1 MiB means the header was misread, and every offset" >&2
+  echo "run.sh:        derived from it below would be wrong." >&2
+  exit 1
+fi
+VEC_OFF=$((HDR + PRG_LEN - 6))
+# The iNES vector order is NMI ($FFFA), RESET ($FFFC), IRQ/BRK ($FFFE) -- note
+# that RESET is in the middle. Reading the three little-endian words in the order
+# NMI, IRQ, RESET swaps two labels and produces numbers that all look fine.
+#
+# All three on ONE line. Emitting one per line and reading them with `read a b c`
+# looks right and is not: `read` consumes a single line, so the other two are
+# discarded and every vector comes out empty.
+VEC_LINE="$(od -An -tu1 -j "$VEC_OFF" -N 6 "$ROM" | awk '
+  { for (i = 1; i <= NF; i++) v[NR, i] = $i }
+  END {
+    if (NR < 1) exit 1
+    printf "%d %d %d\n", v[1,1] + v[1,2]*256, v[1,3] + v[1,4]*256, v[1,5] + v[1,6]*256
+  }')"
+if [ -z "$VEC_LINE" ]; then
+  echo "run.sh: FAIL -- read no vectors from $ROM at file offset $(printf '%#x' "$VEC_OFF")." >&2
+  exit 1
+fi
+read -r VEC_NMI VEC_RESET VEC_IRQ <<<"$VEC_LINE"
+# Belt and braces: a non-numeric or empty vector must stop the run here, not
+# become a window offset that happens to read real cartridge bytes.
+for v in VEC_NMI VEC_RESET VEC_IRQ; do
+  case "${!v:-}" in
+    ''|*[!0-9]*) echo "run.sh: FAIL -- $v is '${!v}', not a number, read from $ROM." >&2
+                exit 1 ;;
+  esac
+  if [ "${!v}" -lt 0xC000 ] || [ "${!v}" -gt 0xFFFF ]; then
+    echo "run.sh: FAIL -- $v = \$${!v} is outside slot 15 (\$C000-\$FFFF)." >&2
+    echo "run.sh:        These dumps are MMC3 with a 128 KiB PRG, so all three" >&2
+    echo "run.sh:        vectors live in the fixed \$E000 window. A value out of" >&2
+    echo "run.sh:        range means the offset arithmetic above is wrong." >&2
+    exit 1
+  fi
+done
+
+# The window starts a little below the lowest of the three so the whole prologue
+# is covered, and is then *checked* to contain all three. This assertion is the
+# point: an off-by-16 in the file offset below is silent, because the bytes read
+# back are still real cartridge bytes -- just the ones 16 earlier.
+WIN_LEN=48
+WIN_AT=$(( VEC_NMI - 8 ))
+for v in VEC_NMI VEC_RESET VEC_IRQ; do
+  t=${!v}
+  if [ "$t" -lt "$WIN_AT" ] || [ "$t" -ge $((WIN_AT + WIN_LEN)) ]; then
+    echo "run.sh: FAIL -- the identity window \$$(printf '%04X' "$WIN_AT")+$$WIN_LEN" >&2
+    echo "run.sh:        does not contain $v = \$$(printf '%04X' "$t")." >&2
+    echo "run.sh:        widen WIN_LEN or move WIN_AT; do not paper over it." >&2
+    exit 1
+  fi
+done
+# CPU addresses in slot 15 ($C000-$FFFF) sit at PRG offset +$10000, and the PRG
+# starts after the 16-byte iNES header, so the file offset is that plus $HDR.
 WIN_OFF=$((WIN_AT + 0x10000 + HDR))
 if [ "$(stat -c %s "$ROM")" -ge $((WIN_OFF + WIN_LEN)) ]; then
   WIN_HEX="$(dd if="$ROM" bs=1 skip=$WIN_OFF count=$WIN_LEN status=none | xxd -p -c 256)"
@@ -138,19 +220,56 @@ else
   echo "run.sh: $ROM is too small to hold the fixed window at file offset $(printf '%#x' "$WIN_OFF")" >&2
   exit 1
 fi
+printf 'run.sh: vectors from the file: nmi=$%04X reset=$%04X irq=$%04X\n' \
+  "$VEC_NMI" "$VEC_RESET" "$VEC_IRQ"
 
-SRAM="${MAGICIAN_SRAM:-$BIZ/NES/SaveRAM}"
-mkdir -p "$SRAM"
-# Clear every saved image, not just one: the name comes from the ROM's filename.
-find "$SRAM" -maxdepth 1 -name '*.SaveRAM*' -delete
-# A save that BizHawk rewrites *during* the run is fine -- it is the state at
-# boot that has to be clean, and that is what was just deleted.
-if compgen -G "$SRAM/*.SaveRAM*" >/dev/null; then
-  echo "run.sh: NES/SaveRAM is still not empty after wiping it:" >&2
-  ls -la "$SRAM"/*.SaveRAM* >&2
-  exit 4
+# Battery-backed PRG RAM, per dump, from the header bit -- never assumed. Beta 1's
+# header byte 6 is $40, so its battery bit is CLEAR and every other dump's is $42
+# and set. It used to be written in this script's header comment as a fact about
+# "the cartridge", which was true of the release and false of the target.
+HAS_BATTERY=0
+if [ "$HDR" = "16" ]; then
+  F6=$(od -An -tu1 -j 6 -N 1 "$ROM" | tr -d ' ')
+  if [ $(( F6 & 2 )) -ne 0 ]; then HAS_BATTERY=1; fi
+  echo "run.sh: header byte 6 = \$$(printf '%02X' "$F6"), battery bit $([ "$HAS_BATTERY" = 1 ] && echo SET || echo CLEAR)"
 fi
-echo "run.sh: cleared $SRAM/*.SaveRAM"
+
+# ------------------------------------------------------------------- SaveRAM
+# Nothing here is deleted.
+#
+# This used to `find "$SRAM" -name '*.SaveRAM*' -delete` unconditionally, on the
+# stated grounds that "the cartridge has battery-backed PRG RAM and a stale save
+# resumes the previous session". That reason is a property of the *dump*, not of
+# this script, and it is false for the target: Beta 1's header byte 6 is $40, its
+# battery bit is CLEAR, and BizHawk keeps no save for it. So the wipe was
+# destroying the user's save files to protect against a hazard that does not
+# exist for the ROM being run.
+#
+# What is true, and all that is needed:
+#   * battery CLEAR  -> BizHawk has no save state for this ROM. Nothing to do.
+#   * battery SET, and no save file for this ROM's name -> nothing to do.
+#   * battery SET, and a save file exists -> a stale save *would* be resumed, and
+#     it is the user's file, so this refuses rather than deleting it.
+#
+# `--never write to NES/SaveRAM/` is taken literally: this script creates nothing
+# there either. MAGICIAN_SRAM still names the directory to *look* in.
+SRAM="${MAGICIAN_SRAM:-$BIZ/NES/SaveRAM}"
+# BizHawk names the save after the ROM's filename, stem only.
+SAVE_STEM="$(basename "$ROM"); SAVE_STEM="${SAVE_STEM%.*}"
+if [ "$HAS_BATTERY" = "0" ]; then
+  echo "run.sh: battery bit CLEAR -- BizHawk keeps no save for $SAVE_STEM," \
+       "so there is no stale state to clear. NES/SaveRAM untouched."
+elif [ -d "$SRAM" ] && compgen -G "$SRAM/$SAVE_STEM.SaveRAM*" >/dev/null; then
+  echo "run.sh: FAIL -- battery bit SET and $SRAM/$SAVE_STEM.SaveRAM exists," >&2
+  echo "run.sh:        so BizHawk would resume it and this run's memory reads" >&2
+  echo "run.sh:        would not be from a cold boot." >&2
+  echo "run.sh:        Move that file aside yourself, or point MAGICIAN_SRAM at a" >&2
+  echo "run.sh:        directory that has none. This script will not delete it." >&2
+  ls -la "$SRAM/$SAVE_STEM.SaveRAM"* >&2
+  exit 4
+else
+  echo "run.sh: battery bit SET but no save for $SAVE_STEM in $SRAM; nothing to clear."
+fi
 
 # The verdict file must not be able to survive from a previous run, or a failed
 # launch would be reported as a passing one -- the exact bug, one level up.

@@ -25,11 +25,16 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from cartref import DEFAULT_CART, cart  # noqa: E402
 from dis6502 import disasm_block, read_cart  # noqa: E402
 
-ROMDIR = pathlib.Path("/extdrive/backups/SHARE/roms/nes")
-RELEASE = ROMDIR / "Magician (USA).nes"
-BETA = ROMDIR / "Magician (USA) (Beta).nes"
+# This tool exists to put two dumps side by side, so it names three of them
+# rather than one default. `BETA1` is the build this source came from and is
+# what `diff` compares against by default; `BETA` is the pre-existing
+# Magician (USA) (Beta).nes, which is byte-identical to Beta 3.
+BETA1 = cart("beta1")
+RELEASE = cart("release")
+BETA = cart("beta")
 REBUILD = pathlib.Path(__file__).resolve().parents[1] / "asm" / "out" / "prg.bin"
 
 PRG_SIZE = 128 * 1024
@@ -135,12 +140,17 @@ def cmd_bank(args):
 
 
 def cmd_diff(args):
-    rel = read_cart(RELEASE)
-    beta = read_cart(BETA)
-    print(f"release body sha1 bd806d7f...  beta body sha1 2a0a444d...")
-    print(f"differing bytes: {sum(1 for a, b in zip(rel, beta) if a != b)} "
+    ref_name = "beta1" if args.cart.resolve() == BETA1.resolve() else "release"
+    ref = read_cart(args.cart)
+    other = read_cart(BETA1 if ref_name == "release" else RELEASE)
+    print(f"{ref_name:8s} {args.cart}")
+    print(f"{'beta1' if ref_name == 'release' else 'release':8s} "
+          f"{BETA1 if ref_name == 'release' else RELEASE}")
+    print(f"differing bytes: {sum(1 for a, b in zip(ref, other) if a != b)} "
           f"/ {PRG_SIZE}")
-    print(f"non-zero: release {nz(rel)}  beta {nz(beta)}\n")
+    print(f"non-zero: {ref_name} {nz(ref)}  "
+          f"{'beta1' if ref_name == 'release' else 'release'} {nz(other)}\n")
+    rel, beta = other, ref
 
     ours = args.prg.read_bytes() if args.prg else bytes(PRG_SIZE)
 
@@ -208,10 +218,10 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("bank", "diff"):
         p = sub.add_parser(name)
-        p.add_argument("--cart", type=pathlib.Path, default=RELEASE)
+        p.add_argument("--cart", type=pathlib.Path, default=DEFAULT_CART)
         p.add_argument("--prg", type=pathlib.Path, default=REBUILD)
     p = sub.add_parser("runs")
-    p.add_argument("--cart", type=pathlib.Path, default=RELEASE)
+    p.add_argument("--cart", type=pathlib.Path, default=DEFAULT_CART)
     p.add_argument("--prg", type=pathlib.Path, default=REBUILD)
     p.add_argument("--lo", type=lambda s: int(s, 0), default=0)
     p.add_argument("--hi", type=lambda s: int(s, 0), default=PRG_SIZE)

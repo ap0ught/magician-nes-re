@@ -26,6 +26,9 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from cartref import DEFAULT_CART  # noqa: E402
+
 # ----------------------------------------------------------------- the table
 # opcode -> (mnemonic, mode). Built from the OPCODES dict in asm/pds6502.py at
 # import time where possible; the literal below is the fallback so this file
@@ -294,7 +297,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cart", type=pathlib.Path,
-                    default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
+                    default=DEFAULT_CART)
     ap.add_argument("--prg", type=pathlib.Path, help="disassemble a raw PRG instead")
     ap.add_argument("--bank", type=lambda s: int(s, 0), help="16 KiB PRG bank")
     ap.add_argument("--range", help="lo:hi, both CPU addresses or file offsets")

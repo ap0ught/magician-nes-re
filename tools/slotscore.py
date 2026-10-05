@@ -42,12 +42,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "asm"))
 sys.path.insert(0, str(ROOT / "tools"))
+from cartref import DEFAULT_CART  # noqa: E402
 
 import build as B  # noqa: E402
 import pds6502  # noqa: E402
 from dis6502 import read_cart  # noqa: E402
 
-CART = pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes")
+CART = DEFAULT_CART
 
 
 class Footprint(pds6502.Assembler):

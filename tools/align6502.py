@@ -48,6 +48,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from cartref import DEFAULT_CART  # noqa: E402
 import dis6502  # noqa: E402
 
 
@@ -151,7 +152,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cart", type=pathlib.Path,
-                    default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"),
+                    default=DEFAULT_CART,
                     help="the released cartridge (read-only)")
     ap.add_argument("--prg", type=pathlib.Path,
                     default=pathlib.Path("asm/out/magician-rebuilt.nes"),

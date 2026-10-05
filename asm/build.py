@@ -1132,7 +1132,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cart", type=pathlib.Path,
-                    default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
+                    default=patches.cart_path(patches.DEFAULT_CART),
+                    help="which dump to build against and measure against. "
+                         f"Defaults to the registry's target, {patches.DEFAULT_CART!r} "
+                         f"-- see asm/patches.py's CARTS. This is Beta 1, the build "
+                         "this source came from, and not the release.")
     ap.add_argument("--cart-dir", type=pathlib.Path, default=patches.CART_DIR,
                     help="where the manifest's named dumps are read from")
     ap.add_argument("--no-patches", action="store_true",

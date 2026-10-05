@@ -65,7 +65,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CART = Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cartref import DEFAULT_CART  # noqa: E402
+DEFAULT_CART = DEFAULT_CART
 SLOT = 8192
 SLOTS = 131072 // SLOT
 WINDOW = 16

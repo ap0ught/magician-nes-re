@@ -25,6 +25,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
+from cartref import DEFAULT_CART  # noqa: E402
 from dis6502 import LITERAL, MODE_LEN  # noqa: E402
 
 
@@ -43,7 +44,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cart", type=pathlib.Path,
-                    default=pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
+                    default=DEFAULT_CART)
     ap.add_argument("--reb", type=pathlib.Path,
                     default=ROOT / "asm" / "out" / "prg.bin")
     ap.add_argument("start", type=lambda s: int(s, 0))

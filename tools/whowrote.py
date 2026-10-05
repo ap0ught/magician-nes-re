@@ -22,6 +22,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "asm"))
 sys.path.insert(0, str(ROOT / "tools"))
+from cartref import DEFAULT_CART  # noqa: E402
 
 import build as B  # noqa: E402
 import pds6502  # noqa: E402
@@ -64,7 +65,7 @@ def main() -> int:
     args = ap.parse_args()
 
     cart_prg, _cart_chr = B.read_cart(
-        pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
+        DEFAULT_CART)
 
     # Assemble the project pass by hand rather than reaching into build.py, so
     # the tracer can be switched on for exactly that pass.
@@ -123,7 +124,7 @@ def main() -> int:
 
     print(f"\n{'8K slot':>8} {'bank':>5} {'oursNZ':>7} {'cartNZ':>7}  owners")
     cart = B.read_cart(
-        pathlib.Path("/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))[0]
+        DEFAULT_CART)[0]
     for slot in range(16):
         lo, hi = slot * 0x2000, (slot + 1) * 0x2000
         owners: dict[str, int] = {}
