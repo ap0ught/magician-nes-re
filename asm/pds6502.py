@@ -40,9 +40,11 @@ The dialect, as measured from the source
   (`memchk c000,b`). `"A"` is a character constant, `"MAGIC1+"` a string.
 * **Byte selectors.** `<expr` and `>expr` are the low and high byte, as
   `option 0,0` documents. Infix `<` and `>` are comparisons, as in `if *>$7fff`.
-* **Directives.** `hex` (raw hex digit pairs, ignoring `radix`), `db`, `dw`,
-  `dl` (4 bytes), `dh` (2 bytes), `ds n,f`, `incbin`, `include`, `error`,
-  `end`, and the no-ops `send`, `option`, `radix`.
+* **Directives.** `hex` (raw hex digit pairs, ignoring `radix`), `db`,
+  `dw`, `dl`/`dh` (the LOW and HIGH halves of a pointer list: ONE byte each,
+  not the Atari MACRO "define long" of 4 and 2 -- see `directive` and
+  `src/testing/test_pointer_widths.py`), `ds n,f`, `incbin`, `include`,
+  `error`, `end`, and the no-ops `send`, `option`, `radix`.
 
 `if 0=1` in x7 (lines 1005-1147) was long assumed to be dead -- an obsolete
 hand-written address table, with the live branch packing the data files
@@ -1523,7 +1525,30 @@ class Assembler:
                 self.emit(int(digits[i:i + 2], 16))
         elif op in ("db", "dc", "dw", "dl", "dh"):
             # `dc` is `db` under its own name: "define character".
-            width = {"db": 1, "dc": 1, "dw": 2, "dh": 2, "dl": 4}[op]
+            #
+            # `dl` and `dh` are the LOW and HIGH halves of a pointer list and each
+            # emits exactly ONE byte. They were `dl`=4 and `dh`=2 here, which is
+            # the Atari MACRO reading of `dl` ("define long") applied to a source
+            # that does not use it that way -- and it was wrong for every use in
+            # this tree. Three independent proofs, none of them a guess:
+            #
+            #   * `SHOPDAT.SRC:451-456` writes `ijvl dl <18 pointers>` followed by
+            #     `ijvh dh <the same 18>`, and `x5.PDS:1405-1409` reads them as
+            #     `lda ijvl,x / sta t2 / lda ijvh,x / sta t3 / jmp (t2)`. So the
+            #     pair is one byte each per entry and the pair is 36 bytes. Beta 1
+            #     has 36 bytes there; this assembler emitted 72 per table.
+            #   * `MISC.SRC:866-869` writes `dl 35,0,0,40,45,50,55,60` -- a list of
+            #     values in 0..180, indexed as bytes.
+            #   * `ANIM.SRC:595-601` writes `dl l20m+$100*$06+$0a8,...` and then
+            #     `dh` of the *same* expressions. The `+$100*$06` term only moves
+            #     the high byte, so `dh` must be the high-byte emitter; with width 2
+            #     it duplicated the whole pointer instead.
+            #
+            # This is a class-`c` finding -- an assembler bug, not a source/cart
+            # difference -- so it is fixed here and no bytes are taken from a
+            # cartridge to paper over it.
+            width, base = {"db": (1, 0), "dc": (1, 0), "dw": (2, 0),
+                           "dl": (1, 0), "dh": (1, 1)}[op]
             for item in split_operands(operands):
                 # `db "ABC"` emits one byte per character, not one byte per
                 # string. `Expr.string_value` folds a string into a little-endian
@@ -1539,13 +1564,17 @@ class Assembler:
                 # Only `db`/`dc` are byte-per-character. A string is not a number,
                 # so `dw "AB"` has no defined width here; the source never writes
                 # one, and it still folds as before rather than inventing a width.
-                if width == 1 and item[:1] == '"' and len(item) >= 2 \
+                # Only `db`/`dc` are byte-per-character. `dl` also has width 1 now,
+                # but that is a coincidence of arithmetic, not a licence: the source
+                # writes no `dl "..."`, and treating a string as a list of low bytes
+                # would be inventing a rule.
+                if op in ("db", "dc") and item[:1] == '"' and len(item) >= 2 \
                         and item[-1:] == '"':
                     for ch in item[1:-1]:
                         self.emit(ord(ch) & 0xFF)
                     continue
                 v = self.value_or_defer(item, ln.where)
-                for k in range(width):
+                for k in range(base, base + width):
                     self.emit((v >> (8 * k)) & 0xFF)
         elif op == "ds":
             args = split_operands(operands)

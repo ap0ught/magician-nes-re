@@ -6,7 +6,7 @@ plus a source-level rebuild of the cartridge from that source. **The Rust core h
 been started** (`crates/` does not exist); what exists is the rebuild, and it does not
 yet assemble completely. See *Status*.
 
-## The build target is Beta 1, and that changed the headline
+## The build target is Beta 1, and that changed the headline. A `dl`/`dh` bug changed it again
 
 **Everything below that quotes a percentage, an address, or a "the source is
 missing this" finding was measured against the release
@@ -23,16 +23,38 @@ PRG: 78555/131072 bytes identical to the cartridge (59.9%)
   of which from the patch manifest: 0
 ```
 
-| | release | beta1 (current target) |
-|---|---|---|
-| PRG match | 39 832 (30.4%) | **78 555 (59.9%)** |
-| X7 anchor | `$F166` (from reset `$F9C1`) | **`$F0D5`** (from reset `$F930`) |
-| `reset` vs cartridge | 27 instructions, none identical | **31 of 31 byte-identical** |
-| nmi / reset / irq | `$F9A8` / `$F9C1` / `$F9B3`, first two suspect | **`$F917` / `$F930` / `$F922`, all exact** |
-| title screen (BizHawk, frame 60) | not measured | **nametable 1024/1024, CIRAM 4096/4096** |
-| X7's DAT bytes matching | 52.3% | **98.4%** |
-| CHR 4 KiB pages matching | 8/32 | **15/32** |
-| patch manifest regions | 1 | **0** |
+**59.9% was itself measured with an assembler bug in the tree, so 59.9% is not
+the current number.** `dl`/`dh` were implemented as 4 and 2 bytes -- the Atari
+MACRO reading of "define long" -- when the source uses them as the low and high
+halves of a pointer list, one byte each, read back by `lda ijvl,x / sta t2 /
+lda ijvh,x / sta t3 / jmp (t2)` (`x5.pds:755-760`) into two adjacent zero-page
+bytes. Every pointer table in the game was being emitted two and a half times too
+long. Fixing it, with a test that fails loudly against the old widths
+(`src/testing/test_pointer_widths.py`), moves the headline a second time:
+
+```
+PRG: 96413/131072 bytes identical to the cartridge (73.6%)
+  of which from the source alone : 96413 (73.6%)
+  of which from the patch manifest: 0 (asm/patches.manifest has no regions)
+```
+
+**+17 858 bytes, every one of them source-derived, with the manifest still
+empty.** Both figures were measured by building both ways on this machine and
+reading the build's own byte accounting, not recalled from a report; the build is
+what moves the number, in one direction or the other. The anchor, the three
+vectors, the title screen and the CHR page count are unmoved by this -- it is a
+placement-neutral bug, which is why nothing else in the table changed.
+
+| | release | beta1, `dl`/`dh` at 4/2 (was "current") | beta1, widths fixed (current) |
+|---|---|---|---|
+| PRG match | 39 832 (30.4%) | 78 555 (59.9%) | **96 413 (73.6%)** |
+| X7 anchor | `$F166` (from reset `$F9C1`) | `$F0D5` (from reset `$F930`) | **`$F0D5`** (unchanged) |
+| `reset` vs cartridge | 27 instructions, none identical | 31 of 31 byte-identical | **31 of 31** (unchanged) |
+| nmi / reset / irq | `$F9A8` / `$F9C1` / `$F9B3`, first two suspect | `$F917` / `$F930` / `$F922`, all exact | **unchanged** |
+| title screen (BizHawk, frame 60) | not measured | nametable 1024/1024, CIRAM 4096/4096 | **unchanged** |
+| X7's DAT bytes matching | 52.3% | 98.4% | **99.5%** |
+| CHR 4 KiB pages matching | 8/32 | 15/32 | **15/32** (unchanged) |
+| patch manifest regions | 1 | 0 | **0** |
 
 The six dumps are named in `asm/patches.py`'s registry and **verified against the
 bytes on disk** by `tools/carts.py` -- body SHA1, whole-file SHA1, the battery
@@ -258,13 +280,16 @@ The build prints the byte accounting on every run, and the two lines are not
 interchangeable:
 
 ```
-PRG: 78555/131072 bytes identical to the cartridge (59.9%)
-  of which from the source alone : 78555 (59.9%)
+PRG: 96413/131072 bytes identical to the cartridge (73.6%)
+  of which from the source alone : 96413 (73.6%)
   of which from the patch manifest: 0 (asm/patches.manifest has no regions)
 ```
 
 Only the first is evidence about the source. A rising total is otherwise
-indistinguishable from a rising number of hidden bugs.
+indistinguishable from a rising number of hidden bugs — which is exactly why
+`src/testing/test_pointer_widths.py` exists: the 59.9% above it was a total that
+had risen for the wrong reason, and it rose again for the right one only after
+the `dl`/`dh` widths were pinned by a test.
 
 **Three of the eight module placements are pinned, and five are ASSUMED.** The build
 prints the whole table with the evidence for each. `X6` is pinned "by
