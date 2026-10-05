@@ -230,6 +230,8 @@ different spell than you meant to. See `PROVENANCE.md` §8.
 ```
 vendor/Magician-NES/   Eurocom's source, vendored, READ-ONLY, pinned bf653a4
 src/magician/          OURS. Everything we author; assemble this, not vendor/
+src/play/              the PLAY harness: MAIN plays an input log, SCOUT searches it.
+                       See "The play harness" below.
 tools/pds_extract.py   PDS container -> plain text
 tools/                 build and analysis helpers
 asm/                   PDS-compatible assembler + cartridge build
@@ -360,6 +362,59 @@ file `$1FC40`, where the source's `X7.PDS:997` puts them at `$FB80`. Regions
 classified (a), (c) or (d) are refused by the applier and recorded in `GAPMAP.md`
 with their evidence instead, because filling those would destroy the evidence of
 the bug.
+
+## The play harness
+
+`src/play/` drives the game through BizHawk and is where the *behaviour* of a build is
+measured. It is developed and proven against **Beta 1** — the cartridge the source was
+written for, body SHA1 `af51e12d…` — and the rebuild is then run with the identical route
+as a clearly-labelled report. The distinction is the point: a segment that works on Beta 1
+is a working driver, and a segment that works on Beta 1 and fails on ours is a finding
+about our ROM. A harness only ever run against a build that does not boot cannot tell
+those apart.
+
+    python3 src/play/milestones/m1_first_town.py --beta1     # the TARGET run
+    python3 src/play/milestones/m1_first_town.py --rebuild   # the REPORT run
+    python3 src/play/recon.py --rom <any dump>              # reconnaissance
+    python3 src/play/smoke.py                                # is the bridge answering
+
+### MAIN and SCOUT
+
+| | |
+|---|---|
+| `search.py` | a scout: `Attempt` is one record per try, `OverBudget` is a `BaseException` on purpose, `Recorder` captures a policy's frames as an input list |
+| `runner.py` | `Run`: MAIN plays one master input log forward and is never rewound; a SCOUT searches each segment from a **copy** of MAIN's state and its winner is replayed into MAIN |
+| `route.py` | a route is an ordered list of segments; a segment is a **factory** and a **success test** on one RAM image |
+| `first_town.py` | the first town as seven segments |
+| `ram.py` | every named RAM field. The single source of truth; no other module may write an address |
+| `bridge.lua` | the Lua half, inside EmuHawk. Predicates are evaluated in the core, not over the socket |
+| `differential.py` | two ROMs, one input log: the first frame at which their RAM differs at all |
+
+There is **one emulator, not one per scout.** BizHawk diverts a second launch into the
+first through its single-instance pipe, so "a copy of MAIN" is a savestate on disk:
+`save_state` → every attempt restores it → the winner is replayed into MAIN. `Run.open()`
+refuses `scouts > 1` rather than pretending, and `parallel_search` keeps the general
+list-of-scouts form anyway.
+
+**The losing attempts are kept.** `logs/search/<label>/<segment>.attempts.txt` has one
+line per try — winners *and* losers — with the note each ended on. On Beta 1's `walk`,
+that ledger is the map: `Down` and `Up` do not move the player, `Left` moves it 42 px in
+70 frames and `Right` 68.
+
+### What it found that a straight-line script could not
+
+The first scout route took 769 frames; the second took 307, and nothing about the game
+changed. Each transition's first attempt drew a 120-frame lead-in before pressing the
+button, worked, and stopped — because `first_success` means the first success is the win.
+Attempt 2 drew 0 frames and worked too. The lead-in was 118 frames of standing still on
+each of four segments.
+
+    MILESTONE 1 COMPLETE AND VERIFIED on Beta 1
+    fingerprint a95fe5355baff0c3189df0c0ed27718ac5292fd8, replayed from power-on -- MATCH
+
+On the rebuild the same route stops at `into_level` on 8 of 8 attempts, every one ending
+`phase=3 curlev=$20 mapind=2`. `differential.py` puts the divergence at **frame 81**, in
+one byte: `mapind` ($004D) is 1 where Beta 1 leaves it 0. `journal/13` has the rest.
 
 ## Status
 

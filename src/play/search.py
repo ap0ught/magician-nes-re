@@ -109,9 +109,17 @@ class Attempt:
     where: str = ""          # short description of the state it ended in
     scout: int = 0
 
-    def line(self) -> str:
+    def line(self, width: int = 160) -> str:
+        """One attempt as one line, for a ledger or a console.
+
+        `width` is 160 rather than the 60 it started at because the note is the
+        part that says WHY, and 60 characters cut it exactly where the reason
+        lives: `p_pulse`'s note ends "...that is the CUT, not a verdict on the
+        approach", which is 40 characters past 60. A ledger that truncates the
+        explanation is a ledger that says only what happened.
+        """
         return (f"seed {self.seed:<5} {self.frames:>6}f  "
-                f"{'OK  ' if self.success else 'no  '}  {self.note[:60]}"
+                f"{'OK  ' if self.success else 'no  '}  {self.note[:width]}"
                 + (f"  [{self.where}]" if self.where else ""))
 
 
