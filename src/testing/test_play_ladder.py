@@ -402,6 +402,136 @@ check("25: the ladder's mana claim is the one that will be MEASURED, and the "
       any("valsav" in s.why for s in route.segments if s.name == "rune_price")
       and ram.f("valsav").length == 2)
 
+# ============================================ 26. WHICH BUTTON ANSWERS YES
+#
+# IT FAILED WHEN FIRST WRITTEN, in the sense that writing it is what found the
+# error: `shop_buy`'s `why` claimed "`syesno` tells them apart by the carry out of
+# `lsr a`, so A is yes". The source says the opposite, and says something more
+# subtle than the opposite -- A and B mean DIFFERENT THINGS in the two commands.
+#
+# These checks re-derive it from the source text rather than trusting
+# `ladder.A_IS_YES`, because a constant that merely restates a comment is exactly
+# the kind of thing this project has been reduced to before.
+x5 = source_lines("x5.pds")
+
+
+def _x5(n):
+    return x5[n - 1]
+
+
+# BY LABEL, NOT BY LINE NUMBER. The first version of this section hardcoded
+# 809..814 and two checks failed, because `waityn` is at 806 and `sbuy` at 814 --
+# and a check that cites a line number it got wrong is a check that will keep
+# passing or failing for reasons unrelated to the game. `source_lines()` gives the
+# file's lines; finding the block by its own label means a citation that drifts
+# shows up as a diff rather than as a wrong number in a comment.
+def _block(label, nlines=10):
+    """The next `nlines` instructions from `label`, split on CARRIAGE RETURNS too.
+
+    The recovered source carries CRs inside physical lines -- `ladder._load_*`
+    reads these files as BYTES and says so for exactly this reason -- so
+    `x5[i]` can be `"waityn\tjsr showshop\r\tjsr waitpan"`. Splitting only on
+    newlines puts two instructions on one "line", and every index below is then
+    off by one. Two checks failed to that on the first run of this section.
+    """
+    flat = [l for line in x5 for l in line.replace("\r", "\n").split("\n")]
+    for i, line in enumerate(flat):
+        if line.strip().startswith(label):
+            return [l for l in flat[i:i + nlines]]
+    raise AssertionError(f"x5.pds has no label {label!r}")
+
+
+waityn = _block("waityn", 10)
+# Indexed BY INSTRUCTION, and found by pattern rather than position: the first
+# version of this check read waityn[1]..[4] for these four, and with the label's
+# own line at index 0 they are at 2..5. A citation that is off by one is a
+# citation that will be "corrected" into a different claim later.
+_i_ldx = next((i for i, l in enumerate(waityn) if "ldx #$80" in l), -1)
+_i_a = next((i for i, l in enumerate(waityn) if "dfirea" in l), -1)
+_i_inx = next((i for i, l in enumerate(waityn) if l.strip().startswith("inx")), -1)
+_i_b = next((i for i, l in enumerate(waityn) if "dfireb" in l), -1)
+check("26a: `waityn` records $80 for A and $81 for B -- ldx #$80 BEFORE the A "
+      "test, then inx BEFORE the B test, so A is $80 and B is $81 and the order "
+      "matters",
+      min(_i_ldx, _i_a, _i_inx, _i_b) >= 0
+      and _i_ldx < _i_a < _i_inx < _i_b,
+      f"indices ldx={_i_ldx} dfirea={_i_a} inx={_i_inx} dfireb={_i_b}; "
+      "block: " + " | ".join(l.strip() for l in waityn))
+check("26b: and it STORES that value in ynflag, so the button press is what the "
+      "shop script later reads -- and it reads the DEBOUNCED A/B edge bytes, so "
+      "a press must be released between two of them",
+      any("stx ynflag" in l for l in waityn)
+      # The `lda X` and the `bne` are SEPARATE instructions in the recovered
+      # source, one per "line" here. Checking for them in the same string -- which
+      # the first version did -- failed on a block that plainly contains both.
+      and any(l.strip() == "lda dfirea" for l in waityn)
+      and any(l.strip() == "lda dfireb" for l in waityn)
+      and sum(1 for l in waityn if l.strip().startswith("bne")) >= 2,
+      "waityn: " + " | ".join(l.strip() for l in waityn))
+# syesno: `iny / lsr a` then `bcs sjump`. $80 -> C=1 -> sjump (no); $81 -> C=0 ->
+# falls through to `iny / jmp redo` (yes).
+syesno = _block("syesno", 10)
+check("26c: `syesno` distinguishes them by the CARRY out of `lsr a`, and branches "
+      "on C SET to the NO path -- so $80 (A) is NO",
+      any("lsr a" in l for l in syesno) and any("C=0=yes" in l for l in syesno),
+      "syesno: " + " | ".join(l.strip() for l in syesno))
+syesno = _block("syesno", 10)
+sx = [l for l in syesno if "bcs" in l]
+check("26d: and the branch on C-set in that block goes to `sjump`, which is the "
+      "NO path -- the jump target has to be read, not assumed",
+      sx and "sjump" in sx[0],
+      f"the bcs lines in syesno: {[l.strip() for l in sx]}")
+sy = [l for l in syesno if "jmp redo" in l]
+check("26e: and the fall-through after it is `jmp redo`, so $81 (B) is YES. A "
+      "question is answered YES with B",
+      sy and ladder.QUESTION_YES_BUTTON == "B"
+      and ladder.A_IS_YES["syesno"] is False,
+      f"fall-through {[l.strip() for l in sy]} "
+      f"QUESTION_YES_BUTTON={ladder.QUESTION_YES_BUTTON!r}")
+# sbuy: `cpy #$81 / bcc !b`. $80 < $81, so A takes the branch that buys.
+sbuy = _block("sbuy", 45)
+check("26f: `sbuy` uses the OPPOSITE comparison -- `cpy #$81 / bcc` -- so $80 (A) "
+      "is BELOW $81 and takes the buy path. A purchase is confirmed with A, which "
+      "is the opposite of a question",
+      any("cpy #$81" in l for l in sbuy)
+      and ladder.BUY_BUTTON == "A" and ladder.A_IS_YES["sbuy"] is True,
+      "the sbuy lines with cpy/bcc: "
+      + " | ".join(l.strip() for l in sbuy if "cpy" in l or "bcc" in l))
+def _at(needle):
+    """Offset of `needle` within the `sbuy` block, or -1."""
+    for i, line in enumerate(sbuy):
+        if needle in line:
+            return i
+    return -1
+
+
+i_cpy, i_bcc, i_lbl, i_add, i_upw = (_at("cpy #$81"), _at("bcc !b"),
+                                    _at("!b	adc") or _at("!b "),
+                                    _at("addinv"), _at("upwealth"))
+check("26g: and `bcc !b` lands on the BUY path -- the label `!b` is `adc #$21 ; "
+      "save msg`, followed by `addinv` and `upwealth`. So 'A buys' is read off "
+      "the buy path itself, not inferred from the comparison alone",
+      min(i_bcc, i_add, i_upw) >= 0 and i_add > i_bcc and i_upw > i_bcc
+      and i_lbl < i_add,
+      f"cpy #$81 at +{i_cpy}, bcc !b at +{i_bcc}, !b at +{i_lbl}, "
+      f"addinv at +{i_add}, upwealth at +{i_upw} -- !b and addinv must both come "
+      "after the branch, and addinv after the label")
+check("26h: A_IS_YES is not one boolean. The two commands disagree, and a single "
+      "flag would have to be wrong for one of them",
+      ladder.A_IS_YES == {"syesno": False, "sbuy": True}
+      and ladder.A_IS_YES["syesno"] != ladder.A_IS_YES["sbuy"],
+      f"A_IS_YES={ladder.A_IS_YES}")
+check("26i: and no segment's `why` still claims A is yes anywhere",
+      not any("so A is yes" in s.why for s in route.segments),
+      str([s.name for s in route.segments if "so A is yes" in s.why]))
+check("26j: the purchase button is A and the question button is B, and they are "
+      "NAMED SEPARATELY -- a single YES_BUTTON constant is what produced the wrong "
+      "comment in the first place",
+      ladder.BUY_BUTTON == "A" and ladder.QUESTION_YES_BUTTON == "B"
+      and ladder.BUY_BUTTON != ladder.QUESTION_YES_BUTTON,
+      f"BUY_BUTTON={ladder.BUY_BUTTON!r} "
+      f"QUESTION_YES_BUTTON={ladder.QUESTION_YES_BUTTON!r}")
+
 ok(f"the file ran every check above ({_n} checks)", _fails == 0)
 if _fails:
     print(f"\n{_fails} check(s) FAILED")

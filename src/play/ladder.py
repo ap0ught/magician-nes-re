@@ -306,6 +306,48 @@ def safe_to_drink(presses: int) -> bool:
     return presses < DRINK_LIMIT
 
 
+# A IS YES, OR IS IT. Settled from the source, against a comment that said
+# otherwise.
+#
+# `waityn` (x5.pds:807-814) is where a shop records WHICH button was pressed:
+#
+#     waityn  jsr showshop / jsr waitpan
+#             ldx #$80 / lda dfirea / bne !a
+#             inx / lda dfireb / bne !a
+#             rts
+#     !a      stx ynflag / jmp rejump
+#
+# So A records `$80` and B records `$81`. What those two values MEAN differs by
+# command, and this is the part the walkthrough-shaped intuition gets wrong:
+#
+#   * `syesno` (x5.pds:803-812) -- a plain question. It does `iny / lsr a`, and
+#     tests the CARRY: `$80` shifts to C=1 and branches `bcs sjump`, which is the
+#     NO path; `$81` shifts to C=0 and falls through to `iny / jmp redo`, which is
+#     YES. **So for a question, B is yes and A is no.**
+#
+#   * `sbuy` (x5.pds:824-834) -- a purchase. It does `cpy #$81 / bcc !b`, which
+#     is the opposite comparison: `$80` (A) is BELOW `$81`, so A takes `!b`, which
+#     is the branch that calls `addinv` and `upwealth`. **So for a purchase, A
+#     buys and B declines.**
+#
+# Both readings are self-consistent and neither is a typo, which is why the
+# comment that used to sit on `shop_buy` -- "`waityn` records $80 for A and $81 for
+# B and `syesno` tells them apart by the carry out of `lsr a`, so A is yes" --
+# was wrong twice over: it attributed `sbuy`'s question to `syesno`, and it drew
+# the wrong conclusion from the comparison it did cite. `p_icon(answer=True)`
+# presses A, which is correct for a purchase and wrong for a question; the
+# `buy_icon` and `answer_question` helpers below keep the two apart by name so a
+# caller cannot get it wrong by accident.
+#
+# NOT YET MEASURED on Beta 1. This is what the source says, and it is the kind of
+# reading that a scout then confirms or refutes -- which is the point of having
+# both. `shop_buy`'s ledger will say whether A actually bought anything.
+A_IS_YES = {"syesno": False, "sbuy": True}
+# Which button answers "yes", per command. A for a purchase, B for a question.
+BUY_BUTTON = "A"            # sbuy: cpy #$81 / bcc -> $80 (A) takes the buy path
+QUESTION_YES_BUTTON = "B"   # syesno: iny / lsr a -> $81 (B) leaves C=0
+
+
 # ================================================================ the policies
 #
 # A policy is `policy(emu, rec, rng, max_frames) -> note`. It presses through
@@ -861,13 +903,27 @@ def town_quests() -> Route:
           lambda: (lambda emu, rec, rng, mf: p_icon(rng, rec, mf, 0, answer=True)),
           invop_changed, tries=10, max_frames=500, first_success=False,
           prepare=True,
-          why="A on a bought icon, then A again to answer YES. `waityn` records "
-              "$80 for A and $81 for B and `syesno` tells them apart by the carry "
-              "out of `lsr a` (x5.pds:806-820), so A is yes. Success is gold "
-              "BELOW 100 -- the start value, from `lda #50 / asl a / sta wealth` "
-              "(x1.pds:32-35) -- which is the only assertion available that does "
-              "not have to know in advance WHICH icon is for sale. Item flags "
-              "are read in the note so the next segment can assert one")
+          # This `why` made two claims that were both wrong.
+          #
+          # "Success is gold BELOW 100" cannot hold, for two independent
+          # reasons: `initvars` sets gold to 100 on a new game, so "below 100"
+          # tests only that money was spent and not that anything was bought;
+          # and `tickmana`'s `!a` branch re-stores `wealth` from `manatop` once a
+          # second while `ninflag` is set, so a price is refunded inside sixty
+          # frames and a segment waiting for the gold to STAY down waits forever
+          # (CLAIMS['ninflag_pins_the_character']). What is asserted instead is
+          # `invop` CHANGING, which is what `addinv` does and nothing else does.
+          #
+          # "A is yes" is wrong, and reading the source settles it against the
+          # comment rather than the other way round. See A_IS_YES below.
+          why="A on a bought icon, then A AGAIN to buy. A is NOT 'yes' in a shop "
+              "-- see A_IS_YES, which settles it from `waityn`/`syesno`/`sbuy`. "
+              "Success is `invop` "
+              "CHANGING, not gold moving: `addinv` is the only writer that raises "
+              "a count, and gold cannot be used because `ninflag` refunds it "
+              "inside a second. WHICH item came in is read in the note, and where "
+              "the shop's own icon script names one it is asserted with "
+              "`ram.carried_pred`")
 
     r.add("leave_shop",
           lambda: (lambda emu, rec, rng, mf: p_leave_shop(rng, rec, mf)),
