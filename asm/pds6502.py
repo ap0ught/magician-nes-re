@@ -764,6 +764,18 @@ class Assembler:
         # prg_offset(): folding them back over the module's own start is what
         # silently destroyed X5's `sql` table.
         self.overflow: list[tuple[str, int, int]] = []
+        # PRG offsets written, attributed to the file that wrote them.
+        #
+        # `emitted` alone cannot answer "what did this module contribute",
+        # because a module that overlays another -- which is exactly what
+        # src/magician/TITLE.SRC does to `titdat` -- writes offsets that are
+        # already in `emitted` with a different value. The count that matters
+        # for an overlay is also not `len()`: it is the number of bytes that
+        # ended up holding *this* file's value, so the attribution has to happen
+        # at the write. A set of offsets, not a list, because `run_all` runs each
+        # module up to MAX_PASSES times before the symbols settle and the second
+        # pass overwrites the first: a list reports each address once per pass.
+        self.writes_by_file: dict[str, set[int]] = {}
         # Bytes dropped because the module ran past `addr_ceiling`. Kept apart
         # from `overflow` because the two mean different things -- a ceiling is a
         # decision, an overflow is a hole -- and because `overflow` is cleared
@@ -1005,6 +1017,8 @@ class Assembler:
         if 0 <= off < len(self.prg):
             self.prg[off] = byte & 0xFF
             self.emitted[off] = byte & 0xFF
+            if self.here is not None:
+                self.writes_by_file.setdefault(self.here.name, set()).add(off)
         self.phys += 1
         self.log += 1
         self.star = self.log
@@ -1129,6 +1143,12 @@ class Assembler:
         origins = origins or {}
         window_slots = window_slots or {}
         ceilings = ceilings or {}
+        # Attribution is per-project-pass. Pass 1 in build.py runs modules through
+        # `run_file` sixteen times each to search for a slot, and those writes
+        # name files that were only ever tried at a slot and rejected; carrying
+        # them into the report would credit a module with bytes a later module
+        # overwrote.
+        self.writes_by_file = {}
         prev: dict[str, int] | None = None
         for attempt in range(self.MAX_PASSES):
             self.tolerate = True

@@ -1,0 +1,13 @@
+;   The title screen's 64 attribute bytes -- 4 rows of 16, covering the
+;   nametable two rows at a time in the usual NES order. The file starts at
+;   $23C0, which is why the scene descriptor is 960 + 64 bytes rather than 960.
+;
+;   A byte is %00PPPPPP with the top two bits selecting one of four 4-colour
+;   sub-palettes and the low six the palette number within TIT.PAL. The upper
+;   halves of rows 0-7 are not used by this screen: the top four rows are solid
+;   brick and the row below is the top of the logo, which is drawn in one palette.
+
+00 00 00 00 00 00 00 00 AA 02 00 00 88 AA AA AA ; attr 0
+AA 00 00 00 C0 FA 8A AA A2 54 54 11 80 23 88 AA ; attr 1
+EA 75 D5 75 5A A2 AA AA 7D DF FD FF 37 0A 0A 6A ; attr 2
+5D 05 7D 4F 00 50 50 54 05 05 05 05 04 05 04 05 ; attr 3

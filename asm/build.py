@@ -36,15 +36,99 @@ from pds6502 import SOURCE_GAPS, Assembler  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "vendor" / "Magician-NES"
+SRC_MAG = ROOT / "src" / "magician"
 OUT = ROOT / "asm" / "out"
+# Where our generated packed data lands. Never committed: it is derived from
+# src/magician/ by tools/datcodec.py every build, so committing it would create
+# a second copy of the title screen that could disagree with the first.
+SRC_MAG_OUT = OUT / "ours"
 
 PRG_SIZE = 128 * 1024
 CHR_SIZE = 128 * 1024
 
 MODULES = [f"X{i}.PDS" for i in range(8)]
-# Every file a macro can be defined in. All 40 macros are in X0.PDS, but the
-# collection pass follows `include` anyway so this is not load-bearing.
-ALL_SOURCES = [SRC / m for m in MODULES] + sorted(SRC.glob("*.SRC"))
+
+# ---------------------------------------------------------------------------
+# Our own source: src/magician/.
+# ---------------------------------------------------------------------------
+#
+# vendor/Magician-NES/ is Eurocom's, pinned at bf653a40, and it stays read-only
+# and byte-identical so it can be re-synced. Everything we author lives in
+# src/magician/ instead, in the same PDS dialect and assembled by the same
+# assembler, so a change we make is a source edit rather than a patch to
+# someone else's file.
+#
+# The manifest is explicit rather than a glob, and `check_our_manifest` below
+# makes an unlisted file a hard error. A glob would mean that dropping a file
+# into src/magician/ silently changes the ROM with no record of why -- which is
+# the same class of silent change as a module assembled at a slot nobody chose.
+# A file with no manifest entry has no known placement, and a placement is
+# something that has to be argued for.
+#
+# Each entry may set:
+#   slot          the 8 KiB slot, when the module needs one
+#   origin        the start address, when the module has no `org` of its own
+#   window_slots  which slot is in each $8000 window the module reaches
+#   ceiling       highest address the module may write
+# `titdat` sits in the $A000 window of X7's `b = $6` data group, and that is slot
+# 7, not 6. X7.PDS:1001-1003 sets
+#
+#     bmus   equ b          ; b = $6
+#     bshop  equ b+1
+#     btit   equ b+1
+#
+# and `dotitle` banks register 7 -- the $A000 window -- to `btit`. This build's
+# `--x7-bank-split` (on by default) reads the same thing the other way: a group's
+# `b = $N` names the slot in the $8000 window and `N+1` the one in $A000. See
+# Assembler.maybe_prebank.
+#
+# Getting it wrong is not subtle but it is quiet: at slot 6 the overlay lands at
+# prg.bin $CBA7, which is real code, and `verify_our_scenes()` catches it because
+# the bytes it finds there are not the scene it packed. The build did that rather
+# than reporting success.
+OUR_TITLE_WINDOW_SLOTS = {0x8000: 6, 0xA000: 7, 0xC000: 14, 0xE000: 15}
+
+OUR_MODULES: dict[str, dict] = {
+    "TITLE.SRC": {
+        "window_slots": OUR_TITLE_WINDOW_SLOTS,
+        "note": "our title screen: the packed scene descriptor overlaid on X7's "
+                "`titdat`, so Eurocom's own `dotitle` loads it with no change to "
+                "vendor/ at all",
+    },
+}
+
+# Every file a macro can be defined in, ours included, so a module of ours can
+# use a macro Eurocom defined. All 40 macros are in X0.PDS, but the collection
+# pass follows `include` anyway so this is not load-bearing for them; it *is*
+# load-bearing for src/magician/, which is allowed to use them.
+ALL_SOURCES = ([SRC / m for m in MODULES] + sorted(SRC.glob("*.SRC"))
+               + sorted(p for p in SRC_MAG.glob("*") if p.suffix.upper() in (".SRC", ".PDS")))
+
+
+def check_our_manifest() -> list[str]:
+    """Every file in src/magician/ must have a manifest entry. Returns problems.
+
+    A module with no entry has no known slot, origin or window map, so there is
+    no honest way to place it. Assembling it anyway would put it somewhere the
+    build cannot explain; skipping it silently would mean a file someone wrote
+    and thought was being built was not being built at all.
+    """
+    if not SRC_MAG.is_dir():
+        return []
+    problems = []
+    on_disk = {p.name for p in SRC_MAG.iterdir()
+               if p.is_file() and p.suffix.upper() in (".SRC", ".PDS")}
+    for name in sorted(on_disk - set(OUR_MODULES)):
+        problems.append(f"src/magician/{name} has no entry in OUR_MODULES "
+                        f"(asm/build.py), so nothing says where it goes")
+    for name in sorted(set(OUR_MODULES) - on_disk):
+        problems.append(f"OUR_MODULES lists src/magician/{name}, which is not there")
+    return problems
+
+
+def our_modules() -> list[str]:
+    """Our module names, in assembly order, verified against what is on disk."""
+    return sorted(OUR_MODULES)
 
 # ---------------------------------------------------------------------------
 # The bank map, and what is known about each module's slot.
@@ -504,7 +588,7 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                   x7_table: bool = True, assume_banks: bool = True,
                   bank_groups: bool = True, seq_src: bool = True,
                   x7_vector: bool = True, split_banks: bool = True,
-                  asm_cls=None
+                  ours: bool = True, asm_cls=None
                   ) -> tuple[bytearray, Assembler, list[str], list[str]]:
     # `asm_cls` exists so tools/whowrote.py can subclass the Assembler and keep a
     # per-module footprint of which PRG offsets each bank wrote. The build itself
@@ -517,7 +601,7 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     cls = asm_cls or Assembler
     banks = frozenset({"b"}) if bank_groups else frozenset()
     image = bytearray(PRG_SIZE)
-    asm = cls(image, SRC, [SRC], verbose=verbose)
+    asm = cls(image, SRC, [SRC, SRC_MAG, SRC_MAG_OUT], verbose=verbose)
     asm.force_conditions = {"0=1": x7_table}
     asm.prebank_symbols = banks
     asm.prebank_split = split_banks
@@ -648,7 +732,7 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     project_error: Exception | None = None
     for attempt in range(2 if x7_vector else 1):
         image = bytearray(PRG_SIZE)
-        asm = cls(image, SRC, [SRC], verbose=verbose)
+        asm = cls(image, SRC, [SRC, SRC_MAG, SRC_MAG_OUT], verbose=verbose)
         asm.force_conditions = {"0=1": x7_table}
         asm.prebank_symbols = banks
         asm.prebank_split = split_banks
@@ -664,15 +748,45 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                   for m, s in zip(MODULES, slots) if s is not None]
         if seq_src:
             placed += [(m, s) for m, s in SEQ_MODULES]
+        # Ours go last, and deliberately so. Every symbol Eurocom's tree defines
+        # is known by the time we are assembled, so a module of ours can name
+        # `titdat`, `dotitle`, a macro, anything -- and nothing of ours can
+        # perturb a vendor module's own layout, because nothing of ours has run
+        # yet when the vendor modules are placed.
+        if ours:
+            placed += [(m, OUR_MODULES[m].get("slot")) for m in our_modules()]
         origins = {"SEQ.SRC": SEQ_ORIGIN} if seq_src else {}
         origins.update(MODULE_ORIGINS)
+        for m in our_modules():
+            if OUR_MODULES[m].get("origin") is not None:
+                origins[m] = OUR_MODULES[m]["origin"]
         window_slots = {"SEQ.SRC": SEQ_WINDOW_SLOTS} if seq_src else {}
         window_slots["X4.PDS"] = X4_WINDOW_SLOTS
+        for m in our_modules():
+            if OUR_MODULES[m].get("window_slots") is not None:
+                window_slots[m] = OUR_MODULES[m]["window_slots"]
         ceilings = dict(MODULE_CEILINGS)
+        for m in our_modules():
+            if OUR_MODULES[m].get("ceiling") is not None:
+                ceilings[m] = OUR_MODULES[m]["ceiling"]
+        # Deliberately no ceiling for our modules. A ceiling *drops* bytes past it
+        # and counts them, which for a module that is supposed to overwrite a
+        # label would mean silently emitting half a scene. The space our scene
+        # has to fit in is checked before assembly, by size, with the neighbour's
+        # address in the message -- see pack_our_scenes().
         if x7_base is not None:
             origins["X7.PDS"] = x7_base
         try:
-            asm.run_all([SRC / m for m, _ in placed], [s for _, s in placed],
+            # Our modules live in src/magician/, not beside Eurocom's. Resolving
+            # every name against SRC/ found vendor's directory and reported a
+            # missing file for a module that exists -- the build was right to
+            # refuse, and the fix is to ask the manifest where each module is.
+            paths = [((SRC_MAG if m in OUR_MODULES else SRC) / m) for m, _ in placed]
+            for p in paths:
+                if not p.is_file():
+                    raise FileNotFoundError(f"{p} is in the build's module list but "
+                                            f"is not there")
+            asm.run_all(paths, [s for _, s in placed],
                         origins, window_slots, ceilings)
         except Exception as exc:                        # noqa: BLE001
             # The per-module slot log above is the context that makes this
@@ -719,6 +833,26 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
             log.append(f"         guard says code must stop, so SAM.SAM at $FB80 "
                        f"overwrites ${last - 0xFB80} byte(s) of it. ***")
 
+    # What our own modules contributed, counted from the writes themselves
+    # rather than asserted. A module of ours overlays a label Eurocom's tree
+    # already emitted, so "did it build" is not the same question as "did it
+    # change anything", and a module that assembled to zero bytes while still
+    # resolving every symbol would look like success.
+    if ours:
+        log.append("")
+        log.append("OUR SOURCE (src/magician/), %d module(s):" % len(our_modules()))
+        for m in our_modules():
+            offs = sorted(asm.writes_by_file.get(m, ()))
+            span = (f"${offs[0]:04X}-${offs[-1]:04X}" if offs else "nothing")
+            log.append(f"  {m:<14} {len(offs):5d} byte(s) written  {span}  "
+                       f"[{OUT.name}/ours] {OUR_MODULES[m].get('note', '')}")
+        if not any(asm.writes_by_file.get(m) for m in our_modules()):
+            log.append("  *** none of them emitted a byte. The wiring is live and "
+                       "the image is")
+            log.append("      byte-identical to a build without it, which is the "
+                       "point at which")
+            log.append("      the wiring can be trusted to change something. ***")
+
     # What the ceilings cost, counted by the assembler rather than asserted in a
     # comment. `overflow` is cleared per file, which is why the numbers in the
     # ceiling comment above used to disagree with each other: nothing printed
@@ -754,6 +888,188 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
             f"nothing in it: {type(project_error).__name__}: "
             f"{project_error}") from project_error
     return image, asm, log, unplaced
+
+
+def pack_our_scenes(log: list[str]) -> bytes:
+    """Pack src/magician/'s readable scene sources into .DAT files to assemble.
+
+    The editable artefact is the tile grid, not the packed stream: Eurocom's
+    cruncher is gone and the format's minimum run is four bytes, so hand-editing
+    a packed scene is not a thing anyone should do. So the grid in
+    `src/magician/title/` is the source, tools/datcodec.py packs it, and the
+    packed bytes land in `asm/out/ours/` for TITLE.SRC to `incbin`. Nothing
+    packed is committed, so there is exactly one copy of the title screen and it
+    is the readable one.
+
+    Whether the result *fits* is checked in verify_our_scenes(), against the
+    assembled image -- the space available is `pwdat - titdat` in the symbol
+    table the assembler actually resolved, and that is not known until after the
+    tree has been assembled.
+    """
+    sys.path.insert(0, str(ROOT / "tools"))
+    import datcodec  # noqa: PLC0415  -- only needed when our scenes are packed
+
+    SRC_MAG_OUT.mkdir(parents=True, exist_ok=True)
+    title = SRC_MAG / "title"
+    tiles = _read_grid(title / "nametable.txt", 32, 30, "nametable")
+    attrs = _read_grid(title / "attributes.txt", 16, 4, "attributes")
+    scene = bytes(tiles) + bytes(attrs)
+    if len(scene) != datcodec.NAMETABLE + datcodec.ATTRS:
+        raise SystemExit(f"src/magician/title/ is {len(scene)} bytes; a full scene is "
+                         f"{datcodec.NAMETABLE + datcodec.ATTRS} "
+                         f"({datcodec.NAMETABLE} tile + {datcodec.ATTRS} attribute)")
+    token = _read_int(title / "token.txt", 0xE0)
+    packed = datcodec.encode(scene, token)
+    # Read back what we are about to hand the assembler. The encoder verifies
+    # this internally, but the check belongs next to the thing that depends on it.
+    if datcodec.decode(packed) != scene:
+        raise SystemExit("the packed title scene does not decode back to the grid "
+                         "src/magician/title/ describes")
+    check_scene_against_art(scene, log)
+    (SRC_MAG_OUT / "TIT.DAT").write_bytes(packed)
+    log.append(f"src/magician/title/: {len(scene)} scene bytes -> {len(packed)} packed "
+               f"(token ${token:02X}) -> {(SRC_MAG_OUT / 'TIT.DAT').relative_to(ROOT)}")
+    return packed
+
+
+def verify_our_scenes(asm, prg: bytearray, packed: bytes, log: list[str]) -> None:
+    """Check our scene against the image the build actually produced.
+
+    Three things can go wrong that packing cannot see, and all three are silent:
+
+      * the scene does not fit between `titdat` and `pwdat`, and its tail has
+        overwritten the password screen's data;
+      * it landed at the wrong file offset, because the $A000 window's slot was
+        not the one we told the assembler;
+      * the bytes at `titdat` are not the bytes we packed, because something
+        wrote over them afterwards.
+
+    So this reads the bytes back out of the finished image at the offsets our
+    own module is recorded as having written, and decodes them. If the image does
+    not contain our scene, the build says so rather than shipping a ROM whose
+    title screen is somebody else's.
+    """
+    sys.path.insert(0, str(ROOT / "tools"))
+    import datcodec  # noqa: PLC0415
+
+    for m in our_modules():
+        offs = sorted(asm.writes_by_file.get(m, ()))
+        if not offs:
+            log.append(f"  *** {m} emitted no bytes; nothing to verify ***")
+            continue
+        first, last = offs[0], offs[-1]
+        if first != offs[-1] - len(packed) + 1:
+            log.append(f"  *** {m} wrote {len(offs)} byte(s) that are not "
+                       f"{len(packed)} contiguous from ${first:04X} ***")
+        got = bytes(prg[first:first + len(packed)])
+        if got != packed:
+            log.append(f"  *** {m}: the image at ${first:04X} is not the scene we "
+                       f"packed ***")
+            continue
+        log.append(f"  {m}: ${first:04X}-${last:04X} in the image is byte-for-byte "
+                   f"the scene src/magician/title/ describes")
+
+    titdat, pwdat = asm.sym.get("titdat"), asm.sym.get("pwdat")
+    if titdat is None or pwdat is None:
+        raise SystemExit("src/magician/TITLE.SRC overlays `titdat`, but the build "
+                         "resolved no `titdat`/`pwdat`; refusing to guess the space")
+    budget = pwdat - titdat
+    if len(packed) > budget:
+        raise SystemExit(
+            f"the packed title scene is {len(packed)} bytes and only {budget} fit "
+            f"between `titdat` (${titdat:04X}) and `pwdat` (${pwdat:04X}).\n"
+            f"  Its last {len(packed) - budget} byte(s) overwrite the password "
+            f"screen's data.\n"
+            f"  Eurocom's own TIT.DAT is {budget} bytes for the same 1024-byte "
+            f"scene, so this one packs worse than\n  theirs; the usual cause is a "
+            f"noisy tile grid that will not run-length.")
+    log.append(f"  scene fits: {len(packed)} of the {budget} bytes between `titdat` "
+               f"(${titdat:04X}) and `pwdat` (${pwdat:04X})")
+
+    # And the strongest statement available: the finished image, decoded through
+    # the format, is the grid in src/magician/.
+    title = SRC_MAG / "title"
+    scene = bytes(_read_grid(title / "nametable.txt", 32, 30, "nametable")) + \
+        bytes(_read_grid(title / "attributes.txt", 16, 4, "attributes"))
+    start = sorted(asm.writes_by_file.get("TITLE.SRC", ()))[0]
+    rebuilt = datcodec.decode(bytes(prg[start:start + len(packed)]))
+    if rebuilt != scene:
+        raise SystemExit("decoding the assembled ROM's titdat region does not give "
+                         "back src/magician/title/. The title screen in this ROM is "
+                         "not ours.")
+    log.append(f"  round trip through the image: {len(rebuilt)} bytes decode back to "
+               f"the grid in src/magician/title/")
+
+
+def _read_grid(path: pathlib.Path, width: int, height: int, what: str) -> list[int]:
+    """Read a fixed-width hex grid. Blank lines and `;` comments are ignored."""
+    if not path.is_file():
+        raise SystemExit(f"missing {path.relative_to(ROOT)}: our {what} source")
+    rows: list[list[int]] = []
+    for lineno, raw in enumerate(path.read_text().splitlines(), 1):
+        line = raw.split(";", 1)[0].strip()
+        if not line:
+            continue
+        vals = [int(tok, 16) for tok in line.replace(",", " ").split()]
+        if len(vals) != width:
+            raise SystemExit(f"{path.relative_to(ROOT)}:{lineno}: {len(vals)} value(s), "
+                             f"expected {width} ({what} row)")
+        rows.append(vals)
+    if len(rows) != height:
+        raise SystemExit(f"{path.relative_to(ROOT)}: {len(rows)} row(s), expected "
+                         f"{height} ({what})")
+    return [v for row in rows for v in row]
+
+
+def _read_int(path: pathlib.Path, default: int) -> int:
+    if not path.is_file():
+        return default
+    text = path.read_text().split(";", 1)[0].strip().lstrip("$")
+    return int(text, 16) if text else default
+
+
+def check_scene_against_art(scene: bytes, log: list[str]) -> None:
+    """Fail the build on a tile the scene names but cannot address.
+
+    A scene descriptor holds 8-bit tile indices. `dotitle` selects the pattern
+    table with `lda #s0e / sta mapbnk0` (X0.PDS:629) and the three title CHR
+    banks are placed contiguously at 4 KiB banks 14, 15 and 16 (TIT0/1/2.CHR at
+    chr.bin $E000/$F000/$10000), so the base bank alone answers all 256 indices
+    and the upper two are reached by switching, not by a wider index. An index
+    above $FF therefore cannot be addressed at all.
+
+    The failure this guards is silent: the PPU does not care what a nametable
+    byte means, it fetches pattern-table address $index*16 and draws whatever is
+    there. The screen comes up and the logo is wrong, and nothing says so.
+
+    Attributes get no range check here because there is nothing to check. A
+    background attribute byte is four 2-bit quadrant selectors, so every one of
+    its 256 values names one of the four sub-palettes -- which is exactly what
+    TIT.PAL's 12 bytes (4 sub-palettes x 3 colours) define. An earlier version of
+    this function compared the low six bits against TIT.PAL's length and failed
+    20 of Eurocom's own attribute bytes, which is what a range check that cannot
+    fail is worth. tools/titletest.py checks the attributes where there is
+    something to say: that the screen is not attribute-uniform, and that the
+    palettes it selects are the ones loaded at boot.
+    """
+    tiles = scene[:0x3C0]
+    bad = sorted({v for v in tiles if v > 0xFF})
+    if bad:
+        raise SystemExit(
+            "src/magician/title/nametable.txt names tile(s) outside $00-$FF: "
+            + ", ".join("$%02X" % v for v in bad)
+            + "\n  A scene descriptor holds 8-bit tile indices, so these cannot be "
+              "addressed at all\n  and would draw as pattern-table garbage.")
+    art = (SRC / "DAT" / "TIT0.CHR")
+    blanks = set()
+    if art.is_file():
+        data = art.read_bytes()
+        blanks = {i for i in range(256) if not any(data[i * 8:(i + 1) * 8])}
+    used = {v for v in tiles}
+    named_blank = sorted(used & blanks)
+    log.append(f"src/magician/title/ checked: {len(used)} distinct tiles, all < $100; "
+               f"{len(named_blank)} of them are blank tiles in TIT0.CHR "
+               f"(a backdrop is legitimate -- tools/titletest.py is the gate)")
 
 
 def dat_file(name: str) -> pathlib.Path:
@@ -856,12 +1172,31 @@ def main() -> int:
     ap.add_argument("--no-assume-banks", action="store_true",
                     help="refuse to place a module whose slot the search could "
                          "not determine, instead of using ASSUMED_SLOTS")
+    ap.add_argument("--no-ours", action="store_true",
+                    help="do not assemble src/magician/. Exists so the wiring can "
+                         "be shown to be inert: with our modules contributing "
+                         "nothing the PRG must be byte-identical to a build "
+                         "without the flag, which is the only way to know the "
+                         "wiring itself changed nothing.")
     ap.add_argument("--allow-incomplete", action="store_true",
                     help="exit 0 even though some modules have no determined slot")
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
     cart_prg, cart_chr = read_cart(args.cart)
+
+    ours = not args.no_ours
+    problems = check_our_manifest() if ours else []
+    if problems:
+        for p in problems:
+            print(f"build: {p}", file=sys.stderr)
+        raise SystemExit("src/magician/ and asm/build.py's OUR_MODULES disagree; "
+                         "fix the manifest rather than letting the build guess")
+
+    # Packed before assembly, because TITLE.SRC incbins the result. Whether the
+    # result *fits* is checked after, against the assembled image.
+    prep_log: list[str] = []
+    packed = pack_our_scenes(prep_log) if ours else b""
 
     prg, asm, prg_log, unplaced = assemble_prg(
         cart_prg, args.verbose,
@@ -870,7 +1205,11 @@ def main() -> int:
         bank_groups=(args.x7_bank_groups == "on"),
         seq_src=(args.seq_src == "on"),
         x7_vector=(args.x7_vector == "on"),
-        split_banks=(args.x7_bank_split == "on"))
+        split_banks=(args.x7_bank_split == "on"),
+        ours=ours)
+    if ours:
+        prg_log = prep_log + prg_log
+        verify_our_scenes(asm, prg, packed, prg_log)
     chr_rom, chr_log = build_chr(cart_chr, args.verbose)
 
     # `prg` is the assembled image; `source_image` is a copy taken before the
