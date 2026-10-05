@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from pathlib import Path
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT / "asm") not in sys.path:
@@ -57,6 +58,17 @@ def battery(name: str = DEFAULT_CART_NAME) -> bool:
     rather than merely wiping it is wrong for it.
     """
     return bool(patches.CARTS[name]["battery"])
+
+
+def env_or_default(env: str = "MAGICIAN_CART") -> Path:
+    """`$MAGICIAN_CART` if set, else the registry's target.
+
+    For the BizHawk helpers, which are driven from the environment rather than
+    from argv.
+    """
+    import os
+
+    return Path(os.environ.get(env) or DEFAULT_CART)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,11 @@ from PIL import Image, ImageChops
 ROOT = Path(__file__).resolve().parents[2]
 RUN = ROOT / "tools" / "bizhawk" / "run.sh"
 SCRIPT = ROOT / "tools" / "bizhawk" / "frame.lua"
-CART = Path(os.environ.get("MAGICIAN_CART", "/extdrive/backups/SHARE/roms/nes/Magician (USA).nes"))
+sys.path.insert(0, str(ROOT / "tools"))
+from cartref import env_or_default  # noqa: E402
+
+# $MAGICIAN_CART wins; otherwise the registry's target (Beta 1).
+CART = env_or_default()
 ROM = ROOT / "asm" / "out" / "magician-rebuilt.nes"
 
 ROMS = {"cart": CART, "reb": ROM}

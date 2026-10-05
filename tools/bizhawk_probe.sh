@@ -44,7 +44,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CART="${1:-/extdrive/backups/SHARE/roms/nes/Magician (USA).nes}"
+CART="${1:-$(python3 "$ROOT/tools/cartref.py")}"
 ROM="${2:-$ROOT/asm/out/magician-rebuilt.nes}"
 BIZ="${BIZHAWK:-$HOME/code/games/aibeatszelda/BizHawk-2.11.1-win-x64}"
 

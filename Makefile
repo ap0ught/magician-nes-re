@@ -30,8 +30,12 @@ PDS     := $(wildcard vendor/Magician-NES/X*.PDS)
 TEXTOUT := $(wildcard pds-text/x?.pds)
 
 # The cartridge path, in one place. Never committed, so it cannot be a dependency
-# the build silently skips.
-CART ?= /extdrive/backups/SHARE/roms/nes/Magician (USA).nes
+# the build silently skips. Derived from the registry in asm/patches.py rather
+# than written here, because a literal in the Makefile and a literal in
+# asm/build.py are two places to forget: that is how every measurement in this
+# project came to be taken against the release instead of Beta 1. `python3
+# tools/cartref.py` prints the path and nothing else.
+CART ?= $(shell python3 tools/cartref.py)
 
 # A checkout of https://github.com/koute/pinky (the nes-testsuite/ directory
 # only). It is third-party and is never committed, so it is not a dependency the
