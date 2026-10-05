@@ -119,6 +119,20 @@ class Halt(Exception):
     pass
 
 
+# Mnemonics that read the addressed byte, and therefore pay a cycle when the
+# indexed address crosses a page. Stores and read-modify-writes do not: on the
+# 6502 their address is already latched, so the crossing is free. Everything not
+# listed here that has an indexed mode is treated as a reader, which is the
+# conservative direction -- a cycle too many is visible, a cycle too few is not.
+PAGE_CROSS_READS = frozenset((
+    "lda", "ldx", "ldy", "cmp", "sbc", "adc", "and", "ora", "eor", "bit",
+))
+
+
+def _pays_page_cross(mnemonic: str) -> bool:
+    return mnemonic in PAGE_CROSS_READS
+
+
 class UnsupportedMapper(Exception):
     """Raised rather than run: a ROM on a mapper we do not model would be
     executed through the wrong bank map and produce a plausible, confident,
@@ -232,13 +246,24 @@ class CPU:
         elif mode == "absx":
             base = lo | (hi << 8)
             addr = (base + self.x) & 0xFFFF
+            # The +1 is for a page crossing, and a page crossing costs a cycle
+            # ONLY when the instruction actually reads. The 6502 does not pay it
+            # for a store or for a read-modify-write, because the address is
+            # already on the bus. Paying it unconditionally gave every
+            # `sta $8001` / `sta $2007` in this cartridge one cycle too many,
+            # and those are the instructions its bank-switch loops are made of --
+            # so the drift accumulates across a scanline rather than showing up
+            # as a one-off. Found by src/testing/test_nestrace_cpu.py, which
+            # measured `sta $0200,x` at 6 cycles where the opcode table says 5.
+            if _pays_page_cross(name):
+                cyc += 1
             val = bus.read((base & 0xFF00) | (addr & 0xFF))
-            cyc += 1
         elif mode == "absy":
             base = lo | (hi << 8)
             addr = (base + self.y) & 0xFFFF
+            if _pays_page_cross(name):
+                cyc += 1
             val = bus.read((base & 0xFF00) | (addr & 0xFF))
-            cyc += 1
         elif mode == "indx":
             z = (lo + self.x) & 0xFF
             p = bus.read(z) | (bus.read((z + 1) & 0xFF) << 8)
@@ -247,8 +272,9 @@ class CPU:
             z = lo
             p = bus.read(z) | (bus.read((z + 1) & 0xFF) << 8)
             addr = (p + self.y) & 0xFFFF
+            if _pays_page_cross(name):
+                cyc += 1
             val = bus.read((p & 0xFF00) | (addr & 0xFF))
-            cyc += 1
         elif mode == "ind":
             p = lo | (hi << 8)
             addr = val = bus.read(p) | (bus.read((p & 0x1000) | ((p + 1) & 0xFF)) << 8)
@@ -648,7 +674,14 @@ class Bus:
         # acknowledges a pending IRQ. Without this a poll of $8006 sees PRG
         # bytes instead, and the cartridge -- which does poll it -- never
         # reaches its main loop.
-        if self.bankreg == 6 and (a & 0x1FFF) in (0x0006, 0x2006):
+        #
+        # Mapper 4 ONLY. `bankreg` starts at 6 and is never changed on a board
+        # with no bank registers, so without the `mapper != 0` this read is a
+        # no-op path that shadows $8006 on NROM as well -- and $8006 is a
+        # perfectly ordinary address in a 16 KiB program. Found by
+        # src/testing/test_nestrace_cpu.py, which put a `sta $0200,x` operand
+        # byte at $8006 and watched it come back as $00.
+        if self.mapper != 0 and self.bankreg == 6 and (a & 0x1FFF) in (0x0006, 0x2006):
             self.irq_pending = False
             self.scanline = self.irq_cycles
             return self.irq_cycles

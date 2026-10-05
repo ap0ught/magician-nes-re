@@ -9,6 +9,7 @@
 #   make movie      parse the TAS movie and emit the input table (needs MOVIE)
 #   make replay     replay MOVIE into $(ROM) in BizHawk and report the sync frame
 #   make guard      fail if a cartridge, a movie, or vendor/ is staged
+#   make check-py   run the instrument test suite (no emulator, no cartridge)
 #   make testsuite  run tools/nestrace.py against koute's nes-testsuite
 #   make clean      remove generated output
 #
@@ -47,7 +48,7 @@ TS ?= /tmp/opencode/pinky/nes-testsuite
 TS_FRAMES ?= 120
 
 .PHONY: all extract assemble rom check verbose gaps probe testsuite clean guard \
-        movie replay install-hooks
+        movie replay install-hooks check-py
 
 all: extract assemble rom
 
@@ -159,6 +160,15 @@ movie:
 FRAMES ?= 44003
 replay: movie
 	tools/bizhawk/replay.sh "$(ROMY)" "$(FRAMES)" $(if $(SYNC_FIRST),sync-first,)
+
+# The instrument test suite. Unit-level: no emulator, no cartridge, no movie, no
+# display, so it runs in seconds and can gate every commit. It pins the things
+# this project got wrong silently -- a harness that reported three zero vectors,
+# a parser that read the movie's buttons in the wrong order, a codec that stopped
+# one byte short per run. See src/testing/README.md for what each file pins and
+# for the live bugs it found while being written.
+check-py:
+	$(PYTHON) src/testing/run_all.py
 
 guard:
 	@tools/guard_staged.sh
