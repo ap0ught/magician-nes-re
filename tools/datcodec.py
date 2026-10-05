@@ -419,9 +419,9 @@ def _load(arg: str) -> Path:
 
 
 def main(argv) -> int:
-    if not argv:
+    if not argv or argv[0] in ("-h", "--help", "help"):
         sys.stdout.write((__doc__ or '') + '\n')
-        return 2
+        return 0 if argv else 2
     cmd, rest = argv[0], argv[1:]
 
     if cmd == 'selftest':
