@@ -252,9 +252,26 @@ class Recorder:
         times instead of saying which lead-in it had picked. The information was
         free -- the rng had already decided it -- and it was being thrown away
         because the policy had no way to ask.
+
+        `default` is the SEGMENT's own `max_frames`, not a licence. It was
+        returned whole, which is a third way this function could be wrong and the
+        only one that made a segment's budget decorative: with no best attempt
+        yet `self.cap()` is `None`, so the answer was `default` no matter how much
+        had already been spent. A policy that asked before each leg -- which is
+        every policy in `ladder.py`, and the only reason a walk can abort -- was
+        told it had its full 900-frame budget while it was 1412 frames into a
+        1412-pixel walk. MEASURED on Beta 1: `shop_door` burned 1453 frames
+        against `max_frames=900`, in twelve identical attempts, all of which
+        said "gave up" and none of which could have known it was over. The
+        subtraction is done against BOTH limits, because either one alone is the
+        wrong answer when the other is tighter.
         """
+        spent = len(self.inputs)
+        room = max(0, default - spent)
         limit = self.cap() if self.cap is not None else None
-        return default if limit is None else max(0, limit - len(self.inputs))
+        if limit is not None:
+            room = min(room, max(0, limit - spent))
+        return room
 
 
 def _where(image: bytes) -> str:
@@ -411,6 +428,33 @@ def parallel_search(scouts, states, factory, success, *, tries: int = 20,
     scout: one thread per emulator is the point, and with one emulator a thread
     is overhead around a socket that already releases the GIL. `states` is either
     one state name shared by every scout or one per scout.
+
+    THE CUTOFF IS FROZEN AT DISPATCH, and this is the whole of what makes a
+    parallel search evidence rather than a lottery. `cutoff` is the frame count an
+    attempt has already lost -- `OverBudget` fires once an attempt would exceed
+    it -- and it was a live closure over the shared `best`. Serial, that only
+    changes between attempts, which is correct. Threaded, one scout's 6-frame win
+    can tighten the cutoff while ANOTHER scout is 200 frames into a policy that
+    was dispatched with a 900-frame budget, and that attempt is then cut off at
+    220 and recorded as a failure for a reason that has nothing to do with the
+    approach it tried. Which scout happened to finish first decided which other
+    scouts were penalised.
+
+    MEASURED, and it is not a subtle difference: with three fake scouts over six
+    attempts the parallel search returned seed 1003 at 6 frames where the serial
+    search over the identical seeds returned seed 1001 at 4 frames. The same
+    policy, the same seeds, the same start state, a different answer, decided by
+    thread timing. `src/testing/test_play_search.py` check 9e is that measurement
+    and it is why the cutoff is now an integer read once, under the lock, when the
+    attempt is handed out.
+
+    What is NOT claimed: that a parallel search finds the same winner as a serial
+    one. It need not, and pretending otherwise would be a lie about a stop rule.
+    The stop rules count attempts without improvement, so a search that keeps an
+    attempt serial would have pruned has run more attempts and can legitimately
+    report a different one. The properties that ARE claimed, and that the tests
+    check, are that two parallel runs of the same search agree exactly, and that
+    every attempt from every scout is in the ledger.
     """
     scouts = list(scouts)
     if not scouts:
@@ -429,20 +473,23 @@ def parallel_search(scouts, states, factory, success, *, tries: int = 20,
     log(f"SEARCH{': ' + label if label else ''}: up to {tries} attempts on "
         f"{len(scouts)} scout(s)")
 
-    def cutoff() -> int | None:
-        return best.frames if best is not None else None
-
     def work(k: int) -> None:
         nonlocal best, since
         while True:
+            # Under the lock, and READ ONCE. Both halves matter: the read has to
+            # be atomic with the `st["next"]` bump so two scouts cannot be handed
+            # the same index, and it has to be a value rather than a closure so
+            # this attempt's cutoff cannot move underneath it while it runs.
             with lock:
                 if st["stop"] or st["next"] >= tries:
                     return
                 i = st["next"]
                 st["next"] += 1
+                frozen = best.frames if best is not None else None
             a = _one_attempt(scouts[k], states[k], factory, success,
                              seed=seed_base + i, max_frames=max_frames,
-                             settle=settle, cutoff=cutoff, log=log, scout=k)
+                             settle=settle, cutoff=(lambda v=frozen: v),
+                             log=log, scout=k)
             with lock:
                 attempts.append(a)
                 if a.success and (best is None or value_of(a) > value_of(best)):

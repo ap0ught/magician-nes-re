@@ -56,6 +56,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 os.chdir(_ROOT)
@@ -235,6 +236,16 @@ class StubRun(Run):
         self.reports = []
         self.emu = emu
         self.result = {}
+        # The three fields `Run` gained with checkpoint branching and scout
+        # emulators. A stub that leaves them off makes `segment()` fail with
+        # `AttributeError: no attribute 'scouts_wanted'` partway through, which
+        # looks like a broken runner rather than an incomplete stub -- and it
+        # aborted the file partway through, so checks after the first `segment()`
+        # call never ran at all. `scouts=1` means "MAIN only", which is the
+        # inline path and what every check in this file wants.
+        self.scouts_wanted = 1
+        self._scouts_open = []
+        self.branches = []
 
     def _emu(self):
         return self._stub_emu
@@ -428,6 +439,185 @@ check("9b: parallel_search refuses an empty scout list rather than reporting a "
       isinstance(raised_by(search.parallel_search, [], None,
                            lambda: p_never, ok_main), ValueError))
 
+# ============ 9c. remaining() is a BUDGET, not the segment's max_frames
+#
+# This check failed when first written, and it is the third distinct wrong answer
+# `remaining()` has produced. It previously ignored `len(self.inputs)` entirely
+# when `cap()` was None, so a policy asking "how much room is left?" was told it
+# had its whole `max_frames` again, however far into the attempt it was.
+#
+# MEASURED on Beta 1, in the `shop_door` ledger: twelve identical attempts, every
+# one 1453 frames against `max_frames=900`, every note ending "gave up", and not
+# one of them able to know it was over budget. `ladder.p_enter_shop` asks
+# `remaining()` before every leg and `remaining()` never went down.
+emu = FakeEmu()
+rec = search.Recorder(emu)               # cap=None: no best attempt yet
+with rec:
+    check("9c-a: with no cap set, remaining() counts the frames ALREADY SPENT "
+          "against the segment's max_frames",
+          rec.remaining(900) == 900 and rec.remaining(50) == 50,
+          f"fresh: remaining(900)={rec.remaining(900)} remaining(50)={rec.remaining(50)}")
+    rec.step(("A",), 300)
+    check("9c-b: after spending 300 of a 900-frame budget, remaining(900) is 600 "
+          "-- not 900",
+          rec.remaining(900) == 600, f"got {rec.remaining(900)}")
+    check("9c-c: and it never goes negative, because a policy that adds to it "
+          "should saturate at zero rather than be handed a negative length",
+          rec.remaining(200) == 0, f"got {rec.remaining(200)}")
+# And with a cap set, whichever limit is TIGHTER wins.
+emu = FakeEmu()
+rec = search.Recorder(emu, cap=lambda: 100)
+with rec:
+    rec.step(("A",), 40)
+    check("9c-d: with a 100-frame cap and 40 spent, a 900-frame segment budget "
+          "still answers 60 -- the cap is tighter and the cap wins",
+          rec.remaining(900) == 60, f"got {rec.remaining(900)}")
+    check("9c-e: and the segment's own budget still binds when IT is the tighter "
+          "of the two (60 of 900 left, 100 of 900 capped)",
+          rec.remaining(70) == 30, f"got {rec.remaining(70)}")
+
+# =========================== 9d. parallel search over N>1 REALLY runs N>1
+#
+# `parallel_search` has been in this file since it was ported and was only ever
+# tested with ONE scout, which cannot tell a threaded search from an inline one:
+# `len(scouts) == 1` takes the inline path, so check 9 and check 9b above both
+# ran the code that is not the code under test. And the runner REFUSED
+# `scouts > 1` outright, on the belief that BizHawk diverts a second launch into
+# the first. MEASURED, and that belief is wrong on this machine: BizHawk
+# 2.11.1's config.ini carries `"SingleInstanceMode": false`, and three
+# concurrent sessions were launched, each with its own PID, its own window, its
+# own bridge port, and a distinct RAM fingerprint from a distinct input pattern.
+# What actually refuses a second SERIAL launch is `tools/bizhawk/run.sh`'s own
+# `pgrep` guard -- and that guard is satisfied by three sessions racing past it
+# at once, which is why the parallel path was never actually exercised.
+#
+# So the check below is deliberately narrow: it does not test BizHawk (no
+# emulator here), it tests that the SEARCH layer really does hand attempts to N
+# distinct machines, really does run them concurrently rather than one after the
+# other, and really does record a result for every attempt from every machine.
+#
+# `stall` makes one scout's attempts take measurable time, so an inline
+# implementation over three fake machines would be 3x slower than a threaded
+# one. Asserting on wall-clock is normally a bad idea; it is done here because
+# the thing under test is *concurrency*, and because the margin is 3x rather than
+# a few percent.
+class SlowEmu(FakeEmu):
+    """A FakeEmu whose steps cost time, so serial and parallel differ measurably."""
+    stall = 0.05
+
+    def step(self, buttons=(), frames=1):
+        time.sleep(self.stall)
+        return super().step(buttons, frames)
+
+
+# `states="start"`, not None. None means "the emulator is already where the
+# segment starts", and `FakeEmu` does NOT reset on its own -- its `break_at` is
+# compared against a CUMULATIVE frame counter, so with `None` a given seed draws a
+# different number of frames in the second search than in the first. That was
+# check 9e failing for a reason that had nothing to do with the search: the fake
+# was leaking state between searches. A real scout restores a savestate per
+# attempt (`_one_attempt` calls `emu.load_state(state)`), so the fake has to as
+# well or the test measures the fake.
+slow = [SlowEmu(phase=7, break_at=6, on_button="Start") for _ in range(3)]
+for e in slow:
+    e.save_state("start")
+t_par = time.time()
+res_par = search.parallel_search(slow, "start", lambda: p_press_start, ok_main,
+                                 tries=6, max_frames=200,
+                                 log=lambda *a: None, label="par",
+                                 accept_after=99, patience=99)
+par_secs = time.time() - t_par
+serial_one = SlowEmu(phase=7, break_at=6, on_button="Start")
+serial_one.save_state("start")
+t_ser = time.time()
+res_ser = search.random_search(serial_one, "start", lambda: p_press_start, ok_main,
+                               tries=6, max_frames=200,
+                               log=lambda *a: None, label="ser",
+                               accept_after=99, patience=99)
+ser_secs = time.time() - t_ser
+scout_ids = {a.scout for a in res_par.attempts}
+check("9d-a: parallel search over 3 scouts produced attempts from MORE THAN ONE "
+      "scout -- with one scout this is indistinguishable from the inline path, "
+      "which is how a threaded search that was never threaded passes its own test",
+      len(scout_ids) > 1, f"scouts that contributed attempts: {sorted(scout_ids)}")
+check("9d-b: every attempt records which scout ran it, and the set of scout ids "
+      "is within range of the scouts given",
+      scout_ids and max(scout_ids) < 3 and min(scout_ids) >= 0,
+      f"{sorted(scout_ids)}")
+check("9d-c: a parallel search records EVERY attempt, from every scout -- the "
+      "losers included. A parallel search that reports only winners is how the "
+      "previous run's `shop_door` twelve identical failures went unrecorded",
+      len(res_par.attempts) == 6 and len({a.seed for a in res_par.attempts}) == 6,
+      f"{len(res_par.attempts)} attempts, seeds "
+      f"{[a.seed for a in res_par.attempts]}")
+check("9d-d: the parallel run was CONCURRENT, not 3 searches in a row -- "
+      f"{par_secs:.2f}s for 6 attempts against {ser_secs:.2f}s for the same 6 on "
+      "one machine",
+      par_secs < ser_secs * 0.75,
+      f"parallel={par_secs:.2f}s serial={ser_secs:.2f}s ratio="
+      f"{par_secs / max(ser_secs, 1e-9):.2f}")
+# IT FAILED TWICE WHEN FIRST WRITTEN, and both failures are the findings.
+#
+# First failure: the parallel search returned seed 1003 at 6 frames where the
+# serial search over the identical seeds returned seed 1001 at 4 frames. `cutoff`
+# was a live closure over the shared `best`, so one scout's win could tighten the
+# cutoff while another was mid-policy, and which scout finished first decided
+# which others were cut off. Parallelism was deciding the answer. `cutoff` is now
+# an integer read once, under the lock, when the attempt is handed out.
+#
+# Second failure: still 8f-vs-4f, and that one was the FAKE's fault, not the
+# search's. `states=None` tells the search "the emulator is already where the
+# segment starts", and `FakeEmu` does not reset -- its `break_at` is compared
+# against a cumulative frame counter, so the same seed drew different numbers in
+# the second search. Fixed above by passing `states="start"`, which is what a
+# real scout does anyway.
+#
+# NOTE WHAT IS *NOT* ASSERTED: that a parallel search equals a serial one. The
+# stop rules count attempts without improvement, so a search that kept an attempt
+# serial would have pruned has simply run more attempts and may legitimately
+# report a different one. Parallel and serial are held to DETERMINISM and to
+# recording everything, which are the two properties the evidence depends on.
+slow2 = [SlowEmu(phase=7, break_at=6, on_button="Start") for _ in range(3)]
+for e in slow2:
+    e.save_state("start")
+res_par2 = search.parallel_search(slow2, "start", lambda: p_press_start, ok_main,
+                                  tries=6, max_frames=200,
+                                  log=lambda *a: None, label="par2",
+                                  accept_after=99, patience=99)
+
+
+def _ledger(res):
+    """What a ledger line says, minus the scout id -- which is not deterministic."""
+    return [(a.seed, a.frames, a.success) for a in res.attempts]
+
+
+check("9e: TWO parallel runs of the same search over the same seeds return the "
+      "same attempts with the same frames and the same verdicts -- parallelism "
+      "does not make the search a lottery",
+      _ledger(res_par) == _ledger(res_par2)
+      and res_par.best is not None and res_par.best.seed == res_par2.best.seed
+      and res_par.best.frames == res_par2.best.frames,
+      f"run1 {_ledger(res_par)}\n         run2 {_ledger(res_par2)}")
+check("9e-who: every seed was handed to exactly ONE scout across both runs, so "
+      "no attempt was run twice and none was skipped -- which scout ran it may "
+      "vary (the winner of the race takes the next index) but the SET of seeds "
+      "cannot",
+      sorted(a.seed for a in res_par.attempts) == list(range(1000, 1006))
+      and sorted(a.seed for a in res_par2.attempts) == list(range(1000, 1006)),
+      f"run1 {sorted(a.seed for a in res_par.attempts)}\n"
+      f"         run2 {sorted(a.seed for a in res_par2.attempts)}")
+check("9f: the parallel result's attempts come back in SEED order regardless of "
+      "which thread finished first, so two runs of the same search produce the "
+      "same ledger",
+      [a.seed for a in res_par.attempts] == sorted(a.seed for a in res_par.attempts),
+      str([a.seed for a in res_par.attempts]))
+seen_scout = {(a.seed, a.scout) for a in res_par.attempts}
+check("9g: each attempt's `scout` field survives the sort, so a ledger can still "
+      "say which machine produced which line -- and two seeds never share a scout",
+      all(isinstance(a.scout, int) for a in res_par.attempts)
+      and len(seen_scout) == len(res_par.attempts),
+      str(sorted(seen_scout)))
+
 # ================================================= 10. route and digest shapes
 r = Route("t10")
 r.add("a", lambda: p_never, ok_main)
@@ -508,7 +698,7 @@ check("12d: the two savestate commands do not accept each other's replies -- a "
 # Written as `_n` it compared 33 against 33 and passed while the file actually ran
 # 34 -- a coverage assertion that is off by one in the direction that always
 # passes, which is the worst direction for it to be wrong in.
-EXPECTED = 34
+EXPECTED = 47
 check(f"13: this file ran exactly {EXPECTED} checks -- a file that matched "
       f"nothing would otherwise report all green",
       _n + 1 == EXPECTED, f"ran {_n + 1}")

@@ -361,6 +361,15 @@ class RouteRun(Run):
         self.reports = []
         self.emu = emu
         self.result = {}
+        # `Run` grew these with checkpoint branching and scout emulators. A stub
+        # that omits them does not fail a check -- it raises AttributeError from
+        # the middle of `segment()`, which aborted the file before the checks that
+        # follow could run, and the runner reported them as "failed" for a reason
+        # that had nothing to do with what they test. `scouts=1` is MAIN only,
+        # the inline path.
+        self.scouts_wanted = 1
+        self._scouts_open = []
+        self.branches = []
 
     def _emu(self):
         return self._stub_emu

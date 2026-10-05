@@ -69,24 +69,56 @@ ROM="$(readlink -f "$ROM")"
 SCRIPT="$(readlink -f "$SCRIPT")"
 [ -d "$BIZ" ] || { echo "run.sh: BizHawk not at $BIZ; set BIZHAWK=/path" >&2; exit 1; }
 
-# A leftover EmuHawk holds the single-instance pipe, so this launch is diverted
-# into it and shows no window of its own. Past runs were measured against exactly
-# that and looked fine. Fail rather than measure, unless explicitly told to clean
-# up: killing someone's emulator window is not this script's decision to make.
+# A leftover EmuHawk: does a second launch get diverted into the first?
+#
+# THE MEASUREMENT, because this guard's justification was wrong and the wrongness
+# was load-bearing. `runner.py` used to refuse `scouts > 1` because "BizHawk
+# diverts a second launch into the first through its single-instance pipe". On
+# THIS machine it does not: BizHawk 2.11.1's config.ini carries
+# `"SingleInstanceMode": false` (line 1502), and three concurrent sessions were
+# launched, each with its own PID, its own window, its own bridge port, and a
+# distinct $0000-$07FF fingerprint from a distinct input pattern. What refused a
+# second launch was THIS GUARD, not BizHawk.
+#
+# Which is why the guard was never the thing under test: three sessions racing
+# past a `pgrep` all see an empty result and all proceed. Serial, it fires.
+#
+# So the guard is kept -- a stray window from an interrupted run should not be
+# adopted by the next one -- but it is now HONEST about what it does, and
+# `MAGICIAN_ALLOW_CONCURRENT=1` is the opt-in for the parallel case, which says
+# on stdout that it is being used. The default is still to refuse, because a
+# genuinely diverted launch shows no window and the run would measure a session
+# it did not start; refusing loudly is better than that.
 # The bracket in the pattern keeps pkill from matching its own command line,
 # which is how the previous attempt killed the shell that was running it.
 if pgrep -f '[m]ono EmuHawk' >/dev/null; then
-  if [ "${MAGICIAN_KILL_STALE:-0}" = "1" ]; then
+  if [ "${MAGICIAN_ALLOW_CONCURRENT:-0}" = "1" ]; then
+    echo "run.sh: an EmuHawk is already running and MAGICIAN_ALLOW_CONCURRENT=1."
+    echo "run.sh: launching a second window. BizHawk 2.11.1 here runs with"
+    echo "run.sh: SingleInstanceMode=false, so this is a separate session -- but"
+    echo "run.sh: verify the PIDs differ (runner.py asserts it) before trusting"
+    echo "run.sh: anything measured through it."
+    pgrep -af '[m]ono EmuHawk' >&2
+  elif [ "${MAGICIAN_KILL_STALE:-0}" = "1" ]; then
     echo "run.sh: MAGICIAN_KILL_STALE=1, killing the instance already running"
     pkill -f '[m]ono EmuHawk'
     sleep 3
     pgrep -f '[m]ono EmuHawk' >/dev/null \
       && { echo "run.sh: it would not die" >&2; exit 3; }
   else
-    echo "run.sh: FAIL -- an EmuHawk is already running." >&2
-    echo "run.sh: BizHawk allows one instance; this launch would be diverted into" >&2
-    echo "run.sh: it and show no window, and the run would measure the old session." >&2
-    echo "run.sh: re-run with MAGICIAN_KILL_STALE=1 to close it first." >&2
+    # The wording is corrected: it used to say "BizHawk allows one instance; this
+    # launch would be diverted into it", which is FALSE here and was believed for
+    # months. What actually happens is that this launcher declines to run beside
+    # a window it does not own, because it cannot prove the new window is the new
+    # window. `runner.Run.start` now proves it by comparing EmuHawk PIDs.
+    echo "run.sh: FAIL -- an EmuHawk is already running and this is not it." >&2
+    echo "run.sh: refusing rather than adopting a window this launch did not" >&2
+    echo "run.sh: start, because it could not prove the new session is new." >&2
+    echo "run.sh:   MAGICIAN_KILL_STALE=1        close that one first" >&2
+    echo "run.sh:   MAGICIAN_ALLOW_CONCURRENT=1 run a second window beside it" >&2
+    echo "run.sh:                                  (MEASURED safe on this machine:" >&2
+    echo "run.sh:                                   SingleInstanceMode=false, three" >&2
+    echo "run.sh:                                   concurrent sessions verified)" >&2
     pgrep -af '[m]ono EmuHawk' >&2
     exit 3
   fi

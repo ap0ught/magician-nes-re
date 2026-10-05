@@ -197,7 +197,8 @@ class BizHawk:
 
     def __init__(self, rom: pathlib.Path = ROM, log_name: str = "play",
                  route: str = "", run: str = "", kill_stale: bool = False,
-                 settle: int = 120, connect_timeout: int = 90):
+                 settle: int = 120, connect_timeout: int = 90,
+                 concurrent: bool = False):
         self.rom = pathlib.Path(rom).resolve()
         if not self.rom.exists():
             raise FileNotFoundError(
@@ -225,13 +226,25 @@ class BizHawk:
         self.bridge_log = LOGS / f"{log_name}.bridge.log"
         self.cmd_log = LOGS / f"{log_name}.cmd.log"
         self._cmdlog = open(self.cmd_log, "a", encoding="utf-8")
-        # One EmuHawk at a time. BizHawk diverts a second launch into the first
-        # through its single-instance pipe, so a second window would show the
-        # FIRST session and this bridge would connect to the wrong emulator.
-        # run.sh refuses by default; the override is opt-in and never silent.
+        # run.sh refuses to launch beside another EmuHawk, because a launch that
+        # IS diverted into a running session would report the other session's
+        # memory while looking entirely healthy. `concurrent=True` is the opt-in
+        # for launching a second window on purpose, and it is never silent: run.sh
+        # prints what it is doing and `Run.start` then checks that this launch
+        # really did add a process.
+        #
+        # The refusal was once stated as a property of BIZHAWK ("diverts a
+        # single-instance launch into the first") and that was wrong on this
+        # machine: BizHawk 2.11.1's config.ini carries SingleInstanceMode=false
+        # and three concurrent sessions were measured, each with its own PID and
+        # its own RAM. run.sh's own guard is what refused. Both are recorded in
+        # runner.N_EMULATORS; this comment is only here so the flag's meaning is
+        # readable at the place it is used.
         env = dict(os.environ)
         env["MAGICIAN_BRIDGE_LOG"] = str(self.bridge_log)
         env.pop("MAGICIAN_BRIDGE_PORT", None)
+        if concurrent:
+            env["MAGICIAN_ALLOW_CONCURRENT"] = "1"
         if kill_stale:
             env["MAGICIAN_KILL_STALE"] = "1"
         env["MAGICIAN_SETTLE"] = str(settle)
@@ -278,13 +291,20 @@ class BizHawk:
         self._closed = False
         self._pids: list[int] = []
 
-        # Remember which EmuHawk is ours, because BizHawk's window outlives the
-        # run.sh that launched it: run.sh backgrounds it with setsid and exits
-        # immediately. `close()` therefore cannot assume the process is gone when
-        # run.sh returns, and a second launch launched too soon is DIVERTED into
-        # the first through the single-instance pipe -- so the replay emulator
-        # silently became the old session. Which is precisely what happened.
-        self._pids = self.running_emuhawk()
+        # WHICH EMUHAWK IS OURS. BizHawk's window outlives the run.sh that launched it
+        # (run.sh backgrounds it with setsid and returns immediately), so the
+        # processes alive NOW may include ones that predate this session -- and a
+        # `close()` that waited on the wrong PID, or a `Run.start` that assumed a
+        # launch succeeded because a session answered, are both ways of measuring
+        # the wrong machine.
+        #
+        # `before` is captured here, before the window exists, and `_pids` is the
+        # delta. The runner reads `_pids` to decide whether this launch was
+        # diverted. `close()` waits on `_pids` for the same reason: it must not
+        # wait for -- or kill -- somebody else's window.
+        self._before_pids = set(self.running_emuhawk())
+        self._pids = sorted(set(self.running_emuhawk()) - self._before_pids)
+        self.diverted = not self._pids
         assert self.cmd("ping") == "pong", "the bridge answered ping with something else"
         self.domains = self._read_domains()
         missing = [d for d in REQUIRED_DOMAINS if d not in {x.name for x in self.domains}]

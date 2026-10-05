@@ -164,9 +164,29 @@ class Fake:
         # being tested.
         e["MAGICIAN_SETTLE"] = e.get("MAGICIAN_SETTLE", "6")
         e["MAGICIAN_EXPECT_WAIT"] = e.get("MAGICIAN_EXPECT_WAIT", "6")
+        # `MAGICIAN_ALLOW_CONCURRENT` is SET, not just popped.
+        #
+        # These tests are about run.sh's identity checks, its SaveRAM decision and
+        # its verdict handling. None of those is the stale-instance guard, and the
+        # guard fires on any real EmuHawk anywhere on the machine -- including one
+        # belonging to a DIFFERENT project. That is not hypothetical: this file
+        # failed three checks with exit 3 because an unrelated
+        # `aibeatszelda` replay was holding a window, and every failure pointed
+        # at the guard rather than at the thing under test.
+        #
+        # A test suite whose result depends on what else is running on the box is
+        # a test suite that will be red for reasons unrelated to its subject, and
+        # the failure mode here is worse than ordinary flakiness: the message says
+        # "an EmuHawk is already running", which reads as a real finding about
+        # run.sh. The guard is pinned on purpose in section G, with the variable
+        # unset, so it is still covered.
+        #
+        # The opt-in is only honoured when a real EmuHawk exists, so this changes
+        # nothing on a clean machine.
         for k in ("MAGICIAN_EXPECT", "MAGICIAN_DONE", "MAGICIAN_EXPECT_SHA1",
                   "MAGICIAN_KILL_STALE", "MAGICIAN_LUA_OUT"):
             e.pop(k, None)
+        e["MAGICIAN_ALLOW_CONCURRENT"] = "1"
         e.update(env or {})
         return subprocess.run(["bash", str(RUN_SH), str(script), str(rom)],
                               capture_output=True, text=True, env=e, timeout=timeout)
@@ -509,6 +529,108 @@ offenders = [f"{i + 1}: {ln.strip()}" for i, ln in enumerate(src.splitlines())
 check("no guard in run.sh compares against a bare 0x literal", not offenders,
       "a bare 0x in -lt/-gt defeats the guard it is in; see the four checks "
       f"above. Offenders:\n" + "\n".join(offenders))
+
+# =====================================================================================
+# G. The stale-instance guard, with the concurrency opt-in UNSET.
+# =====================================================================================
+# Every other section sets MAGICIAN_ALLOW_CONCURRENT=1 (see Fake.run), because a
+# real EmuHawk anywhere on the machine -- including one belonging to a different
+# project -- would otherwise fire the guard and turn three unrelated checks red
+# with a message about EmuHawk. So the guard needs its own section, where the
+# variable is explicitly unset.
+#
+# It is worth pinning because the guard is the thing that made
+# `runner.N_EMULATORS` say 1 for months, and because its stated reason turned out
+# to be wrong: BizHawk 2.11.1 here runs with SingleInstanceMode=false and does
+# hold several windows. The guard is still correct -- an unowned window should not
+# be adopted -- but it is a POLICY about this launcher, not a fact about BizHawk,
+# and these checks say which.
+FAKE_G = Fake("fake_g")
+check("run.sh's guard comment records that BizHawk's single-instance behaviour "
+      "is NOT what stops a second launch here, and that this was measured",
+      "SingleInstanceMode" in RUN_SH.read_text(encoding="utf-8")
+      and "THIS GUARD, not BizHawk" in RUN_SH.read_text(encoding="utf-8"),
+      "if this fails the comment was reworded; re-measure N_EMULATORS before "
+      "changing the number it justifies")
+
+# THE GUARD IS EXERCISED AGAINST A DECOY THE TEST ITSELF STARTS.
+#
+# The first version of this section asked "is a real EmuHawk running?" and
+# skipped when the answer was no. That is how three checks went unrun for most of
+# a session -- and the environment decides, not the test. Worse, the one time a
+# real EmuHawk WAS running it belonged to a different project
+# (`aibeatszelda`, replaying a Zelda rom), which is exactly the situation the
+# guard exists for and also exactly the situation a test should not depend on.
+#
+# So the test manufactures the condition. `exec -a` sets the process's argv[0],
+# which is what `pgrep -f` matches against; the command is `sleep`, so it is
+# harmless, it is not an emulator, and killing it cannot lose work. The pattern
+# carries its own bracket (`[m]ono`) precisely so this decoy does not match the
+# matcher -- the same property the real launcher relies on.
+decoy = subprocess.Popen(["bash", "-c", "exec -a 'mono EmuHawk decoy' sleep 120"])
+try:
+    seen = subprocess.run(
+        ["bash", "-c", "pgrep -f '[m]ono EmuHawk' >/dev/null"],
+        capture_output=True).returncode == 0
+    check("the decoy is visible to the very pattern run.sh's guard uses, so the "
+          "checks below are testing the guard rather than a skipped branch",
+          seen,
+          "pgrep did not match 'mono EmuHawk decoy'. If this fails, the guard is "
+          "matching on something other than what it claims and every conclusion "
+          "drawn from it -- including N_EMULATORS -- is unsupported.")
+
+    p = FAKE_G.run(ROM, env={"MAGICIAN_ALLOW_CONCURRENT": "0"})
+    fails_with("with something matching an EmuHawk and the opt-in unset, run.sh "
+               "refuses before launching (exit 3)", p.returncode, 3, p,
+               must_say=("already running", "MAGICIAN_ALLOW_CONCURRENT=1"))
+    body = p.stdout + p.stderr
+    check("the refusal names BOTH ways out, so the reader is not left to guess",
+          "MAGICIAN_KILL_STALE=1" in body
+          and "MAGICIAN_ALLOW_CONCURRENT=1" in body, body[-600:])
+    check("the refusal explains WHY in terms of not being able to PROVE the new "
+          "session is new -- the real reason, and the one that survives now that "
+          "BizHawk's own behaviour has been measured",
+          "could not prove the new session is new" in body, body[-600:])
+    check("the refusal does NOT claim BizHawk diverts the launch -- the claim "
+          "measured FALSE here and believed for months. It says what actually "
+          "happens: this launcher declines to adopt a window it does not own",
+          "diverted into" not in body
+          and "refusing rather than adopting a window this launch did not" in body
+          and "and this is not it" in body, body[-600:])
+    check("the refusal says the opt-in was MEASURED, so running beside a window "
+          "is a measurement rather than a guess, and names the setting behind it",
+          "MEASURED safe" in body and "SingleInstanceMode=false" in body,
+          body[-600:])
+    check("the refusal names the process it found, so 'not mine' is checkable "
+          "rather than asserted",
+          "decoy" in body, body[-600:])
+
+    # And the opt-in, with the decoy still up, says out loud that it is being
+    # used. A silent opt-in is how a harness quietly changes what it measures.
+    p = FAKE_G.run(ROM, env={"MAGICIAN_ALLOW_CONCURRENT": "1"})
+    both = p.stdout + p.stderr
+    check("with the opt-in set, run.sh says on stdout that a second window is "
+          "being launched rather than proceeding quietly",
+          "MAGICIAN_ALLOW_CONCURRENT=1" in both
+          and "SingleInstanceMode=false" in both, both[:600])
+    check("and it tells the caller to verify the PIDs differ before trusting "
+          "anything measured through the second window -- the check the guard "
+          "cannot make for you",
+          "verify the PIDs differ" in both, both[:600])
+    # "already running" appears in the opt-in message too -- it is naming the
+    # condition, not refusing it -- so the test that matters is the exit code
+    # plus the refusal's own wording ("FAIL -- an EmuHawk is already running and
+    # this is not it").
+    check("and the opt-in run gets PAST the guard -- a refusal here would mean the "
+          "opt-in does not work, which is the kind of thing that leaves a whole "
+          "feature dark while every check still reports green",
+          p.returncode == 0 and "FAIL -- an EmuHawk is already running" not in both,
+          f"rc={p.returncode} {both[:600]}")
+finally:
+    # By PID, always. `pkill -f mono EmuHawk` would match its own command line.
+    if decoy.poll() is None:
+        decoy.kill()
+    decoy.wait(timeout=10)
 
 print(f"run.sh: {ok} checks")
 print("all checks passed")
