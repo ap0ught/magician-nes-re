@@ -21,8 +21,12 @@ from play import ram  # noqa: E402
 
 def main() -> int:
     frames = int(sys.argv[1]) if len(sys.argv) > 1 else 120
+    ram.load_button_order()
     stale = BizHawk.running_emuhawk()
     print(f"running mono pids before launch: {stale or 'none'}")
+    if stale:
+        print("REFUSING: BizHawk would divert this launch into the running one")
+        return 2
     with BizHawk(log_name="smoke", route="smoke") as emu:
         print(f"connected in {emu.connect_seconds:.1f}s on port {emu.port}")
         print(f"domains ({len(emu.domains)}):")
@@ -37,14 +41,22 @@ def main() -> int:
         # declared byte must be one the symbol table says it is.
         vals = ram.decode(img)
         print(f"decoded {len(vals)} fields")
-        for n in ("phase", "curlev", "mapind", "manacur", "wealth", "plrstat",
-                  "plrflg", "plrx", "plry", "obtyp", "pad", "deb_fire"):
+        for n in ("phase", "curlev", "mapind", "manacur", "manatop", "wealth",
+                  "plrstat", "plrflg", "plrtype", "pad", "deb_start", "nmiflag"):
             x = ram.f(n)
             print(f"  {n:<10} ${x.addr:04X}+{x.length} = {vals[n]:<8} [{x.hex(img)}]")
-        # The panel/level code only runs when the game is past its title screen,
-        # so at frame ~120 the expected state is: still the title, phase still
-        # whatever the reset left, no player objects live.
-        print(f"  title-screen check: obtyp = {img[0x04F4:0x04F8].hex()}")
+        # `plrx`/`plry` are FUNCTIONS, not fields: the two halves of the player's
+        # position live in two separate one-byte arrays (obxl[3] and obxh[3]),
+        # four bytes apart, so there is no two-byte field that spans them. The
+        # first version of this file called `ram.f("plrx")` and would have died
+        # with a KeyError the first time that changed.
+        print(f"  player position: ({ram.plrx(img)},{ram.plry(img)})  "
+              f"[obxl[3]=${img[0x0514 + ram.PLAYER_IDX]:02X} "
+              f"obxh[3]=${img[0x0518 + ram.PLAYER_IDX]:02X}]")
+        for i in range(4):
+            s = ram.object_slot(img, i)
+            print(f"  slot {i}: obtyp=${s['obtyp']:02X} {'LIVE' if s['active'] else 'free'} "
+                  f"pos=({s['x']},{s['y']}) obchr=${s['obchr']:02X}")
         d = emu.snapshot("smoke_idle")
         print(f"snapshot -> {d}")
         for f in sorted(d.iterdir()):
