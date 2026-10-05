@@ -130,6 +130,34 @@ CLAIMS: list[dict] = [
         "settled_by": "not a measurement; it is `ram.ITEMS`' own encoding",
     },
     {
+        "id": "ninflag_pins_the_character",
+        "claim": "on a NEW GAME this cartridge puts the player in the "
+                 "game's own 'infinite' mode, so mana, gold, food, water and "
+                 "health are all pinned every second and nothing drains",
+        "read_in": "not read anywhere. Found by measurement, and it invalidated "
+                   "three predicates this ladder had already written.",
+        "against": "`initvars` ends `inc ninflag` (x1.pds:31), and Beta 1 has "
+                   "the same instruction spelled out: at $8556 the bytes are "
+                   "`A9 01 8D 1A 07` -- `lda #$01 / sta ninflag` -- which is the "
+                   "same value on a cleared byte. `tickmana` (x7.pds:244-261) "
+                   "tests `lda ninflag / bne !a` BEFORE `dec mclock`, and the "
+                   "`!a` branch does `lda manatop / sta manacur / sta wealth` "
+                   "and then `ldx #$00 ... dex / stx food / stx water`, i.e. it "
+                   "pins mana AND gold to the mana cap and refills food, water "
+                   "and health once a second.",
+        "settled_by": "MEASURED on Beta 1 at frame 433 of the warrior rung: "
+                      "ninflag=1, mclock=0 (and `mclock` is only ever written by "
+                      "the branch this one skips, so a zero after 433 frames is "
+                      "its own proof), food=255, water=255, plrhelm=255, "
+                      "manacur=manatop=50, wealth=50. And the drop is TIMED: "
+                      "`wealth` is 100 at frame 81 -- which is the source's "
+                      "`lda #50 / asl a / sta wealth` -- and 50 at frame 155, the "
+                      "first one-second tick after the town loaded. CONSEQUENCE: "
+                      "gold cannot be used as a success predicate for a purchase, "
+                      "and mana regeneration cannot be observed at all until "
+                      "`manatop` is raised.",
+    },
+    {
         "id": "hunger_and_thirst",
         "claim": "hunger and thirst each fall about 1% every 2.5 seconds; "
                  "either at 0 costs 2 health a second and both at 0 costs 5, "
@@ -265,64 +293,110 @@ def p_walk_to_npc(rng, rec, max_frames, legs=(1, 2, 3, 4)):
     return None, used, " ".join(tried)
 
 
-def p_talk(rng, rec, max_frames, *, approaches=("Right", "Left")):
-    """Find somebody, face them, and press UP the way the game reads a talk.
+def obchr_of(image: bytes, slot: int) -> int:
+    """`obchr` for one object slot. One function, so the note and the test agree."""
+    return image[ram.f("obchr").addr + slot]
 
-    Three measured facts are in here and each one is a reason a single press
-    does nothing:
 
-      * the player must be STANDING (`standing:` in x4.pds reads `getdir` and
-        compares to 2), so the walk has to have finished;
-      * `getdir` returns 2 only when UP is the ONLY thing held, with no left or
-        right (x6.pds:961-962), so the facing press has to be RELEASED first;
-      * `intflg` is "only test once till released from up" (x4.pds:313-314), so
-        the UP press has to be released and pressed again to get a second
-        attempt -- which is why this pulses UP instead of holding it.
+def p_talk(rng, rec, max_frames, presses=(1, 2, 3)):
+    """Find somebody, walk up to them, face them, and press UP until they answer.
+
+    Four facts are in here and each is a reason a single press does nothing.
+    All four came out of `x4.pds:305-412` and `MISC.SRC`'s `obchars`, and each was
+    WRONG in the first version of this policy, which was scored a success that
+    was nothing of the kind:
+
+      * **THE COUNT.** `obchr` bits 0-1 are an interaction COUNT, and
+        `oc_c0`..`oc_c2` (MISC.SRC:1421-1423) say it is "interact after the nth
+        attempt". The adventurer is `oc_c0` -- zero, so it answers at once -- and
+        the barbarian is `oc_c2`, so it ignores the first two presses and
+        answers the third. `!i5` is the whole of that mechanism:
+        `dey / sty t12 / and #%11111100 / ora t12 / sta obchr,x`.
+      * **THE DISTANCE.** `!i10` wants the low byte of (plr.x - ob.x) below
+        $28 and `lda t13 / bne !iz` wants the high bytes equal. The first
+        version walked at the NPC from 70 pixels away, said exactly that in its
+        own note, and was scored a success anyway.
+      * **UP ALONE.** `getdir` returns 2 only when UP is held with neither left
+        nor right (x6.pds:961-962), so the facing press must be RELEASED first
+        or the game is being asked to walk, not to talk.
+      * **ONE ATTEMPT PER PRESS.** `intflg` is "only test once till released
+        from up" (x4.pds:313-314), so each UP must be released before the next
+        one counts. That is why UP is pulsed here and not held.
     """
     slot, used, trail = p_walk_to_npc(rng, rec, max_frames)
     if slot is None:
         return f"no NPC within the walk budget: {trail}"
     img = rec.emu.work_ram()
-    me = (ram.plrx(img), ram.plry(img))
     them = npc_at(img, slot)
     kind = npc_chr(img, slot)
-    d = toward(me, them) if rng.random() < 0.7 else rng.choice(approaches)
-    # Turn. A facing change is an ANIMATION (iturn -> anim), not an instant, so
-    # this waits for the facing byte to agree rather than for a fixed count.
-    before = facing(img)
-    rec.step((d,), 12)
-    rec.step((), 12)
+    # Walk up to it, in short taps. The town row is one long east-west street,
+    # and the guard is a WINDOW (|dx| <= $28, same page), so overshooting past
+    # the far side is a real possibility rather than a theoretical one.
+    for _ in range(26):
+        img = rec.emu.work_ram()
+        me = (ram.plrx(img), ram.plry(img))
+        dx, dy = _delta(me, them)
+        if abs(dx) <= 0x28 and dy == 0:
+            break
+        if rec.remaining(max_frames) <= 40:
+            break
+        rec.step((toward(me, them),), 6)
+        used += 6
     img = rec.emu.work_ram()
-    now = facing(img)
+    me = (ram.plrx(img), ram.plry(img))
+    dx, dy = _delta(me, them)
+    before = facing(img)
+    d = toward(me, them)
+    rec.step((d,), 10)
+    rec.step((), 14)
     used += 24
-    note = (f"slot {slot} type ${kind:02X} at {them}, plr at {me} facing "
-            f"{before}->{now} after {d}")
+    now = facing(rec.emu.work_ram())
+    note = (f"slot {slot} type ${kind:02X} at {them}, plr {me}, dx={dx} dy={dy} "
+            f"(guard: |dx|<=$28 and same page), facing {before}->{now} after {d}")
     if now not in (0, 1):
-        note += f" -- STILL FACING UP/DOWN, so the game's own guard (`and #$02 "
-        note += f"/ cmp #$01`, x4.pds:309-311) would refuse the talk"
+        note += (" -- STILL NOT FACING LEFT/RIGHT, and the game's own guard "
+                 "(`and #$02 / cmp #$01`, x4.pds:309-311) refuses a talk unless "
+                 "the player is")
         return note
-    if abs(me[0] - them[0]) > 0x28 or me[1] != them[1]:
-        note += (f" -- but the game wants the object within $28 px on the "
-                 f"facing side and level with us; |dx|={abs(me[0]-them[0])} "
-                 f"dy={abs(me[1]-them[1])}")
-    rec.step((), 10)
-    used += 10
-    before_gold = ram.f("wealth").get(rec.emu.work_ram())
-    # UP, pulsed, and only UP.
-    for _ in range(3):
-        if rec.remaining(max_frames) <= 8:
+    rec.step((), 8)
+    used += 8
+    gold0 = ram.f("wealth").get(rec.emu.work_ram())
+    for i in range(rng.choice(presses) + 1):
+        if rec.remaining(max_frames) <= 10:
             break
         rec.step(("Up",), 3)
-        rec.step((), 5)
-        used += 8
+        rec.step((), 6)
+        used += 9
+        b = obchr_of(rec.emu.work_ram(), slot)
+        note += (f"; press {i + 1}: obchr=${b:02X} (ctrl={b >> 2 & 3} "
+                 f"cnt={b & 3})")
+        if (b >> 2) & 3 == 1:
+            note += " -- ANSWERED: the game set this person to 'always ignore'"
+            break
     img = rec.emu.work_ram()
-    gold = ram.f("wealth").get(img)
-    note += (f"; gold {before_gold}->{gold}"
-             f" {'(UNEXPECTEDLY UP -- investigate)' if gold > before_gold else ''}"
-             f"; intflg={img[ram.f('intflg').addr]}"
+    gold1 = ram.f("wealth").get(img)
+    note += (f"; gold {gold0}->{gold1}"
+             + ("  <<< UNEXPECTEDLY UP" if gold1 > gold0 else "")
+             + f"; intflg={img[ram.f('intflg').addr]}"
              f" uflg={img[ram.f('uflg').addr]}"
-             f" npc obchr=${img[ram.f('obchr').addr + slot]:02X}")
+             f" trail={trail}")
     return note
+
+
+def _delta(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+    """Signed 16-bit difference, because the game's guard subtracts two BYTES.
+
+    `!i10` computes `plrx - obx` as an 8-bit low half plus an 8-bit high half
+    and tests them separately, so a player 70 pixels to the WEST of the object
+    has a low half of $BA and is refused -- which is not the same as being
+    "far away" and is exactly what the first version of this policy got wrong.
+    """
+    out = []
+    for p, q in zip(a, b):
+        d = (p - q) & 0xFFFF
+        out.append(d - 0x10000 if d > 0x7FFF else d)
+    return out[0], out[1]
+
 
 
 def p_enter_shop(rng, rec, max_frames, door=None):
@@ -407,7 +481,7 @@ def p_buy(rng, rec, max_frames, icon_hint=None):
 
 
 def p_drink(rng, rec, max_frames):
-    """In the pub: move to the tankard and press A ONCE.
+    """In the pub: move to the tankard and press A ONCE, and record the gold.
 
     Once, deliberately. The tankard icon's script is three `g1,set,drink` and
     then `gover`, and `gover` kills the player, so a policy that pulsed A until
@@ -425,7 +499,10 @@ def p_drink(rng, rec, max_frames):
     presses += 1
     img = rec.emu.work_ram()
     note.append(f"1 press -> drink flag {ram.flag_set('drink', img)}, "
-                f"gold {ram.f('wealth').get(img)}")
+                f"gold {ram.f('wealth').get(img)} (recorded, NOT asserted: "
+                f"`tickmana` re-stores `wealth` from `manatop` every second "
+                f"while `ninflag` is set, so a price is refunded inside 60 "
+                f"frames -- CLAIMS['ninflag_pins_the_character'])")
     return "; ".join(note)
 
 
@@ -460,129 +537,45 @@ def _p_pulse(button: str, done, rng, rec, max_frames):
     return p_pulse(button, done)()(rec.emu, rec, rng, max_frames)
 
 
-def talk_changed(before: bytes):
-    """Some live NPC's `obchr` changed: the game's own record of a talk.
+def talked_to():
+    """Somebody in the street is now set to "always ignore". Nothing else does.
 
-    `x4.pds:370-377` sets the object's interaction-control bits (bits 2-3 of
-    `obchr`) to "always ignore" when a barbarian/adventurer/monk/wizard is
-    talked to, and `t1m1` (x4.pds:615-617) puts them back. It is durable for as
-    long as the object lives, unlike `intflg`, which the game clears the moment
-    UP is released, and unlike the panel, whose message buffer drains itself.
-    So this is the assertion; the panel's `panhead != pantail` is reported in the
-    note as corroboration, not asserted, because it can be true from the level's
-    own welcome message.
+    This replaces a predicate the first version of the ladder had, "some live
+    object's `obchr` CHANGED", and the reason is the most useful thing this
+    session's own run found: **it passed, and it was wrong.** Seed 1002 was
+    scored a success for walking into an adventurer at 70 pixels and pressing
+    UP once, and it had not talked to anybody.
+
+    Three separate things write `obchr`, and only one of them is a conversation:
+
+      * `actob` (x6.pds:516-539) sets the whole byte from `obchars[type]` when
+        the object is CREATED -- so merely walking into the adventurer's
+        trigger changes `obchr`;
+      * `!i5` (x4.pds:408-412) decrements bits 0-1, the interaction COUNT, on
+        every ignored press -- so pressing UP at all changes `obchr`;
+      * `!i61` (x4.pds:373-374) is the only writer of bits 2-3 during a talk:
+        `eor #%00001100` on a control of 2 leaves control of 1, which the game's
+        own comment calls "always ignore".
+
+    `obchars` for the town's four talkable types is
+    `oc_phyy, oc_sery, oc_beydy, oc_inter, oc_cN` composed by MISC.SRC's `c`
+    macro as `@1*$80 + @2*$40 + @3*$10 + @4*$4 + @5`, so bits 2-3 are `oc_inter`
+    = 2 at creation and can only become 1 by the talk path. So the assertion is
+    bits 2-3 == 1 on a slot that is alive, which is a function of one RAM byte
+    and cannot be satisfied by arriving or by pressing.
     """
-    was = [before[ram.f("obchr").addr + i] for i in range(ram.PLAYER_IDX)]
-
     def ok(image: bytes) -> bool:
         live = npc_slots(image)
-        for i in range(ram.PLAYER_IDX):
-            now = image[ram.f("obchr").addr + i]
-            if now != was[i] and (not live or i in live):
+        for i in live:
+            if (obchr_of(image, i) >> 2) & 0x03 == 1:
                 return True
         return False
-    ok.__doc__ = (f"a live object slot's obchr differs from "
-                  f"{['$%02X' % w for w in was]}")
+    ok.__doc__ = ("a LIVE object slot has obchr bits 2-3 == 1, the "
+                  "'always ignore' state that only `!i61`'s "
+                  "`eor #%00001100` produces (x4.pds:373-374). Activation sets "
+                  "it to 2 from `obchars` and `!i5` only touches bits 0-1, so "
+                  "neither arriving at the person nor pressing UP can pass this")
     return ok
-
-
-def p_leave_shop(rng, rec, max_frames):
-    """Leave the shop: move the cursor to the EXIT icon and press A.
-
-    Icon 7 is always the exit -- `isa` writes `lda #$3e ; sta tmpbuf2+7` after
-    copying icons 0..6 (x5.pds:684-686) -- and `sexit` does `newlev` back to
-    `oldlev`. There is no other way out of g07: `g07` reads `dfirea` and
-    nothing else, so SELECT does nothing here and a policy that tries it would
-    burn its budget. That the exit is ALWAYS icon 7 is why this moves the cursor
-    seven times rather than searching for it.
-    """
-    img = rec.emu.work_ram()
-    start = ram.f("shopind").get(img)
-    note = [f"leaving shop {ram.f('shopdat').get(img)} from icon {start}"]
-    for _ in range(9):
-        if rec.remaining(max_frames) <= 10:
-            break
-        rec.step(("Right",), 6)
-        rec.step((), 4)
-    img = rec.emu.work_ram()
-    note.append(f"cursor now {ram.f('shopind').get(img)}")
-    rec.step(("A",), 3)
-    rec.step((), 10)
-    img = rec.emu.work_ram()
-    note.append(f"after A: {_brief(img)}")
-    return "; ".join(note)
-
-
-def p_icon(rng, rec, max_frames, want, press=("A",), answer=False):
-    """Put the cursor on icon `want` and press A there, optionally answering YES.
-
-    `g07` adds `4*dlr + dud` to `shopind` and masks with `#$07`, so Left/Right
-    move by four and Up/Down by one, and there is no wrap. Pressing A on a
-    script icon can raise `ynflag`, which is the shop ASKING a question
-    (`syesno`: `inc ynflag`, then the question, then the 'a-yes b-no' line), and
-    the answer is another A -- `waityn` records $80 for A and $81 for B and
-    `syesno` reads the carry out of `lsr a` to tell them apart. So "press A
-    until something is bought" is wrong twice over: it answers a question it
-    never saw, and it can spend the shop's money.
-    """
-    img = rec.emu.work_ram()
-    note = [f"shop {ram.f('shopdat').get(img)}, want icon {want} "
-            f"(at {ram.f('shopind').get(img)})"]
-    for _ in range(12):
-        if rec.remaining(max_frames) <= 12:
-            break
-        cur = ram.f("shopind").get(rec.emu.work_ram())
-        if cur == want:
-            break
-        rec.step(("Right",), 6)
-        rec.step((), 4)
-        note.append(f"-> {cur}")
-    cur = ram.f("shopind").get(rec.emu.work_ram())
-    if cur != want:
-        note.append(f"could not reach icon {want}, stopped at {cur}")
-        return "; ".join(note)
-    gold0 = ram.f("wealth").get(rec.emu.work_ram())
-    rec.step(press, 3)
-    rec.step((), 8)
-    img = rec.emu.work_ram()
-    note.append(f"A on icon {want}: ynflag={img[ram.f('ynflag').addr]} "
-                f"gold {gold0}->{ram.f('wealth').get(img)} "
-                f"drink={ram.flag_set('drink', img)} "
-                f"asked={ram.flag_set('asked', img)}")
-    if answer and ram.f("ynflag").get(img):
-        rec.step(("A",), 3)
-        rec.step((), 10)
-        img = rec.emu.work_ram()
-        note.append(f"answered: ynflag={img[ram.f('ynflag').addr]} "
-                    f"gold {gold0}->{ram.f('wealth').get(img)} "
-                    f"asked={ram.flag_set('asked', img)} "
-                    f"gotlet={ram.flag_set('gotlet', img)} "
-                    f"letter={ram.carried(ram.ITEMS['letter'], img)}")
-    return "; ".join(note)
-
-
-def p_rune(rng, rec, max_frames):
-    """On the spell screen: press B once to enter one rune.
-
-    `g09`'s B handler prices the rune before it accepts it (x6.pds:321-341):
-    `chkmana` writes `manacur - cost` into `valsav` and `upmana` only runs when
-    the charge is affordable, and the refusal path restores `manacur` from
-    `manasav`. So ONE press of B is a measurement of what the game charges,
-    and `manacur - valsav` read straight afterwards is that charge -- which is
-    the only way to settle 4/8/12/16 against 50 without believing either.
-    """
-    img = rec.emu.work_ram()
-    mana = ram.f("manacur").get(img)
-    saved = ram.f("manasav").get(img)
-    rec.step(("B",), 3)
-    rec.step((), 4)
-    img = rec.emu.work_ram()
-    charge = ram.f("manacur").get(img) - ram.f("valsav").get(img)
-    return (f"manacur {mana} manasav {saved} -> manacur "
-            f"{ram.f('manacur').get(img)} valsav {ram.f('valsav').get(img)}: "
-            f"manacur - valsav = {charge}; currune="
-            f"{img[ram.f('currune').addr]} buildind={img[ram.f('buildind').addr]}"
-            f" botbuf={ram.f('botbuf').hex(img)}")
 
 
 def shop_pred(number: int):
@@ -612,26 +605,40 @@ def mana_charged(at_least: int = 1):
     return ok
 
 
-# What a new character has. `initvars` (x1.pds:32-35) is
+# What a new character has, and why neither number can be a predicate.
+#
+# `initvars` (x1.pds:32-35) is
 #     lda #50 / sta manacur / sta manatop / asl a / sta wealth
-# so gold is 100. MEASURED value goes in the milestone log; if it reads 50 then
-# the `asl a` is not in the cartridge's `initvars`, which is a finding about the
-# dump and not about this number.
+# so gold starts at 100 and mana at 50. Both were MEASURED on Beta 1 and both
+# are then overwritten: `wealth` is 100 at frame 81 and 50 by frame 155, and it
+# STAYS 50 because `tickmana`'s `!a` branch re-stores it from `manatop` every
+# second while `ninflag` is set. `tickmana` is why this file has no gold
+# predicate and no mana-regeneration predicate; see
+# CLAIMS['ninflag_pins_the_character'].
 START_GOLD = 100
 START_MANA = 50
+MANA_TOP_PINNED = True
 
 
-def gold_below(n: int):
+def invop_changed(before: bytes):
+    """Something was added to the inventory. The purchase assertion.
+
+    NOT "gold went down", which is what this predicate said first and which
+    `ninflag` makes meaningless: `tickmana`'s `!a` branch does `sta wealth`
+    from `manatop` once a second, so a price is refunded inside sixty frames
+    and a segment that waited for the gold to stay down would wait forever.
+    `invop` is nine two-bit counters (x0.pds:566) and `addinv` is the only
+    thing that raises one, so "the inventory changed" is a purchase and is
+    durable for the rest of the run.
+    """
+    was = ram.f("invop").get(before)
+
     def ok(image: bytes) -> bool:
-        return ram.f("wealth").get(image) < n
-    ok.__doc__ = f"wealth < {n}"
-    return ok
-
-
-def gold_fell(by: int = 1):
-    def ok(image: bytes) -> bool:
-        return ram.f("wealth").get(image) < by
-    ok.__doc__ = f"wealth < {by} -- the pub's tankard costs one gold (`g1`)"
+        return ram.f("invop").get(image) != was
+    ok.__doc__ = (f"the nine-byte `invop` counter block differs from ${was:04X} "
+                  "-- `addinv` is the only writer that raises a count, so this "
+                  "is a purchase. NOT gold: `tickmana`'s `!a` branch re-stores "
+                  "`wealth` from `manatop` once a second when `ninflag` is set")
     return ok
 
 
@@ -657,16 +664,18 @@ def town_quests() -> Route:
     # ---- the guide's rung 2: talk to somebody in the street -------------
     r.add("warrior",
           lambda: (lambda emu, rec, rng, mf: p_talk(rng, rec, mf)),
-          talk_changed, tries=12, max_frames=600, first_success=False,
-          prepare=True, accept_after=12,
+          talked_to(), tries=14, max_frames=700, first_success=False,
+          accept_after=14,
           why="find an object in the street, face it, press UP the way "
               "`standing:` reads a talk (x4.pds:305-400). Searched as a SURVEY: "
               "which of the four directions finds somebody is not in the "
               "source, because the town places its objects by SCREEN position "
               "(PROBDAT.SRC:96-119) and not by map position. The success test "
-              "is the NPC's own obchr changing -- durable, unlike intflg, which "
-              "the game clears on release, and unlike the panel, which drains "
-              "itself. GOLD IS MEASURED IN THE NOTE, not asserted: see "
+              "is the NPC being set to 'always ignore', which only the talk "
+              "path writes -- the first version asserted that obchr CHANGED and "
+              "was scored a success for arriving next to an adventurer, which "
+              "is three writers and one conversation. GOLD IS MEASURED IN THE "
+              "NOTE, not asserted: see "
               "CLAIMS['talking_pays_500'] -- the source has no path that adds "
               "500 to `wealth` at all")
 
@@ -697,7 +706,8 @@ def town_quests() -> Route:
 
     r.add("shop_buy",
           lambda: (lambda emu, rec, rng, mf: p_icon(rng, rec, mf, 0, answer=True)),
-          gold_below(START_GOLD), tries=10, max_frames=500, first_success=False,
+          invop_changed, tries=10, max_frames=500, first_success=False,
+          prepare=True,
           why="A on a bought icon, then A again to answer YES. `waityn` records "
               "$80 for A and $81 for B and `syesno` tells them apart by the carry "
               "out of `lsr a` (x5.pds:806-820), so A is yes. Success is gold "
@@ -812,14 +822,20 @@ def town_quests() -> Route:
 
     r.add("mana_rate",
           lambda: (lambda emu, rec, rng, mf: p_stand_still(rng, rec, mf)),
-          holds(ram.pred("mclock", "ne", 0)), tries=1, max_frames=1300,
+          holds(ram.pred("second", "ne", 0)), tries=1, max_frames=1300,
           first_success=False,
-          why="stand still with NOTHING pressed and let `mclock` come round. "
-              "`tickmana` returns immediately unless the one-second timer has "
-              "just fired and only spends every OTHER tick (`dec mclock / bpl "
-              "tickfw`, x7.pds:247), so the SOURCE says one point per two "
-              "seconds against the guide's six per second. The success test is "
-              "`mclock` being non-zero -- the game's own 'I am counting' state")
+          why="stand still for twenty seconds with NOTHING pressed, which is "
+              "the measurement the guide's numbers are about and the only thing "
+              "a player never does. The success test is that the one-second "
+              "timer is still running -- because that is the ONLY honest test "
+              "available here. It used to be `mclock ne 0`, which would have "
+              "been a better measurement and cannot hold: `mclock` is written "
+              "only by the branch `tickmana` SKIPS when `ninflag` is set, and "
+              "Beta 1 sets `ninflag` in `initvars` (see "
+              "CLAIMS['ninflag_pins_the_character']). So the number this "
+              "segment produces is a NEGATIVE one, and the note carries the "
+              "three bytes that say so: manacur before and after, `mclock`, and "
+              "`ninflag`")
 
     r.add("deferred",
           lambda: (lambda emu, rec, rng, mf: _deferred_note(rng, rec)),
