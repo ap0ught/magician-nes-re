@@ -27,13 +27,17 @@ local FRAMES_FILE = assert(os.getenv("FRAMES_FILE"), "FRAMES_FILE required")
 -- identity.py: one line per movie frame, 8 characters, alphabet R L D U T S B A
 -- (calibrated against joypad.get(1), not taken from documentation).
 local EXPECT = {}
+local nread = 0
 do
   local f = assert(io.open(FRAMES_FILE, "r"))
-  local i = 0
-  for line in f:lines() do EXPECT[i] = line i = i + 1 end
+  for line in f:lines() do EXPECT[nread] = line nread = nread + 1 end
   f:close()
 end
-local NFRAMES = #EXPECT
+-- Counted, not `#EXPECT`: the table is keyed from 0, and Lua's length operator
+-- ignores key 0, so `#EXPECT` on a 44003-frame movie reads 44002. That number is
+-- the coverage assertion, so being off by one here is a wrong verdict rather than
+-- a wrong number.
+local NFRAMES = nread
 
 -- ------------------------------------------------------- watched RAM cells
 -- WATCH_FILE is `name<TAB>$hex` per line, produced by identity.py from
@@ -84,12 +88,20 @@ local function delivered_string()
 end
 
 -- FNV-1a over a byte range, for the per-frame RAM fingerprint.
+-- bit.band returns a SIGNED 32-bit value in this Lua, so masking to 32 bits is
+-- not enough: a negative result prints as "ffffffff9b832de8" and the digest stops
+-- being a fixed-width field, which quietly breaks the whole-run comparison below.
+local function u32(x)
+  x = bit.band(x, 0xFFFFFFFF)
+  if x < 0 then x = x + 0x100000000 end
+  return x
+end
+
 local function ramhash()
   local bytes = memory.readbyterange(0x0000, 0x0800)
   local h = 2166136261
   for i = 1, #bytes do
-    h = bit.bxor(h, string.byte(bytes, i))
-    h = bit.band(h * 16777619, 0xFFFFFFFF)
+    h = u32(bit.bxor(h, string.byte(bytes, i)) * 16777619)
   end
   return string.format("%08x", h)
 end
@@ -202,8 +214,7 @@ S("align.offset      %s", (#viable == 1 and tostring(viable[1]) or "AMBIGUOUS"))
 -- what makes a second run a real check rather than a rerun.
 local fold = 2166136261
 for i = 1, #hashes do
-  fold = bit.bxor(fold, tonumber(hashes[i]:sub(1, 7), 16))
-  fold = bit.band(fold * 16777619, 0xFFFFFFFF)
+  fold = u32(bit.bxor(fold, tonumber(hashes[i]:sub(1, 7), 16)) * 16777619)
 end
 S("ramhash.first     %s", hashes[1] or "-")
 S("ramhash.last      %s", hashes[#hashes] or "-")

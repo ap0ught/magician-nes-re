@@ -188,6 +188,52 @@ check(f"11: the ladder's drink policy presses A exactly {n_press} time per "
       "dead run",
       n_press == 1 and "REFUSING" in drink_src, drink_src[-200:])
 
+# ================= 11b. the door positions are PARSED, not typed in
+def read_raw2(path: pathlib.Path) -> str:
+    return path.read_bytes().decode("latin-1")
+
+
+probd2 = read_raw2(_ROOT / "vendor" / "Magician-NES" / "PROBDAT.SRC")
+block2 = probd2[probd2.index("pt10\titr"):probd2.index("st10\tsti")]
+# The capture groups are (x, y, width, height, shop) -- the shop number is the
+# FIFTH, not the second, and getting that wrong made the first version of this
+# check compare one door against seven.
+want = {int(m.group(5), 16): (int(m.group(1), 16) + 8,
+                              int(m.group(1), 16) + 8 + int(m.group(3), 16) + 8)
+        for m in re.finditer(
+            r"pt\s+([0-9a-f]{4}),([0-9a-f]{4}),([0-9a-f]{4}),([0-9a-f]{4}),"
+            r"pt_shop,([0-9a-f]{2})", block2)}
+check(f"11b: all {len(ladder.TOWN_DOORS)} door rectangles are what re-parsing "
+      f"PROBDAT.SRC gives, expanded through x0.pds's `pt` macro "
+      f"(x + p_hwi, width + 8). The pub is {ladder.TOWN_DOORS[0]} and the church "
+      f"is {ladder.TOWN_DOORS[4]}",
+      ladder.TOWN_DOORS == want, f"module {ladder.TOWN_DOORS} vs source {want}")
+# Not all the same width: the pub and the church differ (`pt 0a68,...,0020,...`
+# against `pt 00c8,...,0018,...`), which is the kind of detail a "32 pixels"
+# assumption would have got wrong for two of the seven.
+check("11c: every door is EAST of the player's start at x=60 and at least 32 "
+      "pixels wide -- the two widths in the source differ -- which is why the "
+      "door segments need a long budget and tap rather than hold",
+      all(lo > 60 and hi - lo >= 32 for lo, hi in ladder.TOWN_DOORS.values())
+      and len({hi - lo for lo, hi in ladder.TOWN_DOORS.values()}) == 2,
+      str(ladder.TOWN_DOORS))
+
+# ============ 11d. `shoplev`: shopdat is NOT the level, and it is parsed
+probs = read_raw2(_ROOT / "vendor" / "Magician-NES" / "PROBS.SRC")
+shoplev_line = next(l for l in probs.split("\n") if l.startswith("shoplev"))
+want_lev = [int(h, 16) for h in re.findall(r"\b([0-9a-f]{2})\b", shoplev_line)]
+check(f"11d: SHOPLEV is what PROBS.SRC's own `shoplev` line says -- "
+      f"{[hex(x) for x in want_lev[:7]]}",
+      [ladder.SHOPLEV[i] for i in range(7)] == want_lev[:7]
+      and len(ladder.SHOPLEV) == len(want_lev))
+check("11e: and shopdat is NOT the level -- shopdat 1 and 3 are both level $D5, "
+      "and the post office is shopdat 2 but level $D0. A door segment that "
+      "asserted only `curlev` would accept the wrong shop",
+      ladder.SHOPLEV[1] == ladder.SHOPLEV[3]
+      and ladder.SHOPLEV[2] != 2
+      and len({ladder.SHOPLEV[i] for i in range(7)}) == 6,
+      str({i: hex(ladder.SHOPLEV[i]) for i in range(7)}))
+
 # ================================ 12-15. the shop scripts are the source's
 check("12: TOWN_SHOPS has one entry per `pt_shop` trigger the first town "
       f"declares -- {sorted(ladder.TOWN_SHOPS)}",

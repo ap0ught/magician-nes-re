@@ -203,6 +203,99 @@ TOWN_SHOPS = {
     6: ("shop", ["buy"] * 7),
 }
 
+# WHERE THE SEVEN DOORS ARE, read out of the source at import time.
+#
+# `PROBDAT.SRC:96-119` places them:
+#     pt 00c8,0070,0018,0040,pt_shop,00
+#     pt 05b8,0070,0018,0040,pt_shop,01
+#     ...
+# and x0.pds's `pt` macro is
+#     db <$@1+p_hwi, $@3+$8, >$@1+p_hwi, <$@2+p_hhi, $@4+$8, >$@2+p_hhi, @5, @6
+# so the trigger rectangle is x from `$@1+8` to `$@1+8+$@3+$8` -- the pub's is
+# x 208..240, and the church's, at $0a68, is x 2672..2704. The town is ONE long
+# east-west street and the player starts at x=60, which is why `shop_door` needs
+# a long budget and why the seventh door is a long walk away.
+#
+# Parsed, not typed in, because a typed-in number is a number nobody checked.
+# `src/testing/test_play_ladder.py` re-parses the source and compares.
+TOWN_DOORS: dict[int, tuple[int, int]] = {}
+
+
+def _load_shoplev() -> dict[int, int]:
+    """`shopdat` -> the logical level that shop is played on.
+
+    `pr07` (PROBS.SRC:267-275) is `jsr faceu / sty shopdat / ldx shoplev,y /
+    lda #$07 / jmp newlev`, and `shoplev` (PROBS.SRC:520) is
+    `hex d2 d5 d0 d5 d3 d1 d4 d6 d0 d4 d1 d4 d3 d7`. So the town's seven shops
+    are levels $D0-$D6 and shopdat is NOT the level: the post office is shopdat 2
+    but level $D0, and shopdat 1 and 3 are BOTH level $D5.
+
+    MEASURED on Beta 1: standing in door 1's rectangle and pressing UP gives
+    `curlev=$D5`, which is `shoplev[1]`. That is the first rung of the ladder to
+    produce a number that agrees with the source, and it is the check that says
+    the scout walked to the door it meant to walk to.
+    """
+    import pathlib
+    import re as _re
+    src = pathlib.Path(__file__).resolve().parents[2]
+    text = (src / "vendor" / "Magician-NES" / "PROBS.SRC").read_bytes() \
+        .decode("latin-1")
+    line = next(l for l in text.split("\n") if l.startswith("shoplev"))
+    return {i: int(h, 16) for i, h in enumerate(_re.findall(r"\b([0-9a-f]{2})\b", line))}
+
+
+SHOPLEV: dict[int, int] = _load_shoplev()
+
+def _load_town_doors() -> None:
+    """Fill TOWN_DOORS from `vendor/Magician-NES/PROBDAT.SRC`. No path in here.
+
+    Read as BYTES: the recovered text carries carriage returns inside a physical
+    line, and `read_text()` would translate them into line breaks and shift
+    every line number this file cites.
+    """
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[2]
+    text = (src / "vendor" / "Magician-NES" / "PROBDAT.SRC").read_bytes() \
+        .decode("latin-1")
+    block = text[text.index("pt10\titr"):text.index("st10\tsti")]
+    import re as _re
+    p_hwi = 8          # x0.pds:242 -- `p_width equ $10`, `p_hwi equ p_width/2`
+    for m in _re.finditer(
+            r"pt\s+([0-9a-f]{4}),([0-9a-f]{4}),([0-9a-f]{4}),([0-9a-f]{4}),"
+            r"pt_shop,([0-9a-f]{2})", block):
+        x = int(m.group(1), 16)
+        w = int(m.group(3), 16) + 8
+        TOWN_DOORS[int(m.group(5), 16)] = (x + p_hwi, x + p_hwi + w)
+
+
+def _load_shoplev() -> dict[int, int]:
+    """`shopdat` -> the logical level that shop is played on.
+
+    `pr07` (PROBS.SRC:267-275) is `jsr faceu / sty shopdat / ldx shoplev,y /
+    lda #$07 / jmp newlev`, and `shoplev` (PROBS.SRC:520) is
+    `hex d2 d5 d0 d5 d3 d1 d4 d6 d0 d4 d1 d4 d3 d7`. So the town's seven shops
+    are levels $D0-$D6 and shopdat is NOT the level: the post office is shopdat 2
+    but level $D0, and shopdat 1 and 3 are BOTH level $D5.
+
+    MEASURED on Beta 1: standing in door 1's rectangle and pressing UP gives
+    `curlev=$D5`, which is `shoplev[1]`. That is the first rung of the ladder to
+    produce a number that agrees with the source, and it is the check that says
+    the scout walked to the door it meant to walk to.
+    """
+    import pathlib
+    import re as _re
+    src = pathlib.Path(__file__).resolve().parents[2]
+    text = (src / "vendor" / "Magician-NES" / "PROBS.SRC").read_bytes() \
+        .decode("latin-1")
+    line = next(l for l in text.split("\n") if l.startswith("shoplev"))
+    return {i: int(h, 16) for i, h in enumerate(_re.findall(r"\b([0-9a-f]{2})\b", line))}
+
+
+SHOPLEV: dict[int, int] = _load_shoplev()
+
+_load_town_doors()
+
+
 # How many times the tankard icon may be pressed. Three is not a guess: it is
 # the number of `g1,set,drink` triples in SHOPDAT.SRC:83 before `gover`.
 DRINK_LIMIT = 3
@@ -399,43 +492,75 @@ def _delta(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
 
 
 
-def p_enter_shop(rng, rec, max_frames, door=None):
-    """Walk to a door of the town row and press UP to go in.
+def p_enter_shop(rng, rec, max_frames, shop=None):
+    """Walk to one of the seven doors and press UP to go in.
 
-    The first town's seven shops are seven `pt_shop` triggers in one row along
-    the top of the map (PROBDAT.SRC:98-104) and `pr07` is `faceu` then
-    `newlev` with `t2` as the shop number, so "which shop" is a question about
-    WHERE, and the scout's job is to find out which of them UP at this spot
-    opens. `uflg` is the game's own "interaction inhibited" flag and `phase`
-    plus `shopdat` is what a shop actually looks like from outside.
+    The door's position is read out of `PROBDAT.SRC` rather than searched for,
+    because `TOWN_DOORS` already has it: the town is one east-west street and
+    the seven doors are `pt_shop` triggers along it. What the scout is left to
+    find out is the part the source does not say -- how far the player actually
+    gets before the pad stops moving, and whether one UP press or three is
+    what the trigger wants.
+
+    `pr07` is `faceu` then `newlev` with the trigger's data byte as the shop
+    number (PROBS.SRC:267-278), and `plrevents` (PROBS.SRC:10-100) matches the
+    player's box against the trigger box every frame, so the requirement is
+    "inside that rectangle, facing up, on an up EDGE".
     """
-    slot, used, trail = p_walk_to_npc(rng, rec, max_frames)
+    if shop is None:
+        shop = rng.choice(sorted(TOWN_DOORS))
+    lo, hi = TOWN_DOORS[shop]
     img = rec.emu.work_ram()
-    gold = ram.f("wealth").get(img)
-    note = f"walked {trail}"
-    if slot is not None:
-        them = npc_at(img, slot)
-        d = toward((ram.plrx(img), ram.plry(img)), them)
-        rec.step((d,), 12)
-        rec.step((), 12)
-        used += 24
-        note += f"; turned {d} towards a slot {slot} at {them}"
-    rec.step((), 8)
-    used += 8
-    for _ in range(4):
-        if rec.remaining(max_frames) <= 8:
+    start = ram.plrx(img)
+    note = [f"door {shop} is x {lo}..{hi}, player starts at {start}"]
+    # Walk east or west in short taps so the player stops INSIDE the box rather
+    # than stepping past it: the boxes are 32 pixels wide and a 70-frame hold is
+    # 70 pixels, which is more than two of them.
+    for _ in range(400):
+        img = rec.emu.work_ram()
+        x = ram.plrx(img)
+        if lo <= x <= hi:
+            break
+        if rec.remaining(max_frames) <= 60:
+            break
+        rec.step(("Right",) if x < lo else ("Left",), 8)
+    img = rec.emu.work_ram()
+    x = ram.plrx(img)
+    note.append(f"reached x={x} {'INSIDE' if lo <= x <= hi else 'OUTSIDE'} "
+                f"the box {lo}..{hi}")
+    if not (lo <= x <= hi):
+        return "; ".join(note) + f"; gave up, {_brief(img)}"
+    rec.step((), 10)
+    for i in range(3):
+        if rec.remaining(max_frames) <= 120:
             break
         rec.step(("Up",), 3)
-        rec.step((), 5)
-        used += 8
+        rec.step((), 6)
         img = rec.emu.work_ram()
-        if ram.f("phase").get(img) == ram.PHASE_SHOP:
-            note += (f"; ENTERED shop {ram.f('shopdat').get(img)} at "
-                     f"({ram.plrx(img)},{ram.plry(img)})")
+        lev = ram.f("curlev").get(img)
+        if lev == SHOPLEV.get(shop):
+            # WAIT FOR THE FADES. The first version pressed UP three times and
+            # tested `phase == 7` after each one, and read "entered nothing"
+            # while the game was in g02 at the right level: `pr07` calls
+            # `newlev`, and the change goes g01 -> g02 -> g03 -> g04 -> g05 ->
+            # g06 -> g07 over about ninety frames. A press that has been
+            # accepted and a press that has been ignored look identical one
+            # frame later, and the honest reading of `curlev` already matching
+            # `shoplev` is that the door OPENED.
+            for _ in range(140):
+                if rec.remaining(max_frames) <= 8:
+                    break
+                rec.step((), 8)
+                img = rec.emu.work_ram()
+                if ram.f("phase").get(img) == ram.PHASE_SHOP:
+                    break
+            note.append(f"press {i + 1}: curlev reached "
+                        f"${lev:02X} = shoplev[{shop}]; after the fades, "
+                        f"{_brief(img)}")
             break
     else:
-        note += f"; no shop entered. {_brief(img)}"
-    return note
+        note.append(f"three UP presses at x={x} entered nothing: {_brief(img)}")
+    return "; ".join(note)
 
 
 def p_buy(rng, rec, max_frames, icon_hint=None):
@@ -579,11 +704,25 @@ def talked_to():
 
 
 def shop_pred(number: int):
+    """Phase 7, `shopdat` n, AND the level `pr07` would have sent us to.
+
+    All three, because all three are things the source says and each one rules
+    out a different mistake: phase alone would accept any of the seven; phase
+    and `shopdat` together would accept a shop reached some other way; and
+    `curlev` is the one number the game computed from the door's own data byte,
+    so agreeing with `shoplev[n]` is what says the scout walked to the door it
+    meant to walk to.
+    """
+    lev = SHOPLEV.get(number)
+
     def ok(image: bytes) -> bool:
         return (ram.f("phase").get(image) == ram.PHASE_SHOP
-                and ram.f("shopdat").get(image) == number)
+                and ram.f("shopdat").get(image) == number
+                and (lev is None or ram.f("curlev").get(image) == lev))
     ok.__doc__ = (f"phase 7 (g07) AND shopdat == {number} "
-                  f"({TOWN_SHOPS[number][0]})")
+                  f"({TOWN_SHOPS[number][0]}) AND curlev == "
+                  + (f"${lev:02X}" if lev is not None else "?")
+                  + " (`shoplev`, PROBS.SRC:520 -- shopdat is not the level)")
     return ok
 
 
@@ -681,7 +820,8 @@ def town_quests() -> Route:
 
     # ---- rung 3: an unmarked shop ----------------------------------------
     r.add("shop_door",
-          lambda: (lambda emu, rec, rng, mf: p_enter_shop(rng, rec, mf)),
+          lambda s=1: (lambda emu, rec, rng, mf: p_enter_shop(
+              rng, rec, mf, shop=s)),
           shop_pred(1), tries=16, max_frames=900, first_success=False,
           accept_after=16,
           why="the town's seven shops are seven `pt_shop` triggers in one row "
@@ -725,7 +865,8 @@ def town_quests() -> Route:
 
     # ---- rung 4: the priest ----------------------------------------------
     r.add("church_door",
-          lambda: (lambda emu, rec, rng, mf: p_enter_shop(rng, rec, mf)),
+          lambda s=4: (lambda emu, rec, rng, mf: p_enter_shop(
+              rng, rec, mf, shop=s)),
           shop_pred(4), tries=16, max_frames=900, first_success=False,
           accept_after=16,
           why="the church is shop 4 (`shopdat`), and its icon 1 is the vicar")
@@ -756,7 +897,8 @@ def town_quests() -> Route:
 
     # ---- rung 5: Ye Old Mail Shop ----------------------------------------
     r.add("post_door",
-          lambda: (lambda emu, rec, rng, mf: p_enter_shop(rng, rec, mf)),
+          lambda s=2: (lambda emu, rec, rng, mf: p_enter_shop(
+              rng, rec, mf, shop=s)),
           shop_pred(2), tries=16, max_frames=900, first_success=False,
           accept_after=16,
           why="the post office is shop 2, and its icon 1 is the girl who takes "
@@ -781,7 +923,8 @@ def town_quests() -> Route:
 
     # ---- rung 6 in the source's order: the drink comes BEFORE the keeper ---
     r.add("pub_door",
-          lambda: (lambda emu, rec, rng, mf: p_enter_shop(rng, rec, mf)),
+          lambda s=0: (lambda emu, rec, rng, mf: p_enter_shop(
+              rng, rec, mf, shop=s)),
           shop_pred(0), tries=16, max_frames=900, first_success=False,
           accept_after=16,
           why="the pub is shop 0. `isa` does `lsr tmpflag / asl tmpflag` on the "

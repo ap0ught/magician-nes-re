@@ -120,6 +120,22 @@ if [ ! -s "$SUMMARY" ]; then
   exit 4
 fi
 
+# A summary with no `verdict` line means the driver never reached its own
+# conclusion: FCEUX died part-way through, and the most common reason is that
+# somebody closed the window. That is an aborted run, not a movie that failed to
+# verify, and reporting it as "the movie did not verify" would put a false claim
+# about the TAS into the world.
+if ! grep -q '^verdict ' "$SUMMARY"; then
+  got=$(grep -c '^[0-9]' "$OUTDIR/series.tsv" 2>/dev/null) || true
+  case "$got" in ''|*[!0-9]*) got=0 ;; esac
+  echo "run.sh: FAIL (4) -- the run was interrupted after $got frames; FCEUX exited" \
+       "before the driver reached a verdict (exit $rc)." >&2
+  echo "           If the FCEUX window was closed, that is this. Leave it alone:" >&2
+  echo "           the Arch package has no headless mode, so the window IS the run." >&2
+  tail -5 "$OUTDIR/fceux.log" | sed 's/^/  /' >&2
+  exit 4
+fi
+
 say ""
 say "run.sh: summary"
 sed 's/^/  /' "$SUMMARY"
