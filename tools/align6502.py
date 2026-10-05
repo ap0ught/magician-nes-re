@@ -155,8 +155,17 @@ def main() -> int:
                     default=DEFAULT_CART,
                     help="the released cartridge (read-only)")
     ap.add_argument("--prg", type=pathlib.Path,
-                    default=pathlib.Path("asm/out/magician-rebuilt.nes"),
-                    help="the rebuilt image")
+                    default=pathlib.Path("asm/out/prg.bin"),
+                    help="the rebuilt image. This defaults to prg.bin, which "
+                         "`asm/build.py` writes, and NOT to the wrapped "
+                         "magician-rebuilt.nes, which only `asm/mkrom.py` writes. "
+                         "Those two are the same bytes after a full build and "
+                         "different ones after `asm/build.py` alone -- the .nes is "
+                         "left over from the previous build. Reading it after only "
+                         "running build.py reported 27 'operand moved' "
+                         "differences in `reset` against beta1 that do not exist: "
+                         "reset is 31/31 byte-identical. A stale artifact that "
+                         "still looks like an image is worse than none.")
     ap.add_argument("--from", dest="start", type=lambda s: int(s, 0),
                     required=True, help="default CPU address for both sweeps")
     ap.add_argument("--prg-from", type=lambda s: int(s, 0),

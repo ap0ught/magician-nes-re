@@ -292,8 +292,12 @@ PINNED_SLOTS["X6.PDS"] = 15
 # no reason is an assumption wearing a pin's clothes.
 PINNED_WHY = {
     "X7.PDS": "PINNED from the cartridge's reset vector (not searched)",
-    "X6.PDS": "PINNED: reset's `jsr initcols` is $F04A in the cartridge and "
-              "$F00D in the Beta, both in the fixed $E000 window = slot 15",
+    "X6.PDS": "PINNED: `reset` is in the fixed $E000 window and its `jsr initcols` "
+              "names an address in that same window, so X6 must be in slot 15. "
+              "Re-derived against beta1: that `jsr` is $EEC7 in both images and "
+              "`initcols` assembles at $EEC7, so the operand is byte-identical. "
+              "See tools/align6502.py --from 0xF930 --length 0x40 --prg "
+              "asm/out/prg.bin.",
     "X4.PDS": "PINNED from `X1.PDS:678` farjsr67(X=$02,Y=$03) to a PROBS.SRC "
               "label, and `X4.PDS:1210`'s own \"must reside above $9FFF\"",
 }
@@ -362,6 +366,33 @@ MODULE_WINDOW_SLOTS = {"X4.PDS": X4_WINDOW_SLOTS}
 # empty stack and returns into RAM at $0F10. That is a lost stack frame, not a
 # missing routine, and it is the next thing to fix.
 #
+# These two are **placeholders**. Slot 15 has 8 KiB and three modules want to be in
+# it, and the split between them is fully determined once two things are measured:
+# where X7 has to start (from the target cartridge's reset vector) and how long X6
+# is. Both are measured on the first pass and applied on the second, in
+# `assemble_prg`; see DERIVED_CEILINGS there. Nothing here is a judgement about
+# which code matters any more.
+#
+# What the numbers used to be, and why they were wrong, is worth keeping:
+#
+#     X5_CEILING = $E605   X6_CEILING = $F166   (both release-derived)
+#
+# $F166 was X7's start under the *release's* reset vector. Re-anchored to Beta 1
+# the cartridge's reset is $F930, X7's start is $F0D5, and leaving $F166 in place
+# meant X6 kept writing 145 bytes ($F0D5-$F165) that X7 then overwrote -- not a
+# visible fault, because the overwritten bytes were X7's and X7's are right, but
+# the build was doing work and then throwing it away and reporting 150 dropped
+# bytes instead of the 295 that are actually unavailable.
+#
+# The `initcols` evidence, which is what fixes the split rather than merely
+# tidying it: `reset` (now byte-identical to Beta 1 for 30 of its first 31
+# instructions) does `jsr $EEC7` there and `jsr $EFEE` here -- a displacement of
+# -295. Since `initcols` sits $9E9 into X6, X6 has to start 295 bytes lower than it
+# does, which puts its natural end at exactly one byte below X7's new start:
+#
+#     $F0D5 - 3063 = $E4DE      initcols = $E4DE + $9E9 = $EEC7   <- Beta 1's
+#
+# So $E4DE and $F0D5 are not chosen, they are what the two measurements give.
 X5_CEILING = 0xE605
 X6_CEILING = 0xF166
 MODULE_CEILINGS = {"X5.PDS": X5_CEILING, "X6.PDS": X6_CEILING}
@@ -433,8 +464,11 @@ ORIGIN_WHY = {
     # $E605, not $E77C: this string said $E77C for several builds and that
     # value appears nowhere else in the tree. It is X5_CEILING, and the reason
     # is the ceiling comment above.
-    "X6.PDS": "$E605 = X5_CEILING: where X5's slot-15 spill has to stop so that "
-              "X6's `initcols` (at $EFEE here) lands below X7's $F166. See "
+    "X6.PDS": "= X5_CEILING, and both are derived: X7's start comes from the "
+              "target cartridge's reset vector, X6's length is measured with no "
+              "ceiling applied, and X6 fills exactly the gap between them. Under "
+              "beta1 that is $E4DE..$F0D4 with X7 at $F0D5, which puts "
+              "`initcols` at $EEC7 -- the address `reset` calls. See "
               "X5_CEILING.",
 }
 
@@ -729,6 +763,9 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     # internal layout moves, the anchor moves with it.
     chained = set(CHAINED)
     x7_off = x7_base = None
+    # Filled in on the first pass from two measurements, used on the second. See
+    # DERIVED_CEILINGS at X5_CEILING.
+    derived: dict[str, int] | None = None
     project_error: Exception | None = None
     for attempt in range(2 if x7_vector else 1):
         image = bytearray(PRG_SIZE)
@@ -765,7 +802,13 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
         for m in our_modules():
             if OUR_MODULES[m].get("window_slots") is not None:
                 window_slots[m] = OUR_MODULES[m]["window_slots"]
-        ceilings = dict(MODULE_CEILINGS)
+        # The measurement pass runs with **no ceilings at all**. `ceiling_drops`
+        # works by discarding what a module assembles past its ceiling, so with a
+        # ceiling in place X6's recorded footprint is the truncated one and its
+        # true length is not observable -- which is the length the whole slot-15
+        # split is computed from. On the second pass the derived values are used.
+        ceilings: dict[str, int] = ({} if derived is None
+                                    else dict(derived))
         for m in our_modules():
             if OUR_MODULES[m].get("ceiling") is not None:
                 ceilings[m] = OUR_MODULES[m]["ceiling"]
@@ -776,6 +819,10 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
         # address in the message -- see pack_our_scenes().
         if x7_base is not None:
             origins["X7.PDS"] = x7_base
+        if derived is not None:
+            # X6 starts exactly where X5's spill is cut off, and that point is
+            # derived, not the literal $E605 the module table carries.
+            origins["X6.PDS"] = derived["X5.PDS"]
         try:
             # Our modules live in src/magician/, not beside Eurocom's. Resolving
             # every name against SRC/ found vendor's directory and reported a
@@ -820,6 +867,47 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                        f"begins at ${x7_base:04X} --")
             log.append(f"         not ${Assembler.slot_origin(slot15):04X}. "
                        f"Re-running with x7 anchored there.")
+            # --- the slot-15 split, derived -------------------------------------
+            # X6 has no `org`, so it starts where X5's spill is cut, and X5's
+            # spill is cut wherever X6 starts. X7's start is fixed by the
+            # cartridge's reset vector. So the only free quantity is X6's length,
+            # and it is a measurement: on this pass there were no ceilings, so
+            # what X6 emitted is its natural extent, untruncated.
+            x6 = asm.writes_by_file.get("X6.PDS") or ()
+            if not x6:
+                log.append("         *** X6 emitted nothing, so the slot-15 split "
+                           "cannot be derived; keeping the literal ceilings. ***")
+            else:
+                x6_len = max(x6) - min(x6) + 1
+                x6_base = x7_base - x6_len
+                derived = {"X5.PDS": x6_base, "X6.PDS": x7_base}
+                log.append(f"X6.PDS:  emitted ${min(x6):04X}-${max(x6):04X}, "
+                           f"{x6_len} bytes with no ceiling applied, so that is")
+                log.append(f"         its natural length. X7 starts at "
+                           f"${x7_base:04X}, so X6 starts at")
+                log.append(f"         ${x7_base:04X} - ${x6_len} = ${x6_base:04X} "
+                           f"and ends at ${x7_base - 1:04X}, immediately below it.")
+                log.append(f"         X5_CEILING = ${x6_base:04X}, "
+                           f"X6_CEILING = ${x7_base:04X} (both derived; the "
+                           f"literals were")
+                log.append(f"         ${X5_CEILING:04X} and ${X6_CEILING:04X}, "
+                           f"which were release-derived).")
+                # The prediction is the whole point of doing this by
+                # measurement: `reset`'s `jsr initcols` encodes the address, so
+                # there is an independent check on the arithmetic. It has to be
+                # done in one address space -- `writes_by_file` holds PRG *file*
+                # offsets and `asm.sym` holds CPU addresses, and subtracting one
+                # from the other printed a nonsense "$-1139" until it was fixed.
+                for want_label in ("initcols",):
+                    got = asm.sym.get(want_label)
+                    if got is None:
+                        continue
+                    got_file = got + 0x10000        # slot 15 -> PRG file offset
+                    if not min(x6) <= got_file <= max(x6):
+                        continue
+                    moved = x6_base + (got_file - min(x6))
+                    log.append(f"         Prediction: {want_label} moves "
+                               f"${got:04X} -> ${moved:04X}.")
             continue
         last = asm.sym.get("last")
         log.append(f"X7.PDS: anchored at ${x7_base:04X}; reset now "

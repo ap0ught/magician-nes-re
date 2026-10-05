@@ -87,9 +87,11 @@ def main() -> int:
     args.rom.write_bytes(body)
     print(f"{args.rom}  {len(body)} bytes")
     print(f"  body sha1 {hashlib.sha1(bytes(image) + chr_rom).hexdigest()}")
-    print(f"  (the cartridge's own body sha1 is "
-          f"{patches.CARTS['release']['sha1']} -- a development build built "
-          f"against later source, so it does not match; see PROVENANCE.md "
+    _target = patches.DEFAULT_CART
+    print(f"  (the target's own body sha1 is "
+          f"{patches.CARTS[_target]['sha1']} -- "
+          f"{patches.CARTS[_target]['note']} -- so it does not match; this "
+          f"rebuild is not expected to be byte-exact. See PROVENANCE.md "
           f"section 6)")
     return 0
 
