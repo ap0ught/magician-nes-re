@@ -28,6 +28,16 @@ In that state the project produced these, all plausible, none of them an error:
 | `tools/nestrace.py` | a black screen for two different images |
 | `tools/nestrace.py` | `asl a` shifting zero-page `$00`, because it read the *previous* opcode |
 | `tools/modrange.py` | a 0% match over an all-zero image, from a `TypeError` in a bare `except` |
+| `src/play/bridge.lua` | `settimeout(nil)` is not "no timeout", so the loop exited on a healthy connection |
+| `src/play/bridge.lua` | a multi-line reply read one line at a time, leaving the rest in the socket |
+| `src/play/bridge.lua` | `CPU registers` is 12 bytes of which 8 are readable, so "all nine domains" could not be dumped |
+| `src/play/ram.py` | `manacur` read big-endian: 12800 mana for a character with 50 |
+| `src/play/ram.py` | the player's position read `obxl[0]` — the slot `initob` leaves empty — so the player was permanently at (65535,65535) |
+| `src/play/ram.py` | `jt` read as eight buttons at `$0028-$002F`; `joykey` writes `$002E-$0035` |
+| `src/play/emu.py` | the input log wrote "nothing pressed" as a BLANK line, and the loader skipped blanks: 636 frames recorded, 392 replayed |
+| `src/play/emu.py` | `run.sh` returns before EmuHawk exits, so the replay emulator was diverted into the run's own |
+| `src/play/bridge.lua` | a domain name with spaces read as `dom=CIRAM`, so `domain_read` rejected a correct reply |
+| `src/play/recon.py` | `nmiflag` used as a title-screen predicate, but `$002C` is also the UP button |
 | `tools/gapmap.py`, `whowrote.py`, `slotscore.py` | the same `TypeError`, from an `Assembler.run_file` signature change |
 | a bash guard | `[ x -lt 0x8000 ]`, which does not compare |
 | `tools/unrun.py` | `t0 += y` instead of `t0 += y + 1`, so the title screen came out solid brick |
@@ -85,6 +95,47 @@ instruments are the thing that has to be pinned.
 
 `synthcart.py` is the shared helper: a synthetic iNES image built from
 arithmetic in that file, with the provenance of every constant stated there.
+
+## `test_play_ram.py` and `test_play_actions.py`
+
+The play harness has two files of its own, and both exist because a wrong answer
+there is invisible: a predicate on the wrong byte evaluates, returns a plausible
+bool, and asserts nothing.
+
+`test_play_ram.py` (28 checks) pins `ram.py` — the single source of truth for
+every address `src/play/` uses:
+
+* every field's address is `base + offset` for a name that exists in the
+  assembler’s own symbol table, and `field()` refuses a declaration with no
+  symbol, no comment, or an impossible length;
+* `Field.get` is little-endian, against `manacur`'s documented 50 from
+  `x1.pds:48-49`, and `plrx`/`plry` read the PLAYER's object slot (`maxob` is 4,
+  so `pi` is 3) rather than slot 0;
+* the Python predicate and the bridge's decoding of its own wire format agree on
+  all 504 combinations of op × field × value × RAM state;
+* the wire encoding is decimal in every field, because the bridge's pattern is
+  `%d+` throughout;
+* **no module under `src/play` except `ram.py` writes a RAM address as a hex
+  literal in code or subscripts one.** Docstrings may quote an address as
+  evidence; that is the only exemption, because prose citing `$0036` is how a
+  measurement gets recorded.
+
+`test_play_actions.py` (28 checks) pins the action contract against a fake
+emulator, because the contract is about the *failure* path and a failure cannot
+be produced on demand by a real game. The fake routes through
+`BizHawk._pulse_until` — the real implementation — so the pulsing logic under
+test is the logic a run gets.
+
+Three live bugs these two files found while being written, recorded because a
+suite that passes immediately proves nothing:
+
+* `act()` *noted* a budget that expired instead of raising, so a route would have
+  walked on past a failed action and printed a completion line.
+* `_pulse_until` stepped before checking, so a predicate that was already true
+  cost one frame and pressed one button — and the two paths through
+  `step_until` disagreed about the one property a caller assumes they share.
+* `_pulse_until` with `pulse == 0` computed `min(0, …) == 0`, never advanced, and
+  spun forever. The real `step_until` never reaches it with 0; the fake does.
 
 ## What it does not do
 

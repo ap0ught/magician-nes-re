@@ -87,7 +87,7 @@ REQUIRED_DOMAINS = (
     "PALRAM", "PRG ROM", "System Bus", "WRAM",
 )
 
-WORK_RAM = (0x0000, 0x0800)      # $0000-$07FF: everything the game calls RAM
+# The RAM window lives in ram.py -- see the note there.
 
 
 class BridgeError(RuntimeError):
@@ -196,7 +196,7 @@ class BizHawk:
     """One EmuHawk instance, driven frame by frame over a loopback socket."""
 
     def __init__(self, rom: pathlib.Path = ROM, log_name: str = "play",
-                 route: str = "", kill_stale: bool = False,
+                 route: str = "", run: str = "", kill_stale: bool = False,
                  settle: int = 120, connect_timeout: int = 90):
         self.rom = pathlib.Path(rom).resolve()
         if not self.rom.exists():
@@ -213,6 +213,14 @@ class BizHawk:
         for d in (LOGS, SHOTS, CHECKPOINTS, INPUTS):
             d.mkdir(parents=True, exist_ok=True)
         self.route = route
+        # `run` namespaces the checkpoints on disk. It is NOT part of a
+        # checkpoint's identity -- `segments.txt` records the route's segment
+        # digest, and that is what the guard checks -- it only stops two runs of
+        # the SAME route from colliding. Without it, the second run of a milestone
+        # could not run at all, because every checkpoint name would already
+        # exist, and a milestone that can only be run once is a milestone whose
+        # second run has to be deleted by hand.
+        self.run = run or log_name
         self.log_path = LOGS / f"{log_name}.log"
         self.bridge_log = LOGS / f"{log_name}.bridge.log"
         self.cmd_log = LOGS / f"{log_name}.cmd.log"
@@ -268,7 +276,15 @@ class BizHawk:
         self.events: list[tuple[int, str]] = []
         self.frame = 0
         self._closed = False
+        self._pids: list[int] = []
 
+        # Remember which EmuHawk is ours, because BizHawk's window outlives the
+        # run.sh that launched it: run.sh backgrounds it with setsid and exits
+        # immediately. `close()` therefore cannot assume the process is gone when
+        # run.sh returns, and a second launch launched too soon is DIVERTED into
+        # the first through the single-instance pipe -- so the replay emulator
+        # silently became the old session. Which is precisely what happened.
+        self._pids = self.running_emuhawk()
         assert self.cmd("ping") == "pong", "the bridge answered ping with something else"
         self.domains = self._read_domains()
         missing = [d for d in REQUIRED_DOMAINS if d not in {x.name for x in self.domains}]
@@ -360,7 +376,7 @@ class BizHawk:
             return bool(m) and len(m.group(3)) == int(m.group(2)) * 2
         if head in ("ram",):
             return _hex_ok(resp)
-        if head in ("step", "stepu", "frame", "domains", "save", "load"):
+        if head in ("step", "stepu", "frame", "domains", "save", "load", "reset"):
             return _is_int_line(resp)
         if head == "snapshot":
             # `ok files=<n> frame=<n> manifest=<path>` -- the path is not a
@@ -430,7 +446,8 @@ class BizHawk:
         return self.ram(addr, 1)[0]
 
     def work_ram(self) -> bytes:
-        return self.ram(*WORK_RAM)
+        from play import ram
+        return self.ram(*ram.WORK_RAM)
 
     def fingerprint(self) -> str:
         """SHA1 over $0000-$07FF. Two runs of the same inputs must agree.
@@ -446,11 +463,17 @@ class BizHawk:
         if idx is None:
             raise KeyError(f"no memory domain named {name!r}; the core has "
                            + ", ".join(d.name for d in self.domains))
-        parts = self.cmd(f"dom {idx} {addr} {length}").split(" ")
-        if parts[1].split("=", 1)[1] != name:
-            raise BridgeError(f"asked for domain {name!r}, the core read {parts[1]!r}")
-        n = int(parts[2].split("=", 1)[1])
-        raw = bytes.fromhex(parts[-1])
+        # NOT split(" "): two of the nine real domain names contain spaces, so
+        # `parts[1]` is "dom=CIRAM" and the comparison below fails on a correct
+        # reply. The same greedy-then-exact pattern `_answers` uses.
+        m = re.match(rf"^ok dom={re.escape(name)} bytes=(\d+) ([0-9a-f]+)$",
+                     self.cmd(f"dom {idx} {addr} {length}"))
+        if not m:
+            raise BridgeError(
+                f"asked for domain {name!r}, but the reply did not name it: "
+                f"{self._recent[-1][1][:120]!r}")
+        n = int(m.group(1))
+        raw = bytes.fromhex(m.group(2))
         if n != length or len(raw) != length:
             raise BridgeError(f"domain {name} returned {n}/{len(raw)} bytes, wanted {length}")
         return raw
@@ -474,34 +497,84 @@ class BizHawk:
         self.frame = int(r["frame"])
         return self.frame
 
+    def step_until(self, preds: Sequence, buttons: Iterable[str] | str = (),
+                   budget: int = 600, what: str = "condition",
+                   pulse: int = 0) -> tuple[int, bool]:
+        """Hold -- or PULSE -- `buttons` until every predicate in `preds` is true.
+
+        `pulse > 0` alternates `pulse` frames pressed with `pulse` frames
+        released, and this is not a refinement: the game's input is EDGE
+        triggered. `waitbut` (x0.pds:745-752) tests `lda dsel / bne` /
+        `lda dsta / beq waitbut`, and those are the debounced edge bytes, which
+        are $FF only on the single frame the value CHANGES (DISP.SRC:325-333).
+        A button held down for four hundred frames produces exactly ONE edge, at
+        the first frame -- so if the game is not yet listening, that edge is gone
+        and nothing else happens for the rest of the run. That is exactly how the
+        first attempt at `new_game` failed: the title was asserted ready three
+        frames after power-on, before the fade-in delay had expired, and the
+        press it made landed on a screen that was not listening yet.
+
+        Returns (frames_used, held). The caller MUST assert on `held`.
+        """
+        if not pulse:
+            btn = self._norm(buttons)
+            predstr = " ".join(p.encode() for p in preds)
+            r = _kv(self.cmd(f"stepu {budget} {','.join(btn) or '-'} {predstr}"))
+            used, hit = int(r["used"]), r["hit"] == "1"
+            self.inputs.extend([btn] * used)
+            self.frame = int(r["frame"])
+            return used, hit
+        return self._pulse_until(preds, buttons, budget, what, pulse)
+
+    def _pulse_until(self, preds, buttons, budget: int, what: str, pulse: int):
+        # `pulse < 1` would mean `min(pulse, budget - used) == 0`, the loop would
+        # never advance `used`, and this would spin forever. The real
+        # step_until() never gets here with pulse == 0 -- that goes to the bridge
+        # -- but src/testing/test_play_actions.py's FakeEmu routes everything
+        # through this function so that the pulsing logic under test IS this
+        # logic, and it found the hang.
+        pulse = max(1, pulse)
+        img = self.work_ram()
+        # Check BEFORE the first step, exactly as the bridge does. The pulsing
+        # path used to step first and check afterwards, so a predicate that was
+        # already true cost one frame and pressed one button -- and the two paths
+        # disagreed about the one property a caller would assume they share.
+        if all(p.holds(img) for p in preds):
+            return 0, True
+        used = 0
+        pressing = True
+        while used < budget:
+            n = min(pulse, budget - used)
+            self.step(buttons if pressing else (), n)
+            used += n
+            img = self.work_ram()
+            if all(p.holds(img) for p in preds):
+                return used, True
+            pressing = not pressing
+        return used, False
+
     def tap(self, *buttons: str, hold: int = 3, release: int = 3) -> int:
         self.step(buttons, hold)
         return self.step((), release)
 
-    def step_until(self, preds: Sequence, buttons: Iterable[str] | str = (),
-                   budget: int = 600, what: str = "condition") -> tuple[int, bool]:
-        """Hold `buttons` until every predicate in `preds` is true, or `budget` runs out.
-
-        Returns (frames_used, held). The caller MUST assert on `held`; nothing
-        here raises on a miss, because "the budget expired" is a normal result
-        that recon and exploration need to observe and report.
-
-        The input log is extended for exactly `used` frames. A predicate that
-        was already true costs zero frames and logs nothing.
-        """
-        btn = self._norm(buttons)
-        predstr = " ".join(p.encode() for p in preds)
-        r = _kv(self.cmd(f"stepu {budget} {','.join(btn) or '-'} {predstr}"))
-        used, hit = int(r["used"]), r["hit"] == "1"
-        self.inputs.extend([btn] * used)
-        self.frame = int(r["frame"])
-        if hit:
-            return used, True
-        if not what:
-            what = "condition"
-        return used, False
-
     # ----------------------------------------------------------------- notes
+    def screenshot(self, name: str) -> pathlib.Path:
+        """The core's own video buffer, as a PNG.
+
+        `client.screenshot` returns nothing and writes lazily, so a zero-byte
+        file is a screenshot that was never taken. The bridge re-stats the file
+        and refuses to answer `ok` for anything under 9 bytes.
+        """
+        SHOTS.mkdir(parents=True, exist_ok=True)
+        p = SHOTS / f"{name}.png"
+        r = self.cmd(f"screenshot {p}")
+        n = int(_kv(r)["png"])
+        if not p.exists() or p.stat().st_size != n:
+            raise BridgeError(
+                f"screenshot {name}: the bridge says {n} bytes, the file says "
+                f"{p.stat().st_size if p.exists() else 'missing'}")
+        return p
+
     def note(self, text: str) -> None:
         self.events.append((len(self.inputs) + 1, text))
 
@@ -513,18 +586,52 @@ class BizHawk:
                     f"valid_from_poweron={self.input_log_valid} "
                     f"rom={self.rom.name}\n")
             for b in self.inputs:
-                f.write(",".join(b) + "\n")
+                # "-" for "nothing pressed", NOT an empty line.
+                #
+                # An empty line is what `",".join(())` produces, and the loader
+                # skips blank lines -- so a run that spent 244 of its 636 frames
+                # with nothing pressed recorded 392 frames and replayed 392. The
+                # proof then compared the replay's fingerprint against a run it
+                # had not been given the inputs for, and reported MISMATCH. The
+                # replay had 392 frames because the log was short, and nothing
+                # said so: `len(emu.inputs)` said 636 and the file said 637
+                # lines, which look like the same fact.
+                f.write((",".join(b) or "-") + "\n")
         with open(INPUTS / f"{name}.events.txt", "w", encoding="utf-8") as f:
             for frame, text in self.events:
                 f.write(f"{frame}\t{text}\n")
         return p
 
     def load_inputs(self, path: pathlib.Path) -> list[tuple[str, ...]]:
+        """Read a recorded input log. Asserts the frame count in its header.
+
+        A frame that pressed nothing is written `-` and reads back as an empty
+        tuple, so the frame count is preserved exactly -- which it has to be,
+        because a replay that is 244 frames short is not a replay.
+        """
         frames = []
+        declared = None
         for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-            if line.startswith("#") or not line.strip():
+            if line.startswith("#"):
+                m = re.search(r"frames=(\d+)", line)
+                if m:
+                    declared = int(m.group(1))
+                continue
+            if not line.strip():
+                raise BridgeError(
+                    f"{path.name} has a BLANK line. A blank line used to mean "
+                    "'nothing pressed' and was skipped, which silently shortened "
+                    "every replay; '-' is the encoding now and a blank line is a "
+                    "corrupt log")
+            if line.strip() == "-":
+                frames.append(())
                 continue
             frames.append(tuple(b for b in line.split(",") if b))
+        if declared is not None and declared != len(frames):
+            raise BridgeError(
+                f"{path.name} says frames={declared} in its header but holds "
+                f"{len(frames)} frames. A log that does not match its own header "
+                "is a log that will replay into a different game.")
         return frames
 
     def run_inputs(self, frames: Sequence[tuple[str, ...]]) -> None:
@@ -549,7 +656,7 @@ class BizHawk:
                 "snapshot() needs a route name: checkpoints record which segment "
                 "list produced them, and a checkpoint with no route is exactly "
                 "the thing that guard exists to refuse")
-        d = CHECKPOINTS / self.route / name
+        d = CHECKPOINTS / self.route / self.run / name
         if d.exists():
             raise FileExistsError(
                 f"{d} already exists. A checkpoint is written once, not "
@@ -558,6 +665,14 @@ class BizHawk:
         return d
 
     def snapshot(self, name: str) -> pathlib.Path:
+        """See snapshot_dir; `name` must also survive the wire."""
+        if not name or any(c.isspace() for c in name):
+            raise ValueError(
+                f"snapshot name {name!r} contains whitespace. The bridge's "
+                "`snapshot` command takes a single whitespace-free token, so a "
+                "name built from a ROM filename ('Magician (USA)') is refused "
+                "here rather than becoming a command the bridge rejects with a "
+                "'snapshot needs <dir>' that says nothing about the cause.")
         """All nine domains, the framebuffer, the registers and the frame count.
 
         Also records `segments.txt`: the SHA1 of this route's segment list. A
@@ -617,7 +732,8 @@ class BizHawk:
         (d / "sha256.txt").write_text(
             "".join(f"{v}  {k}\n" for k, v in sorted(digests.items())), encoding="utf-8")
         (d / "segments.txt").write_text(
-            f"route={self.route}\nsegment_list_sha1={self.segment_digest()}\n"
+            f"route={self.route}\nrun={self.run}\n"
+            f"segment_list_sha1={self.segment_digest()}\n"
             f"frame={self.frame}\ninputs_prefix_sha1={self.input_prefix_digest()}\n",
             encoding="utf-8")
         self.note(f"snapshot {name} at frame {self.frame}")
@@ -632,7 +748,7 @@ class BizHawk:
         """
         try:
             import play.route as _route
-            return _route.segment_list_sha1()
+            return _route.active().digest()
         except Exception:
             return "-"
 
@@ -644,7 +760,10 @@ class BizHawk:
 
     def load_checkpoint(self, route: str, name: str) -> pathlib.Path:
         """Refuse a checkpoint that a different segment list produced."""
-        d = CHECKPOINTS / route / name
+        if self.run:
+            d = CHECKPOINTS / route / self.run / name
+        else:
+            d = CHECKPOINTS / route / name
         meta = d / "segments.txt"
         if not meta.exists():
             raise FileNotFoundError(f"{d} has no segments.txt; it is not a checkpoint")
@@ -676,6 +795,25 @@ class BizHawk:
             self._runsh.wait(timeout=20)
         except Exception:
             self._runsh.kill()
+        # And then wait for the emulator ITSELF, by PID. run.sh backgrounds
+        # EmuHawk with setsid and returns long before the window closes, so
+        # without this the next BizHawk() is diverted into this one and measures
+        # a session that is shutting down.
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            if not [p for p in self._pids if p in self.running_emuhawk()]:
+                self._pids = []
+                break
+            time.sleep(0.5)
+        else:
+            still = [p for p in self._pids if p in self.running_emuhawk()]
+            if still:
+                raise BridgeError(
+                    f"EmuHawk {still} is still running {45}s after `quit`. The "
+                    "next BizHawk() would be diverted into it by the "
+                    "single-instance pipe and would measure the old session. "
+                    "Kill those PIDs by hand -- with the PID, never with "
+                    "`pkill -f EmuHawk`, which matches its own command line.")
         self._cmdlog.close()
 
     def __enter__(self) -> "BizHawk":

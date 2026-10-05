@@ -138,13 +138,18 @@ end
 -- truncated buffer and hexes it gets a plausible-looking wrong answer, which is
 -- the single worst failure mode available here.
 local function readbin(addr, len)
+  -- ALWAYS returns exactly two values: the bytes read, and either nil or the
+  -- list of offsets that could not be read. A one-value return on the fast path
+  -- leaves the caller with `missing == nil` where it tests `#missing`, which is
+  -- an error rather than a wrong answer -- and an error inside a predicate
+  -- reads as "the bridge is broken" rather than "readbin forgot a return".
   local okr, s = pcall(memory.read_bytes_as_binary_string, addr, len)
-  if okr and type(s) == "string" and #s == len then return s end
+  if okr and type(s) == "string" and #s == len then return s, nil end
   local ok2, arr = pcall(memory.readbyterange, addr, len)
   if ok2 and type(arr) == "table" and #arr == len then
     local b = {}
     for i = 1, len do b[i] = string.char(arr[i] % 256) end
-    return table.concat(b)
+    return table.concat(b), nil
   end
   -- Last resort, one byte at a time. The "CPU registers" domain is 12 bytes
   -- and is not a byte array at all -- both bulk forms refuse it -- so without
@@ -237,7 +242,7 @@ local function peek(addr, len)
   if not name then return nil, err end
   local s, missing = readbin(addr, len)
   if not s then return nil, string.format("could not read %d bytes at $%04X", len, addr) end
-  if #missing and #missing > 0 then
+  if missing and #missing > 0 then
     return nil, string.format("%d bytes at $%04X are not all readable: %s",
                                len, addr, table.concat(missing, ","))
   end
@@ -400,7 +405,9 @@ end
 -- smaller snapshot.
 function CMD.snapshot(rest)
   local dir = rest:match("^(%S+)$")
-  if not dir then return "err snapshot needs <dir>" end
+  if not dir then
+    return "err snapshot needs ONE whitespace-free directory token; got: " .. rest
+  end
   os.execute("mkdir -p '" .. dir .. "'")
   local man = { string.format("frame=%d", emu.framecount()) }
   local wrote, bad = 0, {}

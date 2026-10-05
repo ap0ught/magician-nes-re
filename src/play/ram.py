@@ -89,6 +89,30 @@ def sym(name: str) -> int:
         ) from None
 
 
+def plrx(image: bytes) -> int:
+    """The player's 16-bit map X. Combined from the two separate arrays."""
+    return _FIELDS["plrxlo"].get(image) + 256 * _FIELDS["plrxhi"].get(image)
+
+
+def plry(image: bytes) -> int:
+    """The player's 16-bit map Y."""
+    return _FIELDS["prylo"].get(image) + 256 * _FIELDS["pryhi"].get(image)
+
+
+def object_slot(image: bytes, i: int) -> dict:
+    """One object slot's readable state, by slot number."""
+    out = {}
+    for nm, base in (("obtyp", 0x04F4), ("obmod", 0x04F8), ("obstat", 0x04FC),
+                     ("obxl", 0x0514), ("obxh", 0x0518), ("obyl", 0x051C),
+                     ("obyh", 0x0520), ("obhel", 0x0524), ("obven", 0x0528),
+                     ("obchr", 0x0530), ("obint", 0x0534)):
+        out[nm] = image[base + i]
+    out["x"] = out["obxl"] + 256 * out["obxh"]
+    out["y"] = out["obyl"] + 256 * out["obyh"]
+    out["active"] = out["obtyp"] != 0xFF
+    return out
+
+
 def sym_name(addr: int) -> list[str]:
     """Every name the symbol table gives this address."""
     return sorted(n for n, a in _SYMBOLS.items() if a == addr)
@@ -111,6 +135,16 @@ class Field:
     offset: int = 0
 
     def get(self, image: bytes) -> int:
+        """The value, LITTLE-ENDIAN.
+
+        Little-endian because that is what the 6502 does and therefore what the
+        source's own comments describe. `manacur` is declared
+        `zp manacur,2` (x0.pds:414) and set with `lda #50 / sta manacur`
+        (x1.pds:48-49); on screen $0047 is $32 and $0048 is $00, so the value is
+        50 and NOT 0x3200. Reading it big-endian reports 12800 for a character
+        who has 50 mana, which is exactly the kind of plausible wrong number
+        this file exists to stop.
+        """
         lo = self.addr + self.length - 1
         if lo >= len(image):
             raise IndexError(
@@ -118,7 +152,7 @@ class Field:
                 f"{len(image)}-byte image given to it")
         v = 0
         for i in range(self.length):
-            v = (v << 8) | image[self.addr + i]
+            v |= image[self.addr + i] << (8 * i)
         return v
 
     def byte(self, image: bytes) -> int:
@@ -192,8 +226,27 @@ field("newphase", 1, "phase the game is about to move to; g06 copies it into "
       "phase and exits (x5.pds:573-575)", "newphase", "tok3")
 field("subphase", 1, "current subgame, 0..5 (x0.pds:508-509). Not the main "
       "phase", "subphase", "printflag")
-field("nmiflag", 1, "non-zero while game processing is in progress; the IRQ "
-      "main loop skips everything else while it is set (x5.pds:222-223)", "nmiflag")
+field("nmiflag", 1, "the IRQ main loop's re-entry guard: `lda nmiflag / bne "
+      "bankexit` (x5.pds:222-223), set before the level's work and cleared after. "
+      "1 that never returns to 0 means the loop is stuck INSIDE a phase, which is "
+      "how the rebuild's g03 hang was identified. CAUTION: $002C is ALSO joykey's "
+      "decoded UP-button byte (jt[4]) -- the main loop writes nmiflag, then calls "
+      "joykey, then writes nmiflag again (x5.pds:221-259) -- so it is only "
+      "meaningful BETWEEN frames, which is where this harness reads it.",
+      "nmiflag")
+field("bnksel", 1, "the PRG bank currently selected at $8000 (x0.pds:401). The IRQ "
+      "main loop's epilogue restores it to bank 6 (x5.pds:246-252), so a value "
+      "other than 6 with the game otherwise idle is a symptom of a phase that "
+      "never returned -- which is what the rebuild's g03 hang looked like",
+      "bnksel")
+field("fadevec", 1, "colour-fade direction, -1/0/+1; 0 = no fade in progress. "
+      "`waitbut` spins on `lda fadevec / bne waitbut` (x0.pds:745-746), so it is "
+      "the title screen's own 'ready' flag", "fadevec")
+field("fade_del", 1, "colour-fade frame counter (x0.pds:403)", "fadedel")
+field("second", 1, "frames until the next one-second tick: the main loop does "
+      "`dec second / bpl !c / lda #$3b / sta second` (x5.pds:225-227). Non-zero "
+      "means the main loop is RUNNING, which is the difference between a live "
+      "game and one wedged in a phase", "second")
 
 # -------------------------------------------------------------- where we are
 field("curlev", 1, "logical level index of the level being played, 0..$FF. "
@@ -232,34 +285,58 @@ field("tmpflag", 1, "temporary game flags, reset per level (x0.pds:416)", "tmpfl
 # `zp <name>,maxob` -- four bytes, one per object -- so the player is at
 # <base>+3. This is the single most load-bearing offset in the file.
 PLAYER_IDX = 3
+
+# The whole of the game's RAM: `x0.pds:522` says "** Unexpanded RAM $0000-$07FF
+# **", and this harness fingerprints exactly this window. It lives HERE and not
+# in emu.py because an address range in code is an address in code, and the rule
+# this project set is that there are none outside this file.
+WORK_RAM = (0x0000, 0x0800)
 field("plrtype", 1, f"obtyp[{PLAYER_IDX}] -- the player's object type. obtyp is "
       f"'type/active flag', 4 bytes, one per object (x0.pds:542); player index "
-      f"{PLAYER_IDX} from `pi equ maxob-1` (x0.pds:243)", "obtyp")
+      f"{PLAYER_IDX} from `pi equ maxob-1` (x0.pds:243)", "obtyp",
+      offset=PLAYER_IDX)
 field("plrmode", 1, f"obmod[{PLAYER_IDX}] -- the player's movement mode "
-      "(x0.pds:543)", "obmod")
+      "(x0.pds:543)", "obmod", offset=PLAYER_IDX)
 field("plrstat", 1, f"obstat[{PLAYER_IDX}] -- 'anim/movement/dead/general flag'; "
       f"bit 7 is DEAD, bits 2-3 are the facing, and bit 6 is 'in the air' "
       f"(x1.pds:1 uses it as: bmi = dead, bvc = air, lsr/lsr + bcs = moving). "
       f"Every claim this harness makes about the player standing still or "
-      f"facing a direction rests on this byte", "obstat")
+      f"facing a direction rests on this byte", "obstat", offset=PLAYER_IDX)
 field("plrflg", 1, "the PLAYER object flag: >0 while walking, <0 while jumping "
       "or falling, 0 standing (x0.pds not named; x1.pds:120-128 'ldy plrflg / "
       "bne', x5.pds:512 'bit plrflg / bvs' for in-air)", "plrflg")
-field("plrx", 2, f"obxl[{PLAYER_IDX}]:obxh[{PLAYER_IDX}] -- the player's "
-      f"16-bit MAP position, not a screen position (x0.pds:548-549)", "obxl")
-field("plry", 2, f"obyl[{PLAYER_IDX}]:obyh[{PLAYER_IDX}] -- the player's 16-bit "
-      f"map Y (x0.pds:549-550)", "obyl")
+# The two halves of the position are NOT adjacent: `zp obxl,maxob` and
+# `zp obxh,maxob` are SEPARATE arrays (x0.pds:548-549), so the player's low byte
+# is obxl[3] = $0517 and the high byte is obxh[3] = $051B, four bytes apart. A
+# two-byte field cannot span them, so they are declared separately and combined
+# by plrx()/plry().
+#
+# The first version of this file declared `plrx` as `obxl` with no offset and
+# length 2, which reads SLOT 0 -- and slot 0 is always $FFFF, because initob
+# clears slots 0..2 and activates only slot 3 (`lda #$00 / jsr actob` with X=pi).
+# So "the player is at 65535,65535" was not the player being lost, it was the
+# harness reading the one slot that is always empty. MEASURED on Beta 1: the
+# player's position really does change while walking, and obxl[3]/obyl[3] are
+# where it changes.
+field("plrxlo", 1, f"obxl[{PLAYER_IDX}] -- the player's map X, low byte",
+      "obxl", offset=PLAYER_IDX)
+field("plrxhi", 1, f"obxh[{PLAYER_IDX}] -- the player's map X, high byte",
+      "obxh", offset=PLAYER_IDX)
+field("prylo", 1, f"obyl[{PLAYER_IDX}] -- the player's map Y, low byte",
+      "obyl", offset=PLAYER_IDX)
+field("pryhi", 1, f"obyh[{PLAYER_IDX}] -- the player's map Y, high byte",
+      "obyh", offset=PLAYER_IDX)
 field("plrchest", 1, f"obaorg[{PLAYER_IDX}], also called obchest -- the player's "
-      f"animation-origin / chest counter (x0.pds:546)", "obchest")
+      f"animation-origin / chest counter (x0.pds:546)", "obchest", offset=PLAYER_IDX)
 field("plrhelm", 1, f"obhel[{PLAYER_IDX}] -- the player's health counter. "
       f"`helind` (x6.pds:33) computes 'health rating = health / 32', so it is a "
-      f"16x-scale counter, NOT a hit point count and not an HP bar", "obhel")
-field("plrven", 1, f"obven[{PLAYER_IDX}] -- venom counter (x0.pds:551)", "obven")
+      f"16x-scale counter, NOT a hit point count and not an HP bar", "obhel", offset=PLAYER_IDX)
+field("plrven", 1, f"obven[{PLAYER_IDX}] -- venom counter (x0.pds:551)", "obven", offset=PLAYER_IDX)
 field("plrchr", 1, f"obchr[{PLAYER_IDX}] -- object characteristics: which floor "
-      f"types pass (x0.pds:552)", "obchr")
+      f"types pass (x0.pds:552)", "obchr", offset=PLAYER_IDX)
 field("plrmsg", 1, f"obint[{PLAYER_IDX}] -- the interaction message attached to "
       f"the player, used by the wise man and the beggar (x0.pds:553, x0.pds:735 "
-      f"intmsg/begmsg are the object-side copies)", "obint")
+      f"intmsg/begmsg are the object-side copies)", "obint", offset=PLAYER_IDX)
 
 # ------------------------------------------------------------------- objects
 # maxob = 4, so these arrays are 4 bytes each and every index 0..3 is a slot.
@@ -431,95 +508,121 @@ field("wait", 2, "scratch `wait` used by the main loop's tail (x5.pds:236-245). 
 # look right. So `select_edge()` and `start_edge()` REFUSE to answer until
 # src/play/milestones/m1_first_town.py has pressed one button at a time and read
 # the bytes back. That is the only reason they exist.
-field("pad", 8, "the eight bytes joykey decodes, at $0028-$002F. Derived from "
-      "`jt` ($002E) minus 6: joykey writes them with `sty jt,x` for x=7..0, "
-      "which addresses $002F down to $0028. Index 0 is $0028. WHICH BUTTON IS "
-      "WHICH INDEX is measured, not assumed -- see BUTTON_ORDER", "jt", offset=-6)
-field("pad_a", 1, "pad[0] = $0028. joykey's decoded byte 0", "jt", offset=-6)
-field("pad_b", 1, "pad[1] = $0029. joykey's decoded byte 1", "jt", offset=-5)
-field("pad_select", 1, "pad[2] = $002A. joykey's decoded byte 2", "jt", offset=-4)
-field("pad_start", 1, "pad[3] = $002B. joykey's decoded byte 3", "jt", offset=-3)
-field("pad_up", 1, "pad[4] = $002C -- WHICH IS ALSO nmiflag, so it is only valid "
-      "between frames, not inside the main loop", "jt", offset=-2)
-field("pad_down", 1, "pad[5] = $002D -- WHICH IS ALSO bnksel, same caveat",
-      "jt", offset=-1)
-field("pad_left", 1, "pad[6] = $002E -- the accumulator's own address, `jt`",
-      "jt")
-field("pad_right", 1, "pad[7] = $002F", "jt", offset=1)
-field("lr", 1, "$FF when A OR B is held -- a combined flag, NOT 'left or right' "
-      "(joykey, DISP.SRC:316-322)", "lr")
-field("ud", 1, "$FF when SELECT OR START is held -- also not 'up or down'",
-      "ud")
-field("sel_state", 1, "$0032, the individual state of whichever button the "
-      "source calls Select", "sta")
-field("start_state", 1, "$0033, the individual state of whichever button the "
-      "source calls Start", "sel")
-field("fireb_state", 1, "$0034, named `fireb` by the source but written from "
-      "hardware read 4", "fireb")
-field("firea_state", 1, "$0035, named `firea` by the source but written from "
-      "hardware read 5", "firea")
-field("deb_fire", 1, "$0036 -- debounced edge of `lr`, i.e. A or B changed",
-      "dlr", "fs")
-field("deb_ss", 1, "$0037 -- debounced edge of `ud`, i.e. Select or Start changed",
-      "dud")
-field("deb_sta", 1, "$0038 -- the source calls this `dsta`; which button it is is "
-      "MEASURED (see select_edge)", "dsta")
-field("deb_sel", 1, "$0039 -- the source calls this `dsel`; the other of the "
-      "SELECT/START pair (see start_edge)", "dsel")
-field("deb_fireb", 1, "$003A -- the source calls this `dfireb`", "dfireb")
-field("deb_firea", 1, "$003B -- the source calls this `dfirea`", "dfirea")
+field("pad", 8, "the eight bytes joykey decodes, $002E-$0035, in ITS ORDER: "
+      "index 0 ($002E) = RIGHT, index 1 ($002F) = LEFT, and indices 2 and 3 are "
+      "overwritten again by `lr`/`ud` (see lr/ud). The accumulator the source "
+      "calls `jt` is $002E, which is ALSO index 0 -- `sta jt` in jk0, then "
+      "`sty jt,x` for x=7..0 in joykey, so jt is one byte that is also the first "
+      "of eight. MEASURED: one button at a time, held past the two-equal-reads "
+      "debounce, then $002E-$003B read back; see src/play/recon.py step 1",
+      "jt", offset=0)
+field("pad_right", 1, "MEASURED: $002E = 1 while RIGHT is held. jt[0] = bit 0 of "
+      "jk0's accumulator = the EIGHTH $4016 read", "jt")
+field("pad_left", 1, "MEASURED: $002F = 1 while LEFT is held. jt[1] = bit 1 = the "
+      "SEVENTH read", "jt", offset=1)
+field("lr", 1, "MEASURED: $FF while LEFT is held, 01 while RIGHT is held, 00 when "
+      "neither is. So it is a signed DIRECTION, not 'left or right' -- `getdir` "
+      "(x6.pds:951-957) reads its sign to tell them apart. This is joykey's "
+      "`stx lr`, computed from $002E/$002F (DISP.SRC:316-322)", "lr")
+field("ud", 1, "MEASURED: $FF while UP is held, 01 while DOWN is held, 00 when "
+      "neither. The same signed-direction shape as `lr`, from $0030/$0031 which "
+      "at that moment still hold jt[2] (DOWN) and jt[3] (UP)", "ud")
+field("start_raw", 1, "MEASURED: $0032 = 1 while START is held. jt[4] = bit 4 = "
+      "the FOURTH $4016 read. The source calls it `sta`, and it is right", "sta")
+field("select_raw", 1, "MEASURED: $0033 = 1 while SELECT is held. jt[5] = bit 5 = "
+      "the THIRD read. The source calls it `sel`, and it is right", "sel")
+field("fireb_raw", 1, "MEASURED: $0034 = 1 while B is held. jt[6] = bit 6 = the "
+      "SECOND read. The source calls it `fireb`, and it is right", "fireb")
+field("firea_raw", 1, "MEASURED: $0035 = 1 while A is held. jt[7] = bit 7 = the "
+      "FIRST read. The source calls it `firea`, and it is right", "firea")
+field("deb_lr", 1, "$0036 -- edge of `lr`: $FF on the frame LEFT/RIGHT changed "
+      "state, 0 while it is steady. MEASURED by stepping one frame at a time "
+      "across a press", "dlr", "fs")
+field("deb_ud", 1, "$0037 -- edge of `ud`, same shape. MEASURED for both UP and "
+      "DOWN", "dud")
+field("deb_start", 1, "$0038 -- edge of START. MEASURED. The source calls it "
+      "`dsta` and it IS the START edge; a reading of joykey that put SELECT here "
+      "was wrong because it ignored that the lr/ud step overwrites $0030/$0031",
+      "dsta")
+field("deb_select", 1, "$0039 -- edge of SELECT. MEASURED. The source calls it "
+      "`dsel` and it is right", "dsel")
+field("deb_b", 1, "$003A -- edge of B. MEASURED. The source calls it `dfireb`",
+      "dfireb")
+field("deb_a", 1, "$003B -- edge of A. MEASURED. The source calls it `dfirea`",
+      "dfirea")
+field("oldlr", 6, "the previous frame's $0030-$0035, six bytes, which is what the "
+      "edge detector compares against (DISP.SRC:325-333)", "oldlr", "lb")
 
-# The measured button order, filled in by the recon. `None` means "not measured
-# yet", and every accessor that depends on it raises rather than choosing.
+# The measured button table, in the shape an action needs: a logical button name
+# to the FIELD that carries it. Recorded by ram.record_button_order(), which
+# requires the observation that established it -- a button order recorded
+# without its evidence is a guess wearing a measurement's clothes.
 BUTTON_ORDER: dict[str, str] | None = None
+
+BUTTON_ORDER_EVIDENCE = (
+    "MEASURED 2026-10-05 on this machine with BizHawk 2.11.1 / quickerNES, by "
+    "src/play/recon.py step 1: each button held alone for 120 frames -- long "
+    "enough for joykey's two-consecutive-equal-reads debounce to settle -- and "
+    "$002E-$003B read back, with an 8-sample stability check per button (all "
+    "eight samples identical for every button). One distinct byte per button, "
+    "and it matched the source's OWN names for the six named bytes: "
+    "$0032 sta=START, $0033 sel=SELECT, $0034 fireb=B, $0035 firea=A, "
+    "$0038 dsta=START edge, $0039 dsel=SELECT edge, $003A dfireb=B edge, "
+    "$003B dfirea=A edge. $0036/$0037 are the lr/ud EDGES, shared by Left/Right "
+    "and Up/Down respectively, so they do not identify a single button. "
+    "$0030 lr is $FF for LEFT and 01 for RIGHT; $0031 ud is $FF for UP and 01 "
+    "for DOWN -- signed directions, not ORs. "
+    "The two readings that disagreed (the source's names vs. the order joykey "
+    "writes the bytes in) were resolved by noticing that joykey OVERWRITES "
+    "$0030/$0031 with lr/ud after the decode loop, which is why a naive reading "
+    "of the write order puts the wrong button there."
+)
 
 
 def select_edge() -> Field:
-    """The debounced byte that carries SELECT.
-
-    Raises until the recon has measured it. Picking a side on the strength of
-    the name `dsta` looking like "START" is precisely the mistake this module
-    exists to prevent, and the mistake is invisible: the byte is a real byte and
-    the predicate is a real predicate.
-    """
-    if BUTTON_ORDER is None:
-        raise AssertionError(
-            "which debounced byte carries SELECT has not been measured. The "
-            "source's names (dsta/dsel/dfireb/dfirea) and the order joykey writes "
-            "them in disagree, and both readings produce a plausible, wrong "
-            "answer. Run src/play/milestones/m1_first_town.py, which presses one "
-            "button at a time and reads $0028-$003B back.")
-    return f(BUTTON_ORDER["select"])
+    """The debounced byte that carries SELECT. Raises unless recon has run."""
+    return _edge("select", "select")
 
 
 def start_edge() -> Field:
-    if BUTTON_ORDER is None:
-        raise AssertionError("see select_edge()")
-    return f(BUTTON_ORDER["start"])
+    return _edge("start", "START")
 
 
 def a_edge() -> Field:
-    if BUTTON_ORDER is None:
-        raise AssertionError("see select_edge()")
-    return f(BUTTON_ORDER["a"])
+    return _edge("a", "A")
 
 
 def b_edge() -> Field:
+    return _edge("b", "B")
+
+
+def direction_edge(name: str) -> Field:
+    """The edge byte for a direction. Shared: one byte covers both ways."""
+    if name in ("Left", "Right"):
+        return _edge("lr", "Left/Right")
+    if name in ("Up", "Down"):
+        return _edge("ud", "Up/Down")
+    raise KeyError(f"{name!r} is not a direction")
+
+
+def _edge(what: str, label: str) -> Field:
     if BUTTON_ORDER is None:
-        raise AssertionError("see select_edge()")
-    return f(BUTTON_ORDER["b"])
+        raise AssertionError(
+            f"which debounced byte carries {label} has not been measured. Run "
+            "src/play/recon.py, whose step 1 presses one button at a time and "
+            "reads $002E-$003B back.")
+    return f(BUTTON_ORDER[what])
 
 
 def record_button_order(order: dict[str, str], evidence: str) -> None:
     """Record the measurement.
 
-    `order` maps a logical button name to a FIELD NAME (not an address -- the
-    address has to come through a declared field or the whole point is lost).
-    `evidence` is required: a button order recorded without the observation that
-    established it is a guess wearing a measurement's clothes.
+    `order` maps a logical name to a FIELD NAME, never an address: the address
+    has to come through a declared field or the whole rule is lost. `evidence`
+    is required and must name what was observed.
     """
     global BUTTON_ORDER
-    need = {"select", "start", "a", "b", "up", "down", "left", "right"}
+    need = {"select", "start", "a", "b", "lr", "ud"}
     missing = need - set(order)
     if missing:
         raise ValueError(f"button order is missing {sorted(missing)}")
@@ -531,6 +634,13 @@ def record_button_order(order: dict[str, str], evidence: str) -> None:
     BUTTON_ORDER = dict(order)
     BUTTON_ORDER["evidence"] = evidence
 
+
+def load_button_order() -> None:
+    """Install the committed measurement. Used by actions and by tests."""
+    record_button_order(
+        {"select": "deb_select", "start": "deb_start", "a": "deb_a", "b": "deb_b",
+         "lr": "deb_lr", "ud": "deb_ud"},
+        BUTTON_ORDER_EVIDENCE)
 
 
 # ------------------------------------------------------------------ the phases
@@ -606,7 +716,12 @@ class Pred:
         return _OPS[self.op](self.field.get(image), self.value)
 
     def encode(self) -> str:
-        return f"{self.field.addr:x}:{self.field.length:x}:{self.op}:{self.value:x}"
+        # DECIMAL on the wire, in every field. The bridge's pattern is
+        # `^(%d+):(%d+):(%a+):(-?%d+)$`, so a hex value here is rejected as a
+        # malformed predicate -- and because the address happens to be hex-safe,
+        # `5f:1:eq:a` fails only on the value, which is exactly the sort of
+        # near-miss that wastes an afternoon.
+        return f"{self.field.addr:d}:{self.field.length:d}:{self.op}:{self.value:d}"
 
     def __str__(self) -> str:
         return f"{self.field.name} {self.op} {self.value:#x} @${self.field.addr:04X}"
