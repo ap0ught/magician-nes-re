@@ -3,17 +3,48 @@
 --
 --   MAGICIAN_PADPROBE_OUT=<txt> tools/bizhawk/run.sh tools/bizhawk/padprobe.lua <rom>
 --
--- Why this file exists
--- --------------------
--- replay.lua needs to read the *cartridge's* decoded joypad state, which lives at
--- $002E-$0035 (`jt`) and $0036-$003B (`dlr`). Working out the byte order from the
--- source is a trap: `jk0` does not store one bit per button. It shifts a single
--- accumulator left once per *unpressed* read and stops at the first press, so the
--- accumulator ends up holding one bit set -- bit (k+1), where k is the index of
--- the first pressed button -- plus bit 0, and that value is then unpacked by
--- `joykey` into eight bytes. The observed result is not any simple identity:
--- pressing one button lights two bytes, and Right -- the eighth -- lights only
--- one, because the shift has already fallen off the end of the byte.
+-- SUPERSEDED by src/play/recon.py, and its reasoning was wrong. Read that first.
+--
+-- It has NOT been run: nothing this repository claims rests on it, and
+-- `src/play/recon.py` step 1 measures the same table far more precisely (one
+-- button at a time, held past the game's own debounce, eight samples per button
+-- for stability) and additionally reads the edge bytes, which this file never
+-- did. What is recorded here is what the measurement said, so the next person
+-- does not re-derive it from the source and get it wrong again.
+--
+-- WHY THIS FILE EXISTED
+-- ---------------------
+-- replay.lua needs to read the *cartridge's* decoded joypad state. Working that
+-- out from the source is a trap: `jk0` reads $4016 eight times and shifts a
+-- single accumulator at $002E (`jt`) left once per read, inserting one bit at
+-- bit 0 each time, with a marker $01 walking out of the byte to end the loop.
+-- After eight reads the accumulator holds bit0=read1 .. bit7=read8, and `joykey`
+-- explodes it with `sty jt,x` for x = 7,6,...,0.
+--
+-- WHAT WAS WRONG HERE, all of it now measured:
+--   * $002E-$0035 IS the right window -- but because joykey writes `jt,x` for
+--     x=7..0 starting at jt=$002E, not because the eight buttons live at
+--     $0028-$002F. `jt` is declared `zp jt,2`; the other six bytes are written
+--     from it.
+--   * The order is NOT A,B,Select,Start,Up,Down,Left,Right from the low address
+--     up. Measured, with 1 = held:
+--         $002E RIGHT   $002F LEFT   $0030 lr   $0031 ud
+--         $0032 START   $0033 SELECT $0034 B     $0035 A
+--   * $0030/$0031 are not "lr/ud, $FF when either direction bit is set". They are
+--     OVERWRITTEN by joykey after the decode loop: $0030 is $FF for LEFT and 01
+--     for RIGHT, $0031 is $FF for UP and 01 for DOWN -- signed DIRECTIONS, which
+--     is why the shift-order reading puts the wrong button in the wrong place.
+--   * "Right -- the eighth -- lights only one byte, because the shift has already
+--     fallen off the end" is not why. Every button lights exactly one byte; A and
+--     B light one each because $0030/$0031 have replaced the two bytes that would
+--     otherwise have lit as well.
+--   * 1 means PRESSED on this core. That is a property of quickerNES's $4016 and
+--     was worth measuring rather than assuming from the hardware convention.
+--
+-- The edge bytes are $0036-$003B and are $FF only on the frame the value
+-- CHANGES (DISP.SRC:325-333), so holding a button shows nothing and a probe that
+-- only samples steady-state values reports every button as doing nothing. That is
+-- what `offsets_last` was reaching for and did not get.
 --
 -- Two derivations of the same table were available and they disagreed, and a table
 -- that is wrong in this way still produces plausible non-zero bytes, so it would
@@ -26,6 +57,11 @@
 -- byte; a button that lights nothing is reported as such rather than being left
 -- out of the table, and the file exits non-zero if any button could not be
 -- resolved. "Eight buttons, seven answers" is a failure, not a result.
+--
+-- Note that this file CANNOT see the edge bytes, for the reason above: it samples
+-- steady-state values and $0036-$003B are only non-zero on a transition frame. If
+-- you need the edge bytes, step one frame at a time across the press -- which is
+-- what src/play/recon.py does, and what ram.py's committed button order cites.
 
 local OUT = os.getenv("MAGICIAN_PADPROBE_OUT") or "/tmp/opencode/padprobe.txt"
 local LEAD = tonumber(os.getenv("MAGICIAN_PADPROBE_LEAD") or "40") or 40
