@@ -1,81 +1,67 @@
 #!/usr/bin/env python3
-"""Run the source's `unrun` decompressor over a DAT/ file, offline.
+"""Deprecated shim: `unrun` now lives in tools/datcodec.py.
 
     python3 tools/unrun.py TIT.DAT [--hex] [--rows]
 
-`unrun` (X5.PDS:111) is the only thing in the source that fills the nametable at
-boot: `dotitle` banks in the title data and calls `unrunscn`, which aims $2006
-at $2000 and hands the compressed blob to `unrun`. Modelling it here answers a
-question no amount of emulator measurement can: what the source's own data and
-the source's own algorithm produce *between themselves*. If that is a sensible
-title screen, the rebuild is failing at runtime and the emulator is the right
-place to look; if it is not, the data or the algorithm is wrong and no amount of
-running it will help.
+This tool used to carry its own transcription of `unrun` (x5.pds:111-121). That
+transcription was wrong in two places, and both errors pointed the same way --
+at a title screen made of solid brick, which an earlier session took to mean the
+source's title data was missing. It is not. The data is fine; the transcription
+was not.
+
+  1. The input pointer. The epilogue is
+
+         DCAD: 38      sec
+         DCAE: 98      tya
+         DCAF: 65 13   adc $13
+
+     `sec` is not clearing a borrow, it is supplying the +1 that `adc` adds. The
+     pointer advance is `t0 += y + 1`. This shim modelled it as `t0 += y`, which
+     lands on the last byte of the record just read and re-reads it forever.
+
+  2. The inner loop. `dex / bne $DC9D` branches back to the `sta $2007`, not to
+     the `lda (t0),y` / `cmp t4` pair, so the token test happens once per record.
+     This shim looped to the top and re-tested every byte, which misparses any
+     run whose value byte happens to equal the token.
+
+Together those made `unrun.py TIT.DAT` print "1024 screen bytes" that were all
+`$08`. tools/datcodec.py fixes both, adds the run-length correction documented
+there, and proves the format round-trips Eurocom's own three files
+byte-identically.
+
+Kept as a shim so old command lines and notes keep working. Use datcodec.
 """
 import sys
 from pathlib import Path
 
-ROOT = Path('/home/cmayfield/code/games/magician-nes')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import datcodec  # noqa: E402
 
 
 def unrun(data: bytes) -> bytes:
-    """A literal transcription of X5.PDS:111-127, including its quirks."""
-    out = bytearray()
-    p = 0                      # t0/t1 as a flat offset into `data`
-    t2 = data[0]               # lda (t0),y / sta t2,y for y = 2,1,0
-    t3 = data[1]
-    t4 = data[2]               # the token byte
-    y = 3
-    guard = 0
-    while True:
-        guard += 1
-        if guard > 4000000:
-            raise SystemExit('unrun: no terminator after %d bytes' % len(out))
-        x = 1
-        while True:
-            a = data[p + y]
-            if a == t4:
-                y += 1
-                cnt = data[p + y]
-                x = (cnt & 0x7F) + 3
-                carry = (cnt >> 7) & 1
-                y += 1
-                a = data[p + y]
-            else:
-                carry = 0
-            # sta $2007 / php / adc #$00 / plp
-            out.append(a & 0xFF)
-            a = (a + carry) & 0xFF
-            # inc t2 / bne / inc t3
-            t2 = (t2 + 1) & 0xFF
-            if t2 == 0:
-                t3 = (t3 + 1) & 0xFF
-            x -= 1
-            if x == 0:
-                break
-        # sec / tya / adc t0 / sta t0 / bcc / inc t1, then ldy #$00
-        p += y
-        if p > 0xFF:
-            p -= 0x100      # t1 carries the high byte; irrelevant in a flat model
-        y = 0
-        if t3 == 0:
-            return bytes(out)
+    """The format as packed. See tools/datcodec.py for the derivation."""
+    return datcodec.decode(data)
 
 
 def main() -> int:
     arg = sys.argv[1]
-    p = ROOT / 'vendor' / 'Magician-NES' / 'DAT' / arg
+    p = Path(arg)
     if not p.exists():
-        p = Path(arg)
+        p = datcodec.DAT / arg
     data = p.read_bytes()
     out = unrun(data)
+    _, _, token, target = datcodec.header(data)
     print('%s: %d compressed bytes -> %d screen bytes (0x%X)'
           % (p.name, len(data), len(out), len(out)))
-    print('  count lo/hi = $%02X/$%02X, token = $%02X' % (data[0], data[1], data[2]))
+    print('  counter lo/hi = $%02X/$%02X, token = $%02X' % (data[0], data[1], token))
+    if '--source' in sys.argv:
+        src = datcodec.decode_source(data, pad=bytes(4096))
+        print('  shipped +3 run length would emit %d distinct values; use '
+              '`datcodec.py source` for the detail' % len(set(src)))
     if '--hex' in sys.argv:
         for r in range(0, min(len(out), 0x400), 16):
             print('  $%04X  %s' % (0x2000 + r,
-                                    ' '.join('%02X' % v for v in out[r:r + 16])))
+                                   ' '.join('%02X' % v for v in out[r:r + 16])))
     if '--rows' in sys.argv:
         for row in range(min(30, len(out) // 32)):
             cells = out[row * 32:row * 32 + 32]
