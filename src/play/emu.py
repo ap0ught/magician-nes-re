@@ -256,6 +256,19 @@ class BizHawk:
         self.port = srv.getsockname()[1]
         env["MAGICIAN_BRIDGE_PORT"] = str(self.port)
 
+        # THE PRE-LAUNCH SNAPSHOT, in the one place it can be correct: immediately
+        # before Popen, and nowhere else.
+        #
+        # It was taken AFTER the launch, several lines further down, and the delta
+        # was therefore always empty -- so `diverted` was always True and
+        # `Run.start`'s "this launch added no new EmuHawk process" guard fired on
+        # every run, including one that had demonstrably just created its window.
+        # MEASURED: milestone 1 on Beta 1 with --scouts 3 stopped at
+        # `BRIDGE FAILED: ... added no new EmuHawk process` after 3.3 seconds.
+        # A guard whose input is captured in the wrong order does not degrade
+        # gracefully; it is simply always on, and reads as an emulator problem.
+        self._before_pids = set(self.running_emuhawk())
+
         cmd = [str(RUN_SH), str(BRIDGE_LUA), str(self.rom), str(self.log_path)]
         self._runsh = subprocess.Popen(
             cmd, cwd=str(ROOT), env=env,
@@ -276,6 +289,18 @@ class BizHawk:
         self.connect_seconds = time.time() - t0
         self.conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.conn.settimeout(300)
+        # And now the delta. Taken after the bridge has answered -- the window is
+        # demonstrably up, because it is answering -- but NOT necessarily after
+        # `mono` appears in the process table. `EmuHawkMono.sh` execs a wrapper
+        # which execs mono, and there is a measurable gap: MEASURED, the bridge
+        # connected at 2.8s with the new pid absent, and it was present moments
+        # later. So the delta is POLLED rather than sampled once.
+        #
+        # Sampling once is what a guard should not do here. It reported "diverted"
+        # for a session that was demonstrably its own, and the run stopped with a
+        # message about emulator plumbing instead of doing any work.
+        self._pids = self._own_pids()
+        self.diverted = not self._pids
         # Deliberately NOT makefile()/readline(). Two reasons, one of which cost
         # a run: the accepted socket inherits its timeout behaviour from a
         # listening socket that HAD one, and a buffered reader over it does not
@@ -289,22 +314,24 @@ class BizHawk:
         self.events: list[tuple[int, str]] = []
         self.frame = 0
         self._closed = False
-        self._pids: list[int] = []
 
-        # WHICH EMUHAWK IS OURS. BizHawk's window outlives the run.sh that launched it
-        # (run.sh backgrounds it with setsid and returns immediately), so the
-        # processes alive NOW may include ones that predate this session -- and a
-        # `close()` that waited on the wrong PID, or a `Run.start` that assumed a
-        # launch succeeded because a session answered, are both ways of measuring
-        # the wrong machine.
+        # WHICH EMUHAWK IS OURS. `_pids` was already computed above, immediately
+        # after the bridge answered. It is NOT re-initialised here, and that line
+        # used to be here:
         #
-        # `before` is captured here, before the window exists, and `_pids` is the
-        # delta. The runner reads `_pids` to decide whether this launch was
-        # diverted. `close()` waits on `_pids` for the same reason: it must not
-        # wait for -- or kill -- somebody else's window.
-        self._before_pids = set(self.running_emuhawk())
-        self._pids = sorted(set(self.running_emuhawk()) - self._before_pids)
-        self.diverted = not self._pids
+        #     self._pids: list[int] = []
+        #
+        # which silently discarded the delta thirty lines after it was taken. So
+        # `_pids` was ALWAYS empty, `diverted` was always True, and
+        # `Run.start`'s "this launch added no new EmuHawk process" guard fired on
+        # every run -- including the one that had just created the window it was
+        # complaining about. MEASURED: the delta recomputed by hand from the same
+        # object was `[1239461]` while the attribute read `[]`.
+        #
+        # Two separate mistakes with one symptom, which is why the guard needed
+        # checking rather than believing: the snapshot was taken after the launch,
+        # and then the result was overwritten. Either alone would have been enough
+        # to make the guard permanently on.
         assert self.cmd("ping") == "pong", "the bridge answered ping with something else"
         self.domains = self._read_domains()
         missing = [d for d in REQUIRED_DOMAINS if d not in {x.name for x in self.domains}]
@@ -907,6 +934,26 @@ class BizHawk:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    def _own_pids(self, timeout: float = 15.0) -> list[int]:
+        """EmuHawk PIDs that appeared since before this launch, polled for a while.
+
+        Polling because `mono` is not in the process table the instant the bridge
+        answers -- `EmuHawkMono.sh` execs a wrapper which execs mono, and the gap
+        is seconds, not milliseconds (MEASURED: 2.8s to connect, the new pid
+        absent at that instant and present shortly after).
+
+        The wait is bounded and it is the right way round: a genuinely diverted
+        launch costs this timeout, and it costs it BEFORE any measurement rather
+        than after, so the failure is a refusal to start rather than a number
+        somebody acts on.
+        """
+        deadline = time.time() + timeout
+        while True:
+            new = sorted(set(self.running_emuhawk()) - self._before_pids)
+            if new or time.time() >= deadline:
+                return new
+            time.sleep(0.25)
 
     @staticmethod
     def running_emuhawk() -> list[int]:

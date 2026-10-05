@@ -638,8 +638,67 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         _runner_mod.BizHawk = real_init
 
+# ===================== 5k. THE PID GUARD'S INPUT IS CAPTURED IN THE RIGHT ORDER
+#
+# TWO MISTAKES, ONE SYMPTOM, and the guard was permanently on because of it. This
+# is pinned as a source-level check because both mistakes are about the ORDER of
+# statements in `BizHawk.__init__` and about a later assignment overwriting an
+# earlier one -- neither is reachable from a fake, and both produced a run that
+# stopped with a message about emulator plumbing instead of doing any work.
+#
+# MEASURED, before this check existed: milestone 1 on Beta 1 with --scouts 3
+# stopped after 3.3s with
+#     BRIDGE FAILED: this launch added no new EmuHawk process, so it was diverted
+# with a window that the same call had demonstrably created, and the delta
+# recomputed by hand from the live object was `[1239461]` while the attribute read
+# `[]`.
+src = pathlib.Path(_ROOT / "src/play/emu.py").read_text(encoding="utf-8")
+_lines = src.splitlines()
+
+
+def _lineno(needle, after=0):
+    for i, ln in enumerate(_lines):
+        if needle in ln and i > after:
+            return i
+    return -1
+
+
+i_snap = _lineno("self._before_pids = set(self.running_emuhawk())")
+i_popen = _lineno("self._runsh = subprocess.Popen(")
+i_delta = _lineno("self._pids = self._own_pids()")
+check("5k-a: the pre-launch PID snapshot is taken BEFORE the Popen -- taken "
+      "after, the delta is empty by construction and the guard is always on",
+      min(i_snap, i_popen, i_delta) >= 0 and i_snap < i_popen < i_delta,
+      f"snapshot at line {i_snap + 1}, Popen at {i_popen + 1}, "
+      f"delta at {i_delta + 1}")
+# The reset that discarded it, thirty lines later.
+# Match only CODE, not the comment that quotes the line. The comment naming the
+# old line is deliberate -- it is the record of the bug -- and a check that
+# matched it would be a check that fails the moment the record is written.
+i_reset = next((i for i, ln in enumerate(_lines)
+                if i > i_delta and "self._pids: list[int] = []" in ln
+                and not ln.lstrip().startswith("#")), -1)
+check("5k-b: and nothing RE-INITIALISES `_pids` after the delta is taken. There "
+      "was exactly such a line -- `self._pids: list[int] = []` -- and it discarded "
+      "the delta thirty lines after `_own_pids()` computed it, which is why the "
+      "guard fired on every run",
+      i_reset == -1,
+      f"found a re-init at line {i_reset + 1}" if i_reset >= 0
+      else "no re-init between the delta and the end of __init__")
+check("5k-c: `diverted` is derived from the delta and nothing else, so it cannot "
+      "be True while the delta is non-empty",
+      "self.diverted = not self._pids" in src,
+      "diverted must be `not self._pids`")
+check("5k-d: the delta is POLLED (`_own_pids`) rather than sampled once, because "
+      "`mono` is not in the process table the instant the bridge answers -- "
+      "MEASURED: connected at 3.0s with the new pid absent and present moments "
+      "later",
+      "self._pids = self._own_pids()" in src
+      and "def _own_pids(self" in src,
+      "_own_pids must exist and be what assigns _pids")
+
 # ============================================== 6. this file's own coverage
-EXPECTED = 24
+EXPECTED = 28
 check(f"6: this file ran exactly {EXPECTED} checks -- a file that matched nothing "
       f"would otherwise report all green", _n + 1 == EXPECTED, f"ran {_n + 1}")
 

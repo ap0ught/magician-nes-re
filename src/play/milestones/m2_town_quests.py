@@ -39,6 +39,7 @@ THE PROOF
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
 import sys
@@ -144,11 +145,27 @@ def main() -> int:
     ram.load_button_order()
     say(f"  buttons    {', '.join(f'{k}->{v}' for k, v in ram.BUTTON_ORDER.items() if k != 'evidence')}")
 
+    # A window that predates this run is refused, and the refusal no longer claims
+    # BizHawk would divert the launch. MEASURED on this machine: BizHawk 2.11.1
+    # runs with SingleInstanceMode=false and holds several windows, so the reason
+    # to refuse is that this run cannot PROVE the window it is about to get is its
+    # own -- not that the launch would be swallowed. With --scouts the caller has
+    # said it means to run several, so the stale window is still refused (it is
+    # nobody's, as far as this process can tell) but the reason is named.
     stale = BizHawk.running_emuhawk()
-    if stale:
-        say(f"REFUSING to start: mono pids {stale} are already running. BizHawk "
-            "allows one instance and would divert this launch into the other.")
+    if stale and not os.environ.get("MAGICIAN_ALLOW_CONCURRENT"):
+        say(f"REFUSING to start: mono pids {stale} were already running before "
+            "this process launched anything, so they are not this run's and this "
+            "run cannot prove the window it gets is its own.")
+        say("  Close them (by PID -- never `pkill -f EmuHawk`, which matches its "
+            "own command line) or set MAGICIAN_ALLOW_CONCURRENT=1 to run beside "
+            "them.")
         return 2
+    if stale:
+        say(f"NOTE: mono pids {stale} predate this run and "
+            "MAGICIAN_ALLOW_CONCURRENT=1 is set, so running beside them. "
+            "Run.start asserts that this launch added its OWN pid; if it did "
+            "not, the run is measuring someone else's session and says so.")
 
     route = ladder_mod.town_quests()
     only = {s.strip() for s in args.only.split(",") if s.strip()}

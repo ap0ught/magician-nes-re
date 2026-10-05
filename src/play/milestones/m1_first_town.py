@@ -39,6 +39,7 @@ THE PROOF
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import sys
 import time
@@ -48,7 +49,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from play import first_town as route_mod  # noqa: E402
 from play import ram  # noqa: E402
 from play.emu import ActionFailed, BizHawk, BridgeError  # noqa: E402
-from play.runner import Run  # noqa: E402
+from play.runner import N_EMULATORS, Run  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -66,6 +67,14 @@ ap.add_argument("--no-replay", action="store_true",
                      "milestone, and it says so)")
 ap.add_argument("--tries", type=int, default=0,
                 help="override every segment's try count (0 = the route's own)")
+ap.add_argument("--scouts", type=int, default=1,
+                help="how many emulator windows to use. 1 is MAIN only, which is "
+                     "the inline path. More than that opens N-1 scout emulators "
+                     "and searches across them with search.parallel_search. "
+                     f"Capped at runner.N_EMULATORS ({N_EMULATORS}), "
+                     "which is the width that was MEASURED on this machine -- three "
+                     "concurrent sessions, each with its own pid, window, bridge "
+                     "port and RAM fingerprint")
 args = ap.parse_args()
 
 sys.path.insert(0, str(ROOT))
@@ -139,14 +148,33 @@ def main() -> int:
         f"({'beta1' if ROM == beta1 else 'NOT beta1'})")
     say(f"  {verdict}")
     say(f"  ram map    {ram.map_digest()} ({len(ram.all_fields())} fields)")
+    say(f"  emulators  {args.scouts} "
+        f"({args.scouts - 1} scout(s) beside MAIN; runner.N_EMULATORS="
+        f"{N_EMULATORS})")
     ram.load_button_order()
     say(f"  buttons    {', '.join(f'{k}->{v}' for k, v in ram.BUTTON_ORDER.items() if k != 'evidence')}")
 
+    # A window that predates this run is refused, and the refusal no longer claims
+    # BizHawk would divert the launch. MEASURED on this machine: BizHawk 2.11.1
+    # runs with SingleInstanceMode=false and holds several windows, so the reason
+    # to refuse is that this run cannot PROVE the window it is about to get is its
+    # own -- not that the launch would be swallowed. With --scouts the caller has
+    # said it means to run several, so the stale window is still refused (it is
+    # nobody's, as far as this process can tell) but the reason is named.
     stale = BizHawk.running_emuhawk()
-    if stale:
-        say(f"REFUSING to start: mono pids {stale} are already running. BizHawk "
-            "allows one instance and would divert this launch into the other.")
+    if stale and not os.environ.get("MAGICIAN_ALLOW_CONCURRENT"):
+        say(f"REFUSING to start: mono pids {stale} were already running before "
+            "this process launched anything, so they are not this run's and this "
+            "run cannot prove the window it gets is its own.")
+        say("  Close them (by PID -- never `pkill -f EmuHawk`, which matches its "
+            "own command line) or set MAGICIAN_ALLOW_CONCURRENT=1 to run beside "
+            "them.")
         return 2
+    if stale:
+        say(f"NOTE: mono pids {stale} predate this run and "
+            "MAGICIAN_ALLOW_CONCURRENT=1 is set, so running beside them. "
+            "Run.start asserts that this launch added its OWN pid; if it did "
+            "not, the run is measuring someone else's session and says so.")
 
     route = route_mod.first_town()
     say(f"  route      {route.name}  segment list {route.digest()}")
@@ -158,7 +186,7 @@ def main() -> int:
     failure = None
     result = {}
     run = Run(route.name, rom=ROM, label=LABEL, log=say,
-              verify=not args.no_replay)
+              scouts=args.scouts, verify=not args.no_replay)
     try:
         run.start(route)              # installs the route, so snapshots carry it
         say("=== RUN ===")
