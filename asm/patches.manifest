@@ -25,9 +25,9 @@
 #   a  placement bug. The source is right and the module is in the wrong 8 KiB
 #      slot. **Fix the placement.** Copying the cartridge over it destroys the
 #      only evidence of the bug.
-#   b  a hole. The source emits *nothing* at this address and the release emits
-#      bytes. Genuinely absent from the released source: the source is a
-#      02/03/90 development build and the cartridge is a 02/1991 one.
+#   b  a hole. The source emits *nothing* at this address and the target cartridge
+#      emits bytes. Measured against Beta 1 (1990-03-02), the build this source
+#      came from, this class is currently **empty** -- see below.
 #   c  assembler bug. The source is present but `asm/pds6502.py` mis-assembles
 #      it. **Fix the assembler.**
 #   d  data / CHR packing order. A separate problem from code.
@@ -41,67 +41,52 @@
 # Only `b` and `e` may be filled. Every `a` and `c` region found so far is
 # recorded in GAPMAP.md with its evidence and is deliberately *not* filled.
 #
-# ## Class `e` exists but has no regions yet
+# ## The manifest is empty, and that is a finding
 #
-# It was added on 2026-10-04 for the title and password scene descriptors, and
-# the measurement that stopped both of them being filled is recorded here
-# rather than in a journal entry, because it is the kind of fact that gets
-# re-derived wrongly:
+# It had one region, `sam-samples-at-fc40`, class `b`, filled from the release.
+# It is gone because the region was an artifact of targeting the release.
 #
-#   `X7.PDS:997-999` loads `tit.dat`, `pw.dat` and `pan.dat` into PRG slot 7.
-#   This build puts them at slot-7 offsets $0BA7 (314 B), $0CE1 (292 B) and
-#   $0E05 (96 B). In the release, `PAN.DAT` -- the one file of the three whose
-#   content *is* byte-identical, and which occurs exactly once in the 131072-byte
-#   PRG -- is at slot-7 offset $11E6. So the release's copy of the same asset sits
-#   $3E1 (993) bytes later than this build's, and the release's bytes at $0BA7
-#   and at $0CE1 are 6502 code, not scene descriptors:
+# `X7.PDS:997` says `load mus\sam.sam,$fb80`, and the assembler puts it at $FB80
+# exactly as written. The region recorded that the release has the samples at
+# $FC40 instead, moved up $C0 bytes, and that this was therefore a hole.
 #
-#     $EBA7  25 2C 38 FD AD AE AF AD AD ...     (release)
-#     $ECE1  A5 39 D0 06 E8 A5 38 D0 01 60 ...  (release: LDA $39/BNE/INX/...)
+# Against Beta 1 there is no hole. Measured over SAM.SAM's full 1136 bytes at the
+# address the source itself states:
 #
-#   Overlaying those two ranges would replace this build's descriptors with the
-#   release's code: the byte-match count would rise by 606 and the title screen
-#   would look exactly the same afterwards, because the game's init still reads
-#   a scene descriptor from $ABA7 and would find code. That is a number going up
-#   and nothing being fixed, so it is not done.
+#   $FB80-$FFF0, source-only build vs beta1   1136/1136 bytes identical
+#   $FB80-$FFF0, source-only build vs release     24/1136 bytes identical
 #
-#   The blocker is the layout, not the assets: X7's slot-7 image diverges
-#   progressively through the init data block, and the release is $3E1 ahead by
-#   `pan.dat` and $7DD ahead by slot-7 offset $1186. Finding the 993 bytes this
-#   build does not emit is source-level work. See GAPMAP.md.
+# All six dumps place SAM.SAM at one of exactly two addresses:
+#
+#   $FB80   beta1, and this build
+#   $FC40   beta2, beta3, beta4, release
+#
+# So the source states the Beta 1 address correctly, and the region was filling
+# 864 bytes that were *already right* with the release's layout. Against Beta 1
+# that is a net **-850** bytes: it turned a correct $FB80 into the release's
+# different content at $FC40. This is the exact failure the class field exists to
+# prevent -- the region's own report said "+850 matched", because it measured
+# itself against the release it named, while the headline measured Beta 1.
+#
+# The general lesson, which is why it is written down here rather than in a
+# journal entry: **a region must be re-derived whenever the target changes.** A
+# manifest region is a claim about one specific dump, and the digest check only
+# proves the bytes came from the dump the region named -- it cannot tell you the
+# region is still the right claim.
+#
+# ## Class `e`: the title scene descriptors, re-derived
+#
+# Class `e` was added for the title and password scene descriptors. Against the
+# release both were unresolvable, and the reason given was a 993-byte layout
+# divergence: this build put `pan.dat` at slot-7 offset $0E05 and the release at
+# $11E6, and the release's bytes at this build's `tit.dat` and `pw.dat` offsets
+# were 6502 code rather than descriptors.
+#
+# Against Beta 1 that gap is 120 bytes, not 993 -- `pan.dat` is at slot-7 offset
+# $0D8D, this build puts it at $0E05 -- and Beta 1 has a real `TIT.DAT` at PRG
+# 60255 where the release has none. So the descriptors are present after all and
+# the class-`e` "absent work" was the release rewriting the title screen. The
+# remaining 120 bytes is a real layout question and is not papered over; see
+# GAPMAP.md.
 
 version 1
-
-# ---------------------------------------------------------------------------
-region sam-samples-at-fc40
-class    b
-cart     release
-sha1     bd806d7f7c318b8012433250ca10aa8387a962bb
-prg      1FC40 360
-cpu      FC40
-reason   X7.PDS:997 says `load mus\sam.sam,$fb80`, and the assembler puts it at
-reason   $FB80 as written. It is not there in the cartridge, and the sample data
-reason   is at $FC40 instead. Measured: SAM.SAM's first 32 bytes occur exactly
-reason   once in the whole 131072-byte PRG, at file $1FC40 (CPU $FC40, the
-reason   $E000 fixed window plus $1C40), and the first 864 bytes of
-reason   DAT/MUS/SAM.SAM -- all 864 that fit before the cartridge's own $FFF0
-reason   title string -- are byte-identical there. $FD9F-$FFEF is zero in the
-reason   cartridge, so the range is exactly SAM.SAM[0:$360] and stops short of
-reason   `db "MAGIC1+"` at $FFF0.
-reason   Class b, not a: this is not a module in the wrong slot, it is an
-reason   *address inside a module* that the source states and the release
-reason   changed. There is nothing in the source to re-place -- the only honest
-reason   description of the difference is that the release moved the samples up
-reason   by $C0 bytes and the February 1990 source has the old address.
-reason   Effect on the build: X7's own `if last>$fb80 / error ">$FB80!"` guard
-reason   (X7.PDS:977-979) is the same stale constant. Because the source still
-reason   loads the samples at $FB80, they overwrite 16 bytes of X7's own code
-reason   (`last` reaches $FB90), and that 16-byte overrun disappears the moment
-reason   this region is filled at the address the cartridge uses.
-reason   Not beta-specific, and that is measured rather than assumed: the two
-reason   dumps are byte-identical across this whole range. The `cart`/`sha1`
-reason   pair is still required on every region, because other ranges of this
-reason   cartridge are *not* shared -- 23388 PRG bytes differ overall -- and a
-reason   manifest that said only "the cartridge" could be applied to either
-reason   dump without complaint.
-end

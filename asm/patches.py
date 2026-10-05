@@ -449,6 +449,14 @@ def apply(image: bytearray, cart: bytes, regions: list[Region],
     Idempotent: applying twice produces the same image, which is what lets both
     `build.py` (for the byte accounting) and `mkrom.py` (for the ROM) call it.
     """
+    if not regions:
+        # An empty manifest is a real state, not an error: it is the state this
+        # project is in now that the target is Beta 1 and the one region it had
+        # turned out to be an artifact of targeting the release. The caller's
+        # `cart` is empty for the same reason, so the length check below -- which
+        # exists to catch a manifest pointing at the wrong-sized dump -- has
+        # nothing to check and would otherwise reject a legitimate build.
+        return Report(cart_dir=cart_dir)
     if len(image) != len(cart):
         raise PatchError(f"image is {len(image)} bytes, the cartridge PRG is "
                          f"{len(cart)}")
@@ -518,6 +526,13 @@ def patch_file(prg_path: pathlib.Path, manifest: pathlib.Path = MANIFEST,
 
 def _mixed(prgs: dict[str, bytes], regions: list[Region]) -> bytes:
     """Build one image to measure against when regions name different dumps."""
+    if not prgs:
+        # An empty manifest is a legitimate state -- it is the state this project
+        # is in now that the target is Beta 1 -- and it used to raise
+        # ValueError("max() arg is an empty sequence") from inside here, which
+        # surfaced as an opaque crash in the middle of a successful build rather
+        # than as "there is nothing to fill".
+        return b""
     out = bytearray(max(len(p) for p in prgs.values()))
     for region in regions:
         out[region.offset:region.end] = prgs[region.cart][region.offset:region.end]

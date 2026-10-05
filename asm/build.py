@@ -1239,9 +1239,17 @@ def main() -> int:
             regions = patches.load()
             resolved = patches.verify(regions, args.cart_dir)
             prgs = {name: patches.body(p) for name, p in resolved.items()}
-            cart_for_regions = (prgs[regions[0].cart] if len(prgs) == 1
-                                else patches._mixed(prgs, regions))
-            patch_report = patches.apply(prg, cart_for_regions, regions, args.cart_dir)
+            if not regions:
+                # Nothing to fill. `apply` still runs so the Report exists and the
+                # "0 from the patch manifest" line below is measured rather than
+                # assumed -- there is no image to measure against, so it is passed
+                # as empty and nothing is copied.
+                patch_report = patches.apply(prg, b"", regions, args.cart_dir)
+            else:
+                cart_for_regions = (prgs[regions[0].cart] if len(prgs) == 1
+                                    else patches._mixed(prgs, regions))
+                patch_report = patches.apply(prg, cart_for_regions, regions,
+                                             args.cart_dir)
         except patches.PatchError as exc:
             print(f"*** PATCH MANIFEST REJECTED, and nothing was filled: {exc}\n")
             return 2
