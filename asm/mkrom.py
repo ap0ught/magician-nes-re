@@ -34,15 +34,34 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = ROOT / "asm" / "out"
 
 # The cartridge is read here for the manifest's digest check and nothing else.
-# `option 0,0` in the source's `memchk`/`load` macros shows the author was
-# driving the same mapper, so this header is the right one to reuse, but it is a
-# *choice* of revision, not a derivation: the two dumps on this machine share it
-# byte for byte and differ only in the body.
+#
+# Header bytes 4-7 describe the MACHINE, not the code: 8 x 16 KiB PRG, 16 x 8 KiB
+# CHR, mapper 4 (MMC3), which every dump on this machine agrees on -- so those are
+# literals and are pinned by src/testing/test_mkrom_header.py.
+#
+# Byte 6 is NOT a constant, and it was wrong here for most of this file's life.
+# It was `$42`, copied from the release, and the comment above it claimed "the two
+# dumps on this machine share it byte for byte" -- true of `release` and `beta`,
+# which was the whole registry when the line was written. The target then moved to
+# `beta1`, and Beta 1 is the only dump of the six whose byte 6 is `$40`. Bit 1 of
+# byte 6 is what BizHawk reads as battery-backed PRG RAM, so `$42` made the rebuild
+# declare 8 KiB of save RAM that the build we are reconstructing does not have.
+#
+# That is not cosmetic, and it cost a run: BizHawk therefore created
+# `NES/SaveRAM/magician-rebuilt.SaveRAM` and then RESUMED it on the next launch,
+# so a run that claimed to be from power-on was starting from a saved game.
+# `tools/bizhawk/run.sh` caught it -- its battery-bit guard refused to launch --
+# which is the guard earning its keep, but it can only refuse. The header is
+# fixed here, and `test_mkrom_header.py` pins it against every registered dump so
+# that moving the target again cannot quietly re-arm it.
 INES_HEADER = bytes([
     0x4E, 0x45, 0x53, 0x1A,   # 'NES' + EOF
     0x08,                     # 8 x 16 KiB PRG  = 128 KiB
     0x10,                     # 16 x 8 KiB CHR  = 128 KiB, non-zero so CHR-ROM
-    0x42,                     # mapper low, battery, horizontal mirroring
+    0x40,                     # mapper 4 (high nibble here is 0x0); bit 1 CLEAR, so
+                              #   NO battery-backed PRG RAM -- this is Beta 1's own
+                              #   byte 6, and the only one of the six dumps with it
+                              #   clear. See the note above before changing it.
     0x00,                     # mapper high
     0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00,
