@@ -70,6 +70,14 @@ class Segment:
     accept_after: int = 0
 
     def describe_success(self) -> str:
+        # A `Pred` carries the CLASS docstring, which is the predicate language's
+        # description and says nothing about which flag is being tested. The
+        # three operators in this project that are not comparisons --
+        # `ram.flag_pred`, `ram.carried_pred` and the phases -- are all `Pred`s,
+        # and a route listing that printed "A test on a RAM field" for each of
+        # them would be unreadable exactly where it matters most.
+        if isinstance(self.success, ram.Pred):
+            return str(self.success)
         doc = (self.success.__doc__ or "").strip().splitlines()
         return doc[0] if doc else getattr(self.success, "__name__", "?")
 

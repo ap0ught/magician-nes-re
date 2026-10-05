@@ -287,7 +287,7 @@ field("tmpflag1", 1, "a second byte of temporary flags, distinct from tmpflag "
       "(x0.pds:421). Its bit names are not written down in the recovered source, "
       "so nothing in this file asserts on it", "tmpflag1")
 field("valsav", 2, "the NEW value of manacur or wealth, computed before it is "
-      "moved into place. `chkmana` (x7.pds:198-205) does manacur minus the "
+      "moved into place. `chkmana` (x7.pds:199-202) does manacur minus the "
       "requested cost into valsav and `upmana` then copies it back, so while "
       "the spell screen is charging for a rune `manacur - valsav` IS the cost "
       "the game just computed -- which is how the spell cost gets MEASURED "
@@ -309,7 +309,7 @@ field("uflg", 1, "0 = interaction is allowed right now, non-zero = inhibited. "
 field("dflg", 1, "0 = searching is allowed, non-zero = inhibited; the twin of "
       "uflg for the DOWN direction (x4.pds:274-276 `!ser`)", "dflg")
 field("intflg", 1, "set once a talk has been attempted and cleared when UP is "
-      "released, so 'only test once till released from up' (x4.pds:313-315). "
+      "released, so 'only test once till released from up' (x4.pds:313-314). "
       "Non-zero means a talk was already offered on this press", "intflg")
 field("serflg", 1, "the same one-shot guard for searching a body (x4.pds:275)",
       "serflg")
@@ -324,7 +324,7 @@ field("pantyp", 1, "the panel message TYPE: the high bit selects compressed "
       "misc, ...); `addmsg` sets it and `emptypan` tests bit 7 "
       "(x7.pds:126-133, 141)", "pantyp")
 field("eflags", 128, "the main-level EVENT flags, 4 bits each, 256 events. "
-      "`flag1`/`get4`/`set4` (x7.pds:403-431) index it with the event number the "
+      "`flag1`/`get4`/`set4` (x7.pds:408-431) index it with the event number the "
       "trigger carried, which is how the game remembers 'this message has been "
       "shown' and 'this chest has been taken' for the current level", "eflags")
 field("pulind", 1, "which of the eight spell-screen colour-pulse patterns is "
@@ -367,13 +367,23 @@ field("puldel", 1, "frames between spell-screen colour pulses (x6.pds:376-378)",
 # does the same to `perflag`. The shop script language's `set`/`clr`/`tst`/
 # `setp`/`clrp` (SHOPDAT.SRC:68-77) are those same routines, so `drink` and
 # `asked` are set by shop scripts and `gotlet`/`sentlet` by the permanent twin.
+#
+# The sentences a route listing prints for a named predicate, keyed by
+# (field name, op, mask) so that a flag says what it IS rather than what it is
+# made of. `flag_pred` and `carried_pred` fill this in as they build their
+# predicates; a raw arithmetic predicate leaves it alone. Declared HERE, above
+# the constructors that write into it, because a module-level dict assigned
+# below the functions that use it is the kind of ordering that works until the
+# first call at import time.
+_PRED_LABELS: dict[tuple[str, str, int], str] = {}
+
 QUEST_FLAGS: dict[str, tuple[str, str]] = {
     "drink": ("tmpflag", "the player has bought a drink in the pub. Set by the "
                         "pub's tankard icon, `set,drink` (SHOPDAT.SRC:83)"),
     "asked": ("tmpflag", "the vicar has asked the player to deliver the letter. "
-                         "The church's `set,asked` (SHOPDAT.SRC:113)"),
+                         "The church's `set,asked` (SHOPDAT.SRC:121)"),
     "flask": ("tmpflag", "the vicar has given the player a flask of holy water "
-                         "(SHOPDAT.SRC:115)"),
+                         "(SHOPDAT.SRC:123)"),
     "pool": ("tmpflag", "the holy water has been dropped in the pool; `pcoa` "
                         "`bit tmpflag` tests it (x5.pds:522-524)"),
     "bless2": ("tmpflag", "the second vicar has blessed the player"),
@@ -381,9 +391,9 @@ QUEST_FLAGS: dict[str, tuple[str, str]] = {
     "twin": ("tmpflag", "the twin spell has been cast"),
     "fount": ("tmpflag", "the player has entered the fountain"),
     "gotlet": ("perflag", "the player is carrying the vicar's letter; the post "
-                          "office's `tst,gotlet` (SHOPDAT.SRC:104)"),
+                          "office's `tst,gotlet` (SHOPDAT.SRC:101)"),
     "sentlet": ("perflag", "the letter has been posted; the post office's "
-                           "`setp,sentlet` (SHOPDAT.SRC:105)"),
+                           "`setp,sentlet` (SHOPDAT.SRC:102)"),
     "ringana": ("perflag", "the ring of ana has been used, once only"),
     "amsheeld": ("perflag", "the amulet of sheeld has been used, once only"),
     "ammor": ("perflag", "the amulet of mor has been used, once only"),
@@ -425,11 +435,16 @@ def flag_set(name: str, image: bytes) -> bool:
 
 def flag_pred(name: str, want: bool = True) -> Pred:
     """A predicate on the quest flag -- one address, so the bridge can take it."""
-    return Pred(flag_host(name), "bne" if want else "bclr", flag_mask(name))
+    p = Pred(flag_host(name), "bne" if want else "bclr", flag_mask(name))
+    where = "temporary" if QUEST_FLAGS[name][0] == "tmpflag" else "permanent"
+    _PRED_LABELS[(p.field.name, p.op, p.value)] = (
+        f"the {where} quest flag `{name}` is "
+        f"{'set' if want else 'still clear'} ({QUEST_FLAGS[name][1]})")
+    return p
 
 
 # ------------------------------------------------------- carried item counters
-# `addinv` (x7.pds:442-451) is `get2` -> `cmp #$03 / bcs` -> `set2`, so a carried
+# `addinv` (x7.pds:444-451) is `get2` -> `cmp #$03 / bcs` -> `set2`, so a carried
 # item is a 2-BIT count, four per byte, and the game's own cap is three. That is
 # the walkthrough's "you can carry 3 of every type" as a fact from the source
 # rather than a claim from a guide, and it is also the reason an item predicate
@@ -500,13 +515,17 @@ def carried_pred(ob: int, at_least: int = 1) -> Pred:
         raise ValueError(f"at_least={at_least}; 0 items is 'not carried', which "
                          "is the mask being clear, not a count question")
     if at_least == 1:
-        return Pred(f("invop"), "bne", item_mask(ob))
-    if at_least == 2:
+        p = Pred(f("invop"), "bne", item_mask(ob))
+    elif at_least == 2:
         # 2 is 10 and 3 is 11: the low bit is set in 3 only, the high bit in
         # both, so "the high bit, or the low bit" is everything from 2 up and
         # still excludes 1.
-        return Pred(f("invop"), "bne", item_mask(ob, 0b01) | item_mask(ob, 0b10))
-    return Pred(f("invop"), "band", item_mask(ob))
+        p = Pred(f("invop"), "bne", item_mask(ob, 0b01) | item_mask(ob, 0b10))
+    else:
+        p = Pred(f("invop"), "band", item_mask(ob))
+    _PRED_LABELS[(p.field.name, p.op, p.value)] = (
+        f"the player is carrying at least {at_least} x object ${ob:02X}")
+    return p
 
 # ------------------------------------------------------------------ the player
 # `x0.pds:242-243`: `maxob equ $04` / `pi equ maxob-1`, so the PLAYER is object
@@ -924,7 +943,7 @@ _OPS = {
     "ge": lambda a, b: a >= b,
     # BITWISE, and this is a correction rather than a style choice. These two
     # ops exist to ask "is this BIT of this byte set", which is what the game's
-    # own `bit tmpflag` (x5.pds:523) and `and #%00001100` (x4.pds:376) do and
+    # own `bit tmpflag` (x5.pds:523) and `and #%00001100` (x4.pds:374) do and
     # what every quest flag assertion needs. Written as `a % b`, `band` with
     # mask 1 is vacuously TRUE for every value -- every integer is a multiple
     # of 1 -- so "the player has bought the goat's milk" would have held from
@@ -953,6 +972,13 @@ class Pred:
     checks that by feeding the same cases to both -- a wire format that means
     something slightly different from the Python predicate is a predicate that
     passes for the wrong reason.
+
+    `str(pred)` is the human sentence a route listing prints. It comes from
+    `_PRED_LABELS` when one of the named constructors registered a sentence for
+    this exact (field, op, value), and falls back to the arithmetic form
+    otherwise -- so a flag reads as "the temporary flag `drink` is set" rather
+    than as "tmpflag bne 1 @$004F", which is what a reader needs and what a
+    number is not.
     """
     field: Field
     op: str
@@ -975,6 +1001,9 @@ class Pred:
         return f"{self.field.addr:d}:{self.field.length:d}:{self.op}:{self.value:d}"
 
     def __str__(self) -> str:
+        label = _PRED_LABELS.get((self.field.name, self.op, self.value), "")
+        if label:
+            return label
         return f"{self.field.name} {self.op} {self.value:#x} @${self.field.addr:04X}"
 
 
