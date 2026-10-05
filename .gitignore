@@ -28,3 +28,11 @@ __pycache__/
 # BizHawk capture output: screenshots contain cartridge-derived imagery and the
 # memory dumps are large and reproducible. Never committed.
 tools/bizhawk/out/
+
+# Play-harness output: every BizHawk session log, the recorded input logs, and
+# the checkpoints. The checkpoints hold framebuffer PNGs and full dumps of all
+# nine memory domains, which is cartridge-derived imagery and cartridge-derived
+# data -- exactly what `shots/` and `tools/bizhawk/out/` are already excluded for.
+# The input logs are plain button sequences, but they are large and they are
+# evidence for a particular run, so they stay out of history too.
+logs/

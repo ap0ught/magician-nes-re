@@ -25,6 +25,11 @@
 #   pds-text/             generated from the submodule's binary containers.
 #   tools/bizhawk/out/    capture output: screenshots of cartridge-derived
 #                         imagery, and large reproducible memory dumps.
+#   logs/                  the play harness's session logs, its recorded input
+#                         logs, and its checkpoints. A checkpoint directory
+#                         holds a framebuffer PNG and a full dump of all nine
+#                         memory domains, so by the argument above it is
+#                         cartridge-derived imagery and data.
 #   *.sav, *.srm, ...     save files.
 #   any file over 4 MiB   not a rule about content, a catch-all: a cart is 256
 #                         KiB and a movie 693 KiB, so a legitimate file in this
@@ -66,7 +71,7 @@ while IFS= read -r f; do
       echo "FAIL: staged an archive, which could hold a cartridge or a movie: $f"; bad=1 ;;
     pds-text/*)
       echo "FAIL: staged generated source text: $f"; bad=1 ;;
-    tools/bizhawk/out/*|shots/*|out/*)
+    tools/bizhawk/out/*|shots/*|out/*|logs/*)
       echo "FAIL: staged capture or scratch output: $f"; bad=1 ;;
     *.sav|*.srm|*.srm2|*.battery|*.SaveRAM)
       echo "FAIL: staged a save file: $f"; bad=1 ;;
