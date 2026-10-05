@@ -638,6 +638,62 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         _runner_mod.BizHawk = real_init
 
+# ================================ 5j2. THE BRANCH LEDGER NAMES ITS CHECKPOINT
+#
+# `Run.branch()` is easy to write so that the only record of where a segment
+# started is the frame count, and a frame count does not distinguish "the next
+# step of a walk" from "the first step of a branch off a checkpoint". Three
+# segments that each cost 12 frames are either three legs of a route or three
+# experiments off one place, and only the second reading saves the walk.
+with tempfile.TemporaryDirectory() as td:
+    # The stub's `load_checkpoint` reads the real CHECKPOINTS path (that is the
+    # path `emu.load_checkpoint` uses), so it is redirected rather than faked --
+    # otherwise `branch()` here would be testing a stub that can never fail.
+    import play.emu as _ep2
+    real_cp2 = _ep2.CHECKPOINTS
+    _ep2.CHECKPOINTS = pathlib.Path(td)
+    try:
+        route_mod.install(route_a)
+        emu = FakeEmu(marker=0)
+        stub = StubRun(emu, td, "stub", route=route_a)
+        _write_ckpt("stub", "stub", "ckpt_here", route_a.digest())
+        stub.segment(Segment("walk", p_hold(600), ok_g00, tries=1,
+                             max_frames=700))
+        stub.branch("ckpt_here", [
+            Segment(f"buy_{k}", p_hold(12), ok_g00, tries=1, max_frames=60)
+            for k in ("key", "stick", "shades")])
+    finally:
+        _ep2.CHECKPOINTS = real_cp2
+    heads = []
+    for k in ("buy_key", "buy_stick", "buy_shades"):
+        p = pathlib.Path(td) / f"{k}.attempts.txt"
+        heads.append(p.read_text(encoding="utf-8") if p.exists() else "")
+    check("5j2-a: EVERY branch segment's ledger header names the checkpoint it "
+          "branched from, not just the first one -- a branch is a property of the "
+          "segments it contains, and recording it on one of three is one of two",
+          heads and all("BRANCHED FROM CHECKPOINT ckpt_here" in h for h in heads),
+          str([h.splitlines()[0] if h else "MISSING" for h in heads]))
+    check("5j2-b: and a segment that did NOT branch has no such line, so the "
+          "header is evidence rather than boilerplate",
+          "BRANCHED FROM CHECKPOINT" not in
+          (pathlib.Path(td) / "walk.attempts.txt").read_text(encoding="utf-8"),
+          (pathlib.Path(td) / "walk.attempts.txt").read_text()[:200])
+    # The arithmetic, measured rather than asserted from a comment.
+    check("5j2-c: the three branches cost 3 x 12 frames off ONE 600-frame walk, "
+          "not three walks -- 636 against 1836",
+          stub.total_frames() == 600 + 36
+          and stub.reports[-1].branch_from == "ckpt_here",
+          f"total={stub.total_frames()} (one walk 600 + 3x12; three walks would "
+          f"be 1836); last branch_from={stub.reports[-1].branch_from!r}")
+    check("5j2-d: `Run.branches` records the checkpoint, its directory, the frame "
+          "count it was taken at, and the segments it fed -- so a finished run can "
+          "be read back without re-running it",
+          len(stub.branches) == 1
+          and stub.branches[0]["checkpoint"] == "ckpt_here"
+          and stub.branches[0]["inputs_at"] == 600
+          and stub.branches[0]["segments"] == ["buy_key", "buy_stick", "buy_shades"],
+          str(stub.branches))
+
 # ===================== 5k. THE PID GUARD'S INPUT IS CAPTURED IN THE RIGHT ORDER
 #
 # TWO MISTAKES, ONE SYMPTOM, and the guard was permanently on because of it. This
@@ -698,7 +754,7 @@ check("5k-d: the delta is POLLED (`_own_pids`) rather than sampled once, because
       "_own_pids must exist and be what assigns _pids")
 
 # ============================================== 6. this file's own coverage
-EXPECTED = 28
+EXPECTED = 32
 check(f"6: this file ran exactly {EXPECTED} checks -- a file that matched nothing "
       f"would otherwise report all green", _n + 1 == EXPECTED, f"ran {_n + 1}")
 
