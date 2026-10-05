@@ -540,10 +540,16 @@ check("9d-a: parallel search over 3 scouts produced attempts from MORE THAN ONE 
       "scout -- with one scout this is indistinguishable from the inline path, "
       "which is how a threaded search that was never threaded passes its own test",
       len(scout_ids) > 1, f"scouts that contributed attempts: {sorted(scout_ids)}")
-check("9d-b: every attempt records which scout ran it, and the set of scout ids "
-      "is within range of the scouts given",
-      scout_ids and max(scout_ids) < 3 and min(scout_ids) >= 0,
-      f"{sorted(scout_ids)}")
+# IT FAILED WHEN FIRST WRITTEN. The check asserted `min(scout_ids) >= 0`, which
+# the original 0-based numbering satisfied; with scouts numbered from 1 the
+# minimum is 1, and the check was really asserting the OLD convention rather than
+# the property it describes. The property is "the ids are exactly 1..N", and the
+# reason 0 is excluded is that 0 means the inline path -- so an attempt recorded
+# as scout 0 would claim to have run on MAIN.
+check("9d-b: scout ids are exactly 1..N -- 0 means the inline path, so an "
+      "attempt recorded as scout 0 would claim to have run on MAIN",
+      scout_ids and min(scout_ids) >= 1 and max(scout_ids) <= 3,
+      f"scout ids present: {sorted(scout_ids)} (want 1..3, none of them 0)")
 check("9d-c: a parallel search records EVERY attempt, from every scout -- the "
       "losers included. A parallel search that reports only winners is how the "
       "previous run's `shop_door` twelve identical failures went unrecorded",
@@ -612,6 +618,25 @@ check("9f: the parallel result's attempts come back in SEED order regardless of 
       [a.seed for a in res_par.attempts] == sorted(a.seed for a in res_par.attempts),
       str([a.seed for a in res_par.attempts]))
 seen_scout = {(a.seed, a.scout) for a in res_par.attempts}
+# 9h: the LEDGER says which machine. `Attempt.line()` grew an `sN` column, and
+# the reason is that the first live 3-scout Beta 1 run produced ledgers whose
+# HEADER said which scouts contributed while every line was shaped exactly like a
+# single-scout run's -- so nothing on the line said which machine produced it, and
+# a ledger from an N-scout search could not be told from an inline one.
+lin = search.Attempt(seed=1005, inputs=[()], frames=7, success=False,
+                     note="left -> (18,140)", where="phase=0", scout=2).line()
+check("9h: an attempt's ledger line carries its scout id, so a parallel search's "
+      "ledger says WHICH MACHINE produced each line -- without this a 3-scout "
+      "ledger is indistinguishable from an inline one",
+      "s2" in lin and lin.startswith("seed 1005"),
+      f"{lin!r}")
+check("9h-why: and the inline path (scout 0) has NO scout column, so a normal "
+      "single-scout ledger keeps exactly the shape it had and existing greps for "
+      "it still match",
+      not search.Attempt(seed=1, inputs=[()], frames=1, success=True,
+                         note="ok", where="", scout=0).line().startswith("seed 1 s0"),
+      search.Attempt(seed=1, inputs=[()], frames=1, success=True, note="ok",
+                     where="", scout=0).line())
 check("9g: each attempt's `scout` field survives the sort, so a ledger can still "
       "say which machine produced which line -- and two seeds never share a scout",
       all(isinstance(a.scout, int) for a in res_par.attempts)
@@ -698,7 +723,7 @@ check("12d: the two savestate commands do not accept each other's replies -- a "
 # Written as `_n` it compared 33 against 33 and passed while the file actually ran
 # 34 -- a coverage assertion that is off by one in the direction that always
 # passes, which is the worst direction for it to be wrong in.
-EXPECTED = 47
+EXPECTED = 49
 check(f"13: this file ran exactly {EXPECTED} checks -- a file that matched "
       f"nothing would otherwise report all green",
       _n + 1 == EXPECTED, f"ran {_n + 1}")

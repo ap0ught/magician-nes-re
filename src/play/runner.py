@@ -329,7 +329,13 @@ class Run:
         if seg.why:
             self.log(f"  {seg.why}")
         self.log(f"  success test: {test.__doc__ or seg.describe_success()}")
-        scouts = self._scouts(st, test, seg, tries)
+        # A `tries=0` segment has NO choices to search, and opening scout
+        # emulators for it is both pointless and wrong: the search below would run
+        # zero attempts, so the segment would fail with "no attempt in 0 reached
+        # the success test" while the scouts it opened sit there for nothing.
+        # MEASURED: milestone 1 with --scouts 3 died on `title` -- a tries=0
+        # segment -- after opening two windows and running no attempts at all.
+        scouts = self._scouts(st, test, seg, tries) if tries else []
         if scouts:
             # The parallel path, and only ever this one: MAIN is restored to
             # `st` before the winner is replayed into it below, so no scout is
@@ -414,18 +420,40 @@ class Run:
         want = max(0, min(self.scouts_wanted, N_EMULATORS) - 1)
         if not want:
             return []
+        if not tries:
+            # Belt to the braces above: a segment with no attempts cannot be
+            # searched, and two windows opened for it would be two windows the
+            # next segment's `close()` had to wait on.
+            self.log(f"  not opening {want} scout(s) for {seg.name}: it has "
+                     f"tries=0, so there is nothing to search")
+            return []
         out = []
         for k in range(want):
             before = set(BizHawk.running_emuhawk())
+            # `run=main.run`, NOT a scout-specific tag, and the reason is the
+            # savestate namespace. `state_path()` is
+            # CHECKPOINTS/_states/<route>/<run>/<name>.state, so a scout with its
+            # own tag looks for `<name>.state` in a directory nothing ever wrote
+            # to. MEASURED: `FileNotFoundError: no savestate .../b1par2_1_scout1/
+            # new_game_start.state` -- after two windows had been opened and paid
+            # for.
+            #
+            # Sharing MAIN's namespace is also the SAFETY property, not a
+            # convenience: a scout only ever calls `load_state`, never
+            # `save_state`, so every scout reads the same bytes MAIN wrote. That
+            # is what makes "every attempt on every scout starts from identical
+            # state" true by construction rather than by two savestates having
+            # been written from the same moment -- which is the assumption that
+            # would be wrong the moment a byte of MAIN moved between the two
+            # writes.
             e = BizHawk(rom=self.rom, log_name=f"{self.name}_{self.label}_scout{k}",
-                        route=self.name, run=f"{main.run}_scout{k}",
-                        concurrent=True)
+                        route=self.name, run=main.run, concurrent=True)
             e.fast()
             new = sorted(set(e._pids) - before)
             if not new:
                 e.close()
                 raise BridgeError(
-                    f"scout {k} of {seg.name}: launching it added no new EmuHawk "
+                    f"scout {k + 1} of {seg.name}: launching it added no new EmuHawk "
                     "process, so it was diverted into a running session and would "
                     "report that session's memory. A parallel search over "
                     "diverted scouts measures one machine N times and looks like "
@@ -445,12 +473,15 @@ class Run:
             if shared:
                 e.close()
                 raise BridgeError(
-                    f"scout {k} of {seg.name}: it is the same process as MAIN -- "
+                    f"scout {k + 1} of {seg.name}: it is the same process as MAIN -- "
                     f"pids {shared} appear in both (scout reported {e._pids}, MAIN "
                     f"is {main._pids}). Two 'independent' scouts on one machine is "
                     "worse than one scout, because their attempts would overwrite "
                     "each other's savestates.")
-            self.log(f"  scout {k} -> EmuHawk pids {new} (MAIN is "
+            # Numbered from 1 to match `Attempt.scout`, where 0 means the inline
+            # path. Two numbering schemes in one run is how a reader ends up
+            # matching "scout 0" in the log to "s0" nowhere in the ledger.
+            self.log(f"  scout {k + 1} -> EmuHawk pids {new} (MAIN is "
                      f"{main._pids})")
             out.append(e)
         self._scouts_open.extend(out)

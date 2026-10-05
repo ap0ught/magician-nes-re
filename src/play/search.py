@@ -107,6 +107,17 @@ class Attempt:
     success: bool = False
     note: str = ""
     where: str = ""          # short description of the state it ended in
+    # Which scout emulator ran this attempt. 0 means the INLINE path -- no scout
+    # emulators, `random_search` on MAIN -- and scouts are numbered from 1, so
+    # that `if self.scout` is the test for "this came from a parallel search" and
+    # cannot be fooled by scout 0.
+    #
+    # Numbering from 1 rather than 0 is not cosmetic. The first version printed
+    # `s{scout}` only when scout was truthy, so scout 0 -- which existed and ran
+    # attempts -- printed nothing and its rows were shaped exactly like inline
+    # ones. MEASURED: on the first live 3-scout Beta 1 run every attempt line in
+    # every ledger read `s1` and scout 0's attempts were indistinguishable from
+    # MAIN's. The ledger then said "1 scout emulator(s) contributed" when two had.
     scout: int = 0
 
     def line(self, width: int = 160) -> str:
@@ -117,8 +128,18 @@ class Attempt:
         lives: `p_pulse`'s note ends "...that is the CUT, not a verdict on the
         approach", which is 40 characters past 60. A ledger that truncates the
         explanation is a ledger that says only what happened.
+
+        `scout` is printed whenever it is not the inline path's 0. A parallel
+        search hands attempts round-robin, so the scout id is the only thing in the
+        ledger that says WHICH MACHINE produced a line -- and without it a ledger
+        from an N-scout run is indistinguishable from an inline one. MEASURED: the
+        first live 3-scout run on Beta 1 produced ledgers whose header said
+        "1 scout emulator(s) contributed attempts: [1]" while every line was
+        identical in shape to a single-scout run's, so nothing on the line itself
+        said which machine it came from.
         """
-        return (f"seed {self.seed:<5} {self.frames:>6}f  "
+        who = f"s{self.scout} " if self.scout else ""
+        return (f"seed {self.seed:<5} {who:<4}{self.frames:>6}f  "
                 f"{'OK  ' if self.success else 'no  '}  {self.note[:width]}"
                 + (f"  [{self.where}]" if self.where else ""))
 
@@ -471,7 +492,8 @@ def parallel_search(scouts, states, factory, success, *, tries: int = 20,
     lock = threading.Lock()
     st = {"next": 0, "stop": False}
     log(f"SEARCH{': ' + label if label else ''}: up to {tries} attempts on "
-        f"{len(scouts)} scout(s)")
+        f"{len(scouts)} scout(s), numbered 1..{len(scouts)} "
+        "(0 is the inline path, i.e. MAIN alone)")
 
     def work(k: int) -> None:
         nonlocal best, since
@@ -486,15 +508,18 @@ def parallel_search(scouts, states, factory, success, *, tries: int = 20,
                 i = st["next"]
                 st["next"] += 1
                 frozen = best.frames if best is not None else None
+            # `scout=k+1`, not `k`: 0 is the inline path's marker, so scout 0
+            # would be recorded as "no scout" and its ledger rows would be
+            # indistinguishable from MAIN's. See `Attempt.scout`.
             a = _one_attempt(scouts[k], states[k], factory, success,
                              seed=seed_base + i, max_frames=max_frames,
                              settle=settle, cutoff=(lambda v=frozen: v),
-                             log=log, scout=k)
+                             log=log, scout=k + 1)
             with lock:
                 attempts.append(a)
                 if a.success and (best is None or value_of(a) > value_of(best)):
                     best, since = a, 0
-                    log(f"    new best (scout {k}): {a.frames} frames")
+                    log(f"    new best (scout {k + 1}): {a.frames} frames")
                 else:
                     since += 1
                 if first_success and best is not None:
