@@ -148,20 +148,44 @@ if ! grep -q '^verdict ok$' "$SUMMARY"; then
   exit 3
 fi
 
-# Independent confirmation that the run covered the movie. drive.lua already
-# asserts this; counting it here too means a driver that silently stopped early
-# cannot produce a pass, which is the failure this project has paid for twice.
-frames=$(grep -c '^[0-9]' "$OUTDIR/series.tsv" 2>/dev/null) || true
-case "$frames" in ''|*[!0-9]*) frames=0 ;; esac
-last=$(awk -F'\t' 'END{print $2}' "$OUTDIR/series.tsv" 2>/dev/null) || true
+# Independent confirmation that the run covered the movie, counted here rather
+# than trusted: series.tsv must have a line for at least every movie frame.
+# movie.framecount() is NOT usable for this -- in FCEUX 2.6.6 it counts frames
+# elapsed and runs past movie.length(), so it reads 44010 for a 44003-frame movie
+# and comparing it against the movie length makes the check unfalsifiable.
 want=$(grep -c '^' "$OUTDIR/inputs.txt" 2>/dev/null) || true
-say "run.sh: covered $last of $((want - 1)) movie frames over $frames sampled lines"
-if [ "${last:-0}" -lt $((want - 1)) ]; then
-  echo "run.sh: FAIL (3) -- summary said ok but only movie frame $last of $((want-1)) was reached." >&2
+case "$want" in ''|*[!0-9]*) want=0 ;; esac
+rows=$(grep -c '^[0-9]' "$OUTDIR/series.tsv" 2>/dev/null) || true
+case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
+say "run.sh: covered $want of $want movie frames over $rows recorded frames"
+if [ "$rows" -lt "$want" ]; then
+  echo "run.sh: FAIL (3) -- summary said ok but only $rows of $want movie frames were recorded." >&2
   exit 3
 fi
 
 say "run.sh: OK -- the movie ran to its last frame."
+
+# FCEUX's gui.savescreenshot ignores the path it is handed and writes
+# $HOME/.fceux/snaps/<romstem>-<n>.png, counting n from 0. HOME is redirected, so
+# that location is predictable and the staged ROM's stem is known -- but relying on
+# either is how a run ends up reporting screenshots that do not exist. Collect by
+# the map drive.lua recorded, and say so if the count does not line up.
+SNAPS="$RUN/home/.fceux/snaps"
+if [ -s "$OUTDIR/shots.map" ]; then
+  collected=0; missing=0
+  while IFS=$'\t' read -r n frame iter; do
+    src="$SNAPS/cart-$n.png"
+    if [ -f "$src" ]; then
+      cp "$src" "$OUTDIR/shots/frame-$(printf '%06d' "$frame").png"
+      collected=$((collected + 1))
+    else
+      missing=$((missing + 1))
+    fi
+  done < "$OUTDIR/shots.map"
+  say "run.sh: collected $collected screenshot(s) into $OUTDIR/shots"
+  [ "$missing" -gt 0 ] && say "run.sh: WARNING -- $missing screenshot(s) FCEUX claimed but did not write"
+fi
+
 say "run.sh: series     $OUTDIR/series.tsv"
 say "run.sh: screenshots $OUTDIR/shots"
 say "run.sh: subtitles  $OUTDIR/subtitles.srt"
