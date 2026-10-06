@@ -215,10 +215,15 @@ MODULE_NOTES = {
                "reached by `farjsr67` with R6=0,R7=1 (\"do bank 0/1 plr ob "
                "routines\"), so it is in slot 0 or 1. Slot 0's bottom is X0's but "
                "X0 emits only 1294 of 8192 bytes and X1 emits 2433, so both fit; "
-               "slot 1 is X2's. Result: initvars=$850E, pob01=$8D78."),
-    "X2.PDS": ("slot 1", "`firespell` (X2.PDS:9) is its first code and is reached "
-               "by `farjsr67` with R6=0,R7=1. Slot 0 is X0's, so it must be slot "
-               "1 -- which only works if X2 starts at $A000, not $8000."),
+               "slot 1 is X2's $A000 half. Result: initvars=$850E, pob01=$8D78."),
+    "X2.PDS": ("slot 0 head, slot 1 tail, chained onto X1",
+               "`firespell` (X2.PDS:9) is X2's first code and Beta 1 calls it at "
+               "$8E75 with R6=0,R7=1, so its head is in register 6's window, in "
+               "slot 0, at the end of X1's chain. Its `$A000` half is slot 1: "
+               "X2.PDS:467 pads to `$a000` and X2.PDS:469's `M00` is the first "
+               "byte of that slot, and `decompchr` (`X5.PDS:27`) reads `CODESL` "
+               "at $B8AA = slot 1 offset $18AA with `fbnk 7,#1,n`. Two slots in "
+               "one module; see `X2_WINDOW_SLOTS` for the full chain."),
     "X3.PDS": ("slot 4", "`X3.PDS:777 memchk a000,4` and, independently, "
                "`X5.PDS:515-516` `bnk 6,#4` then `jsr dobullets`, which is "
                "X3.PDS:9 -- its $8000."),
@@ -331,8 +336,65 @@ PINNED_WHY = {
 # so anything past it is a fault to report rather than file.
 X4_WINDOW_SLOTS = {0x8000: 2, 0xA000: 3}
 
+# X2 spans the $8000 and $A000 windows, and this is the measurement that says so.
+# It replaces `MODULE_ORIGINS["X2.PDS"] = 0xA000`, which put X2's whole stream in
+# register 7's window and made 2 669 bytes of it spill out of the $BFFF end into
+# $C000-$DFFF -- where MMC3 gives slot 14 whatever the registers say, so X5
+# overwrote them and five data labels came to point at message text.
+#
+# The chain of evidence, each step checked against Beta 1 and not reasoned from
+# the next one. `tools/x2_windows.py --explain` re-derives all of it and fails if
+# any step stops holding; `src/testing/test_x2_windows.py` pins the answers.
+#
+# 1. **The macro moves both registers.** `farjsr67` is at $F878 in Beta 1 (PRG
+#    $1F878, slot 15). Its body is
+#
+#        A5 06 48 86 06 A9 06 85 2D 8D 00 80 8E 01 80
+#        A5 07 48 84 07 A9 07 85 2D 8D 00 80 8C 01 80
+#
+#    i.e. `lda r6 / pha / stx r6 / lda #$06 / sta $2D / sta $8000 / stx $8001`
+#    then the same with `$07` and `sty`. $2D is `bnksel`. So X goes to MMC3
+#    register 6 and Y to register 7 -- confirmed, and `bnksel` is $2D, not $00.
+#
+# 2. **The one call site names its target in an operand, and that operand is
+#    $8E75.** There are five `jsr $F878` in Beta 1. The one from X4's `casting`
+#    (PRG $00460B, slot 2) is
+#
+#        A2 75 A9 8E 86 27 A2 00 A0 01 20 78 F8
+#
+#    `ldx #$75 / lda #$8E / stx $27` writes $8E75 into `ma`, then `ldx #$00 /
+#    ldy #$01 / jsr $F878`. `farjsr67` ends in `jmp ($0027)`. **So Beta 1 calls
+#    `firespell` at $8E75 with R6=0 and R7=1.** $8E75 is in register 6's window.
+#    Reading R7=1 as "X2 is at $A000" is the step that was wrong: the same call
+#    makes slot 0 visible at $8000 *and* slot 1 at $A000, and X2 has bytes in both.
+#
+# 3. **$8E75 is `firespell`.** Beta 1's slot 0 offset $0E75 carries X2's own
+#    opening: `jmp $F284` where X2.PDS:25 says `jmp upmana`, `jmp $F0E9` where
+#    X2.PDS:27 says `jmp miscmsg`, and then the 27 bytes of `spelmana`
+#    (`X2.PDS:33-36`: twenty-five $01 then two $00). That is four independent
+#    agreements, and it is the same address step 2 read out of the caller.
+#
+# 4. **Slot 1, offset 0 is X2's `$A000` half.** X2.PDS:467-469 is
+#
+#        if *<$a000 / ds $a000-*,$0 / endif
+#        M00  HEX 0B4EB7FA03937F1AB57F12AC ...
+#
+#    so X2 pads to $A000 and continues. Beta 1's slot 1 offset $0000 is
+#    `0B 4E B7 FA 03 93 7F 1A B5 7F 12 AC 0E 5F 9C 9B ...` -- `M00`, byte for
+#    byte, at the very first byte of the slot. And `decompchr` (`X5.PDS:27-31`)
+#    reaches for these tables with `fbnk 7,#1,n`, banks slot 1 into $A000, and
+#    reads `CODESL` at $B8AA -- which is slot 1 offset $18AA, and holds
+#    `06 01 0B 09 08 06 01 00` exactly as `X2.PDS:486` writes it. Same slot, from
+#    the code's own bank switch and from the table's own bytes.
+#
+# 5. **Neither window is $C000.** X2's last byte is $B8E2, because `firespell` at
+#    $8E75 plus the 10 861 bytes the assembler emits lands there. $C000 is absent
+#    from the map on purpose: like X4's, a window the map does not mention is
+#    recorded in `overflow` and reported rather than filed somewhere plausible.
+X2_WINDOW_SLOTS = {0x8000: 0, 0xA000: 1}
+
 # The same map, keyed by module, for the search pass and the project pass.
-MODULE_WINDOW_SLOTS = {"X4.PDS": X4_WINDOW_SLOTS}
+MODULE_WINDOW_SLOTS = {"X4.PDS": X4_WINDOW_SLOTS, "X2.PDS": X2_WINDOW_SLOTS}
 
 # Slot 15 has 8 KiB and three modules want to be in it, and they do not fit.
 #
@@ -431,12 +493,14 @@ MODULE_CEILINGS = {"X5.PDS": X5_CEILING, "X6.PDS": X6_CEILING}
 # cartridge's reset vector. Chaining it would put it wherever X6 happens to stop,
 # which is a function of X6's size rather than of anything in either file.
 #
-# X2 is NOT chained: it has no `org` either, but `firespell` (X2.PDS:9, its own
-# first code) is reached by `farjsr67` with R6=0,**R7=1** (`X4.PDS:452-455`) --
-# so it lives in the register 7 window at $A000, which is where `MODULE_ORIGINS`
-# puts it. It is the one module whose window is named by a caller rather than
-# implied by the fixed-window rule.
-CHAINED = ["X1.PDS"]
+#   X2  no `org`, and `firespell` (X2.PDS:9, its own first code) is reached by
+#       `farjsr67` with R6=0,R7=1. What that pair of registers makes addressable is
+#       *both* windows at once, not "the $A000 window": `farjsr67` banks X into
+#       register 6 and Y into register 7, and X2 has bytes in each. So X2 is
+#       chained onto X1 in slot 0, and its $A000 half is filed by
+#       `X2_WINDOW_SLOTS` rather than by where the chain started. See that table
+#       for the measurement; this entry is only where the *address* comes from.
+CHAINED = ["X1.PDS", "X2.PDS"]
 
 # Placement for the modules whose slot is neither measured nor provable, used
 # when --assume-banks is on (the default). This is a *hypothesis* and is labelled
@@ -446,7 +510,7 @@ CHAINED = ["X1.PDS"]
 # number carries no signal about placement and optimising against it would be
 # fitting noise.
 ASSUMED_SLOTS = {
-    "X0.PDS": 0, "X1.PDS": 1, "X2.PDS": 1, "X3.PDS": 4,
+    "X0.PDS": 0, "X1.PDS": 1, "X2.PDS": 0, "X3.PDS": 4,
     "X5.PDS": 14,
 }
 
@@ -458,21 +522,22 @@ ASSUMED_SLOTS = {
 # `org` that is pinned to a switchable slot is assembled at $8000 unless this
 # table says otherwise, and there is exactly one entry.
 #
-# X2: `X4.PDS:452-455` is
+# X2 is NOT in this table, and its absence is the point. It used to say
+# `$A000 from X4.PDS:452-455: farjsr67(X=$00,Y=$01) to firespell, so X2 is in
+# register 7's window`, and the reasoning was sound right up to its last step.
+# `farjsr67` (`X7.PDS:828-835`) really does load X into register 6 ($8000) and Y
+# into register 7 ($A000) -- that is measured, see `X2_WINDOW_SLOTS` -- but it
+# does both, and the one call site names a target in register 6's window while
+# passing both registers. So "R7=1" says what is in $A000 during the call; it
+# does not say where `firespell` is. `firespell` is at $8E75, in register 6's
+# window, and the $A000 half of X2 is what slot 1 holds. That is two facts about
+# two windows, and a single `origin` can only state one of them.
 #
-#     ldx #<firespell / lda #>firespell / stx ma
-#     ldx #$00 / ldy #$01 / jsr farjsr67
-#
-# and `farjsr67` (`X7.PDS:828-835`) loads X into register 6 ($8000) and Y into
-# register 7 ($A000). `firespell` is X2's first code (X2.PDS:9), so X2 is in
-# register 7's window: slot 1 at $A000. `X1.PDS:678` reaches `scnevents`
-# (PROBS.SRC, i.e. X4's tail) the same way with X=$02,Y=$03, which is where the
-# second entry in `X4_WINDOW_SLOTS` comes from.
-MODULE_ORIGINS: dict[str, int] = {"X2.PDS": 0xA000, "X6.PDS": X5_CEILING}
+# The remaining entry is X6's, which really is an origin: no `org`, chained in
+# name only, and its address has to come from somewhere.
+MODULE_ORIGINS: dict[str, int] = {"X6.PDS": X5_CEILING}
 
 ORIGIN_WHY = {
-    "X2.PDS": "$A000 from `X4.PDS:452-455`: farjsr67(X=$00,Y=$01) to `firespell`, "
-              "so X2 is in register 7's window",
     # $E605, not $E77C: this string said $E77C for several builds and that
     # value appears nowhere else in the tree. It is X5_CEILING, and the reason
     # is the ceiling comment above.
@@ -810,7 +875,15 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
             if OUR_MODULES[m].get("origin") is not None:
                 origins[m] = OUR_MODULES[m]["origin"]
         window_slots = {"SEQ.SRC": SEQ_WINDOW_SLOTS} if seq_src else {}
-        window_slots["X4.PDS"] = X4_WINDOW_SLOTS
+        # `MODULE_WINDOW_SLOTS`, not a hand-written `X4_WINDOW_SLOTS` line. The
+        # pass-1 search was given the whole table and this pass was given one
+        # entry from it, so a module added to the table was silently placed by
+        # the search and placed differently by the project -- and the project is
+        # the one whose bytes are in the ROM. X2 was the casualty: it ran here
+        # with an empty map and `self.slot` 0, so its `$A000` half was filed at
+        # slot 0 offset $18AA instead of slot 1, which is a hole X4's `$A000`
+        # half then filled. Every label resolved and the build printed 73.6%.
+        window_slots.update(MODULE_WINDOW_SLOTS)
         for m in our_modules():
             if OUR_MODULES[m].get("window_slots") is not None:
                 window_slots[m] = OUR_MODULES[m]["window_slots"]
@@ -1473,17 +1546,15 @@ def main() -> int:
           "above is a")
     print("  MODULE_NOTES omission and is wrong; the evidence is in the comment on "
           "SEQ_MODULES.")
-    print("  With X0=0, X4=2, X3=4, SEQ=5, X5=14, X7=15 and x7's own data owning "
-          "6..13, only")
-    print("  slots 1 and 3 are free -- and both `pob01` and `firespell` are "
-          "reached with only")
-    print("  slots 0 and 1 mapped. Three modules, two slots: the release layout "
-          "is NOT a")
-    print("  bijection over the eight files. Do not read the byte-match percentage "
-          "as evidence")
-    print("  about this; it is at chance for code. Per-module scoring and the "
-          "placement table")
-    print("  are in GAPMAP.md.")
+    print("  With X0=0, X2-head=0, X2-tail=1, X4=2, X3=4, SEQ=5, X5=14, X7=15 and "
+          "x7's own data owning")
+    print("  6..13, only slot 3 is unused. Note X2 is in two slots: its head is "
+          "chained into slot 0")
+    print("  and its `$A000` half is slot 1, so the release layout is NOT a "
+          "bijection over the")
+    print("  eight files. Do not read the byte-match percentage as evidence "
+          "about this; it is at chance for code.")
+    print("  Per-module scoring and the placement table are in GAPMAP.md.")
     if any("ASSUMED" in line for line in prg_log):
         print("\n*** PLACEMENT ASSUMED, NOT MEASURED: the slot search found no "
               "winner for the modules marked ASSUMED above. ***")
