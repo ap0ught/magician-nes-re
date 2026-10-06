@@ -256,8 +256,12 @@ install-units:
 # Makefile is exactly the thing the previous commits removed. Set it explicitly:
 #
 #   make check-isolation ISOLATE=/path/to/the/other/BizHawk-... cmd='make probe'
+#
+# `cmd=` goes through the ENVIRONMENT (ISOLATE_CMD), not through an `eval`'d
+# argument, so a path containing a space survives. Every dump filename on this
+# machine has one, and two earlier spellings of this target died on exactly that.
 check-isolation:
-	@tools/isolation.sh "$(ISOLATE)" $(if $(cmd),-- "$(cmd)",)
+	@ISOLATE_CMD='$(cmd)' tools/isolation.sh "$(ISOLATE)"
 
 guard:
 	@tools/guard_staged.sh

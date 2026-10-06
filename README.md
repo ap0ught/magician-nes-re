@@ -234,12 +234,213 @@ src/play/              the PLAY harness: MAIN plays an input log, SCOUT searches
                        See "The play harness" below.
 tools/pds_extract.py   PDS container -> plain text
 tools/                 build and analysis helpers
+tools/bizhawk/         the instrument's own tooling: bizpath.sh (WHERE the
+                       emulator and display are, decided in one place), setup.sh
+                       (`make emu-setup`), display.sh (`make display-up`), doctor.sh
+                       (`make doctor`), run.sh (one guarded BizHawk session)
+tools/systemd/         two user units: the nested display, and a run. NOT
+                       installed by anything automatic -- `make install-units`
+tools/isolation.sh     `make check-isolation`: prove a run did not touch a
+                       directory it must not touch
 asm/                   PDS-compatible assembler + cartridge build
 crates/                the Rust machine and front ends (NOT STARTED - no crates/ dir)
 pds-text/              extracted source (generated, git-ignored)
 roms/                  git-ignored; does not exist. The cartridge is read in place from
                        /extdrive/backups/SHARE/roms/nes/, or from --cart
 ```
+
+## Setup
+
+Everything below is about this project's **own** emulator and its **own** X
+display. Until 2026-10-05 it ran BizHawk out of a sibling checkout's directory,
+and nothing said so — see *Our own emulator and our own display* below.
+
+```sh
+make emu-setup      # this project's own BizHawk, ~150 MB, plus Lua/socket/core.so
+make doctor         # report what is present, what is missing, and how to fix it
+make display-up     # Xephyr on :2, no window manager
+make probe          # the rebuilt ROM beside the cartridge, on :2
+```
+
+| | where | how to point somewhere else |
+|---|---|---|
+| emulator | `$HOME/code/games/magician-nes-bizhawk/BizHawk-2.11.1-linux-x64` | `MAGICIAN_BIZHAWK=/path/to/BizHawk-2.11.1-linux-x64` (`BIZHAWK` is an accepted alias) |
+| display | `Xephyr :2`, no window manager | `MAGICIAN_DISPLAY=:3` |
+| cartridge | read in place from the ROM collection, never copied | `CART=/path` or `make probe CART=/path` |
+| rebuild | `asm/out/magician-rebuilt.nes` | — (`make rom`) |
+
+`make doctor` exits with **one code per class of thing**, in dependency order —
+`0` ready, `2` emulator, `3` runtime tools, `4` display, `5` a cartridge or the
+rebuild — so a script can act on which one failed instead of on "not ok".
+
+**A missing emulator is a refusal, never a fallback.** If `MAGICIAN_BIZHAWK`
+names something that is not there, `run.sh` exits non-zero with `make emu-setup`
+in the message. It does not quietly use some other directory that happens to
+exist. That is the entire reason the resolver exists: `${VAR:-<the sibling>}`
+cannot say "no", only "not unless something is there".
+
+If you change it deliberately, remember that **`BizHawk-2.11.1-win-x64` in a log
+line is not this project.** The directory is named `-linux-x64` because that is
+what it is; the sibling's carries the Windows name only because its own launcher
+derives the name from its checkout.
+
+### systemd
+
+```sh
+make install-units                                    # links, then daemon-reload
+systemctl --user enable --now magician-nes-display.service
+systemctl --user start  magician-nes-run@m1_first_town
+journalctl --user -u magician-nes-run@m1_first_town -f
+```
+
+`make install-units` **symlinks** `tools/systemd/*.service` into
+`~/.config/systemd/user`; it does not copy them, so they cannot drift from the
+ones in this repository. It is a separate target on purpose: a checkout that
+installed a service behind your back would be doing something invasive.
+
+A systemd user service does **not** inherit your session's `DISPLAY`, so
+`magician-nes-run@` sets `DISPLAY` and `MAGICIAN_DISPLAY` explicitly. Without
+them BizHawk's Mono/WinForms layer fails with `Could not open display
+(X-Server required)` — a message that names a missing X server and not a missing
+environment variable. It also sets `MAGICIAN_BIZHAWK` explicitly, because the
+failure mode of getting that wrong is *silent*: the run starts and every number
+comes out of the wrong directory.
+
+Neither unit contains a pattern-based kill. `pkill -f EmuHawk` and `pkill -f
+Xephyr` both match other projects' processes, and one of those is the exact
+mechanism of the incident below.
+
+## Our own emulator and our own display
+
+Measured 2026-10-05. Recorded here in full because the previous state of the
+documentation is what made this necessary.
+
+**What happened.** A service in this project launched BizHawk out of a *different*
+project's emulator directory and a `pkill` in that service killed a 136,526-frame
+replay belonging to that other project. Two checkouts shared one BizHawk
+directory, with no lock on its `config.ini` and no lock on its `NES/SaveRAM/`.
+Physical evidence was left behind: a `config.ini.runsh.bak` in the shared
+directory, and `magician-verify.*/preamble.lua` entries in that project's
+`config.ini` recording *this* project's launches.
+
+**Why it was possible.** Three files each carried their own hardcoded default
+into that directory, under two different variable names:
+
+| | before |
+|---|---|
+| `tools/bizhawk/run.sh:57` | `BIZ="${BIZHAWK:-$HOME/code/games/aibeatszelda/BizHawk-2.11.1-win-x64}"` |
+| `tools/bizhawk_probe.sh:49` | the same line |
+| `src/play/emu.py:65` | `MAGICIAN_BIZHAWK or (home / "code/games/aibeatszelda/...")` |
+
+and `emu.py` built the child's environment from `dict(os.environ)` while adding
+only `MAGICIAN_*` keys, so it never handed `BIZHAWK` to `run.sh`. Measured, with
+nothing running:
+
+| exported | `emu.py`'s guard checked | `run.sh` launched |
+|---|---|---|
+| `BIZHAWK=/new` | the **other project's** directory | `/new` |
+| `MAGICIAN_BIZHAWK=/new` | `/new` | the **other project's** directory |
+
+Both directions disagree. The second is the one that costs: the guard certifies
+a directory and the emulator runs out of a different one, so the run reports
+success while measuring somebody else's copy.
+
+**What replaced it.** `tools/bizhawk/bizpath.sh` is the only place that decides,
+from one canonical name with the old name as an alias, and the two *disagreeing*
+is a hard error rather than a preference resolved quietly.
+`src/play/emu.py:child_env()` hands `run.sh` the directory its own guard
+checked. `src/testing/test_bizpath.py` pins the contract, and
+`src/testing/nodep.py` keeps any *code* in the tree from naming that other
+project again — while leaving every word of the provenance in place, because
+crediting where the MAIN/SCOUT split and the bridge came from is not the same
+thing as depending on it.
+
+**The install is a real copy, not symlinks into the other one**, on a
+measurement rather than a preference. Diffing a pristine
+`BizHawk-2.11.1-linux-x64` tarball against a used install:
+
+```
+443 of 449 files byte-identical. The only differences are six paths BizHawk
+creates at runtime:
+    config.ini                    BizHawk's own settings, ~103 KB, written on the
+                                  first launch, carrying the RecentROM and
+                                  Lua-console history
+    config.ini.runsh.bak          run.sh's own copy, made before every launch
+    EmuHawkMono_laststdout.txt    written by EmuHawkMono.sh ITSELF, into
+    EmuHawkMono_laststderr.txt    whatever directory it was launched from
+    NES/SaveRAM/                  battery saves, written by BizHawk
+    NES/State/                    savestates, written by BizHawk
+```
+
+So 145 MB of the 150 MB never changes. Symlinking the read-only parts would have
+saved that and re-created the dependency: a symlink satisfies a path grep while
+still being one. It is also why the install must be **writable** — the launcher
+writes two files into its own directory on every run — which `bizpath.sh`
+refuses early rather than letting it fail inside a Mono stack trace.
+
+**Two things the tarball does not provide**, both handled by `make emu-setup`:
+`EmuHawkMono.sh` ships non-executable, and **`Lua/socket/core.so` does not exist
+at all** — BizHawk carries only the Windows `core.dll`, while
+`src/play/bridge.lua:50` is `require("socket.core")`. Without it the bridge dies
+on its first line and the harness reports a *connect timeout*, which reads like a
+networking problem rather than a missing 100 KB file. It is built against the Lua
+5.4 that NLua embeds, deliberately **without** `-llua54`, so its `lua_*` symbols
+bind to the host at `dlopen`.
+
+**BizHawk on a nested display: yes, and no window manager is needed.** Measured
+before anything was written, with the same ROM and the same 120 frames:
+
+```
+DISPLAY=:0   connected in 2.0s   work RAM fingerprint efa771ed1c1964d152baae62c0ee68abf0a12b16
+DISPLAY=:2   connected in 2.2s   work RAM fingerprint efa771ed1c1964d152baae62c0ee68abf0a12b16
+```
+
+Identical RAM, so the display does not change the emulation. On `:2` with **no
+window manager at all**, BizHawk maps a real window:
+
+```
+0x200077 "magician-rebuilt [NES] - BizHawk": ()  586x503+22+22
+```
+
+and a real cartridge session was `verdict ok` in the same conditions. So `i3` is
+**not** started: this instrument reads the core through Lua and takes its
+screenshots from `client.screenshot()`, so window placement cannot affect a
+number it produces. The sibling project runs five windows as a documentary and
+does need a tiling WM; if you ever want to watch several here, start `i3` on `:2`
+yourself and observe the two rules its journal records — never **resize** a
+BizHawk window (the bridge blocks on `conn:receive`, so an unstepped emulator
+does not repaint and a resize leaves a stale surface), and match rules on
+`title=`, never `class=`.
+
+**What was wrong with the old claims.** The `Makefile` said "there is no Xvfb on
+this machine" and `tools/nestrace.py:4` said BizHawk "is GUI-only with no Xvfb, so
+it cannot be driven headless". Both are still *literally* true — there is no Xvfb
+and no `xorg-server-xvfb` installed — and both were read as a statement about
+BizHawk, which they were not. What was missing is the second measurement: a
+nested X server is not Xvfb, and Xephyr *is* installed
+(`xorg-server-xephyr` 21.1.24). The `Makefile` note is corrected in place;
+`tools/nestrace.py`'s docstring is corrected in place below.
+
+**How the isolation is demonstrated rather than asserted.** `make
+check-isolation` snapshots a directory this project must not touch — a recursive
+listing with sizes and mtimes *and* a sha256 of every file — runs a command, and
+diffs. Measured around a real Beta 1 session launched by `tools/bizhawk/run.sh`
+on `:2`:
+
+```
+baseline -- 928 entries under .../BizHawk-2.11.1-win-x64
+manifest digest e2b47731b917ed933d089ad4492dcae0f5377629b69aea1e5118c46c838793a9
+run.sh: verdict ok (system=NES, rom=Magician (USA) (Beta 1) (1990-03-02).nes, sha1=6e46ba92...)
+run.sh: EmuHawk alive; its window is on :2 (MAGICIAN_DISPLAY)
+after    -- 928 entries
+manifest digest e2b47731b917ed933d089ad4492dcae0f5377629b69aea1e5118c46c838793a9
+OK -- byte-for-byte and mtime-for-mtime unchanged
+```
+
+The tool reports the isolation result and the command's exit code **separately**,
+because one standing in for the other is how a harness reports success while
+measuring nothing. It does not catch a symlink into the other tree — which is
+why the install is a copy — and it says so rather than implying completeness.
 
 ## Build
 
@@ -249,8 +450,12 @@ make rom                        # just the loadable .nes
 make check                      # the same, failing if the output moved
 make verbose                    # per-file incbin trace
 make gaps                       # rewrite GAPMAP.md: the stock-vs-rebuild gap map
+make doctor                     # is the emulator, the display and the cartridges in place
+make emu-setup                  # install this project's own BizHawk (~150 MB)
+make display-up                 # Xephyr on :2 -- this project's own nested display
 make probe                      # run the rebuilt ROM beside the cartridge in BizHawk
 make clean                      # remove asm/out/ and pds-text/
+make check-py                   # the instrument test suite; no emulator, no display
 python3 tools/pds_extract.py    # just decode the PDS containers into pds-text/
 python3 tools/pds_extract.py --check   # fail if pds-text/ is stale
 python3 asm/patches.py --list   # the patch manifest, parsed, touching no cartridge

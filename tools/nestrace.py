@@ -1,7 +1,28 @@
 #!/usr/bin/env python3
 """A small NES CPU+PPU harness, written here because this machine has no NES
 emulator (checked: fceux, mesen, nestopia, mednafen, retroarch, py65 -- all
-absent) and BizHawk is GUI-only with no Xvfb, so it cannot be driven headless.
+absent).
+
+CORRECTED 2026-10-05, in place, because the sentence that used to be here was
+wrong in a way that cost three sessions:
+
+    ...and BizHawk is GUI-only with no Xvfb, so it cannot be driven headless.
+
+The Xvfb half was and is TRUE -- there is no Xvfb on this machine and no
+`xorg-server-xvfb` installed -- and being true is what made the whole sentence
+read as a fact about BizHawk, which it was not. What was missing is the second
+measurement: **a nested X server is not Xvfb**, Xephyr IS installed
+(`xorg-server-xephyr` 21.1.24), and BizHawk runs on one. Measured, same ROM,
+same 120 frames:
+
+    DISPLAY=:0  connected in 2.0s  work RAM fingerprint efa771ed...b16
+    DISPLAY=:2  connected in 2.2s  work RAM fingerprint efa771ed...b16
+
+and on `:2` with no window manager at all it maps a real 586x503 window named
+"magician-rebuilt [NES] - BizHawk". `journal/05` records how this file came to
+exist; `journal/14` records the nested-display measurement. So this harness is a
+DIAGNOSTIC chosen on its merits -- it traces execution and renders a framebuffer
+for `make testsuite` to score -- and not because the alternative was unavailable.
 
 What it is for: the rebuild boots to a black screen and a screenshot of a black
 screen says nothing about *why*. This traces execution, records every PPU

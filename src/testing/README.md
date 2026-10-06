@@ -91,7 +91,8 @@ instruments are the thing that has to be pinned.
 | `test_placement_tools.py` | 35 | the four placement tools' `run_file` overrides against the assembler's signature, and that a tool with its tracing flag off records nothing |
 | `test_placement_math.py` | 34 | `dis6502`'s opcode table, and slotalign's rule that a **modal displacement is not the origin test** — reproduced, not asserted |
 | `test_nestrace_cpu.py` | 28 | the CPU core only. Every check is named `cpu:` and none is about pixels |
-| `test_repo_hygiene.py` | 20 | no cartridge, no movie, no save, no archive committed; `guard_staged.sh` exercised against a synthetic index; `vendor/` unmodified |
+| `test_repo_hygiene.py` | 24 | no cartridge, no movie, no save, no archive committed; `guard_staged.sh` exercised against a synthetic index; `vendor/` unmodified; **and no *code* in the tree reaches into another project's checkout** (section F) |
+| `test_bizpath.py` | 48 | `tools/bizhawk/bizpath.sh`: one name for the emulator directory, one answer, no fallback onto a path that happens to exist; `run.sh` honours it; and the Python and bash halves are compared against each other rather than assumed to agree |
 
 `synthcart.py` is the shared helper: a synthetic iNES image built from
 arithmetic in that file, with the provenance of every constant stated there.
@@ -172,6 +173,58 @@ defects rather than a wrong expectation:
 | 4e | `note != "over budget"` decided success. When the note grew a frame count in it, every cut-off attempt was scored a **success** |
 | 7b | the winner's inputs were appended to MAIN's log instead of replayed through `emu.step`: log length right, frame counter wrong, and the log will not replay |
 | 8 | the fake's `load_state` restored RAM but not the frame counter, which would have made 7b pass for the wrong reason |
+
+## `test_bizpath.py` and `nodep.py`
+
+`test_bizpath.py` is the file written after a service in this project launched
+BizHawk out of a *different* project's install and a `pkill` killed a 136,526-frame
+replay belonging to that project. Two names for one thing, in two languages:
+
+| exported | `src/play/emu.py`'s guard checked | `tools/bizhawk/run.sh` launched |
+|---|---|---|
+| `BIZHAWK=/new` | the other project's directory | `/new` |
+| `MAGICIAN_BIZHAWK=/new` | `/new` | the other project's directory |
+
+`emu.py` built the child environment from `dict(os.environ)` and added only
+`MAGICIAN_*` keys, so it never handed `BIZHAWK` to `run.sh`; the two could not
+agree even in principle, and the second row reports success while measuring
+somebody else's copy. That is this suite's own subject matter, which is why it
+belongs here rather than in a comment.
+
+48 checks in six groups: precedence and the ambiguity refusal (A); `run.sh`
+really launches out of `MAGICIAN_BIZHAWK` with the alias **unset**, which is the
+only way to write the regression (B); a directory that exists but is not a
+BizHawk (C); the display, `:2`, exported to the emulator (D); the scripts resolve
+through `bizpath.sh` and no `$BIZHAWK` default expansion survives (E); and the
+Python half — `resolve_bizhawk()`, `child_env()`, and the three environments in
+which Python and bash must return the *same path* (F).
+
+**`nodep.py` is the shared half**, and the reason the check is not a grep.
+`aibeatszelda` appears in dozens of files here and almost all of them are
+correct: credit for the MAIN/SCOUT split ported out of it, two real bugs found by
+reading its tests, and a `journal/` that is a record rather than a claim. A grep
+that failed on those would get deleted, and then there would be no check at all.
+So `nodep.py` strips comments (`tokenize` for Python, exact; `--` for Lua;
+line-based for shell) and docstrings (`ast`, which is the only thing that knows
+which string is prose) and looks at what is left. It cannot catch a **symlink**
+into the other tree, which is why the install is a real copy — and it says so.
+
+Three live bugs it found while being written, recorded because a suite that
+passes immediately proves nothing:
+
+* `emu.resolve_bizhawk()` built its default install location at **import** time
+  from the real `$HOME`, so a caller whose environment named a different home got
+  the real machine's path back. Section F's Python-vs-bash comparison found it; a
+  comment saying the two agreed would not have.
+* The test's own `launches_with()` helper popped `BIZHAWK` from the environment
+  *after* merging the caller's settings, so every "BIZHAWK alone" launch silently
+  fell through to the default directory — and the check passed on the exit code
+  while measuring nothing. It only showed up because the alias case asserts on
+  *which* stub answered.
+* `doctor.sh`'s `ldconfig -p | grep -q libgdiplus` under `pipefail`: `grep -q`
+  exits at the first match, `ldconfig` dies on SIGPIPE, the pipeline returns 141,
+  and the test answers "not installed" for a library that is installed. Same
+  family as `[ x -lt 0x8000 ]` — a guard whose own plumbing decides the answer.
 
 ## What it does not do
 
