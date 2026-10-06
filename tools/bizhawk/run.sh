@@ -493,6 +493,19 @@ fi
 
 if pgrep -f 'EmuHawk.exe' >/dev/null; then
   echo "run.sh: EmuHawk alive; its window is on $MAGICIAN_DISPLAY ($MAGICIAN_DISPLAY_SOURCE)"
+  # Printed, not acted on. Nothing here needs a window -- the measurements come
+  # from client.screenshot() and from Lua memory reads -- so the wall is opt-in
+  # and this is only the pointer to it.
+  #
+  # It fires on EVERY run that leaves its emulator alive, not "once": the
+  # condition is "EmuHawk is running", which is the normal case for a successful
+  # run. An earlier version of this comment claimed it fired only "on the run
+  # that actually opened a window", which was not true and contradicted the next
+  # sentence's own argument against a hint that fires on every run. Corrected
+  # rather than made true: gating it would need state this script does not keep,
+  # and the hint is one line on a run that already prints a dozen.
+  echo "run.sh: to arrange it instead of moving it by hand:"
+  echo "run.sh:   MAGICIAN_WALL=1 make tile        (tools/bizhawk/tile.sh)"
 else
   echo "run.sh: EmuHawk has exited (the script called client.exit())"
 fi

@@ -79,7 +79,8 @@ TS_FRAMES ?= 120
 # "there is no Xvfb on this machine", paired with nestrace.py's "BizHawk is
 # GUI-only with no Xvfb" -- was literally true about Xvfb and was read as a
 # statement about BizHawk, which it was not.
-.PHONY: all extract assemble rom check verbose gaps probe testsuite clean guard \
+.PHONY: all extract assemble rom check verbose gaps probe testsuite clean guard tile tile-selftest \
+        tile-status \
         movie replay install-hooks check-py \
         doctor emu-setup display-up display-down display-status check-isolation \
         install-units
@@ -238,6 +239,33 @@ display-down:
 
 display-status:
 	@tools/bizhawk/display.sh status
+
+# The window wall, which is OPT-IN, because the default is an invisible emulator.
+#
+# Every measurement this project makes comes from `client.screenshot()` and from
+# Lua memory-domain reads, so a window is never needed -- measured, in the header
+# of tools/bizhawk/display.sh: BizHawk runs on the nested display with NO window
+# manager at all and the work-RAM fingerprint is byte-identical to the one taken
+# with a decorated window on :0. A window nobody asked for is just clutter on
+# somebody's desktop.
+#
+# So `make tile` refuses unless MAGICIAN_WALL=1 says a visible wall is wanted.
+# It loads tools/bizhawk/kwin-tile.js through `qdbus6 org.kde.KWin /Scripting`,
+# places the windows over X11 (KWin 6.7.5's per-Client API cannot: it has no
+# move()/resize() and swallows a frameGeometry write while reading it back as
+# the value written -- see that file's header), and UNLOADS the KWin script on
+# every exit path, then asks KWin whether it did.
+tile:
+	@tools/bizhawk/tile.sh once
+
+# Prove the KWin round trip and the cleanup guarantee, with no emulator, no
+# windows and no cartridge. This is the one that needs a live session; the
+# geometry tests in src/testing/test_kwin_tile.py need nothing at all.
+tile-selftest:
+	@tools/bizhawk/tile.sh selftest
+
+tile-status:
+	@tools/bizhawk/tile.sh status
 
 # Symlink the two units in tools/systemd/ into ~/.config/systemd/user. They are
 # NOT committed to the user's systemd directory by this repository -- a checkout

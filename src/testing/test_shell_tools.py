@@ -268,18 +268,27 @@ check(not offenders,
       "kills a PID it read out of /proc instead",
       "\n         ".join(offenders))
 
-# NOT a check, because it is pre-existing and committed and this session did not
-# change it: reported on every run so the finding cannot be lost in a commit
-# message. `run.sh` gates its pkill behind MAGICIAN_KILL_STALE=1, which is a
-# deliberate named opt-in. `sweep.sh` does NOT: it kills every EmuHawk on the
-# machine before each job, including another project's, and its own comment
-# records the burn ("the next job's pkill took out an EmuHawk that was still two
-# frames from finishing"). That is the incident this file's other checks are about.
-for p in (BIZ / "run.sh", BIZ / "sweep.sh"):
+# `run.sh`'s pkill is behind a named opt-in (`MAGICIAN_KILL_STALE=1`), which is
+# acceptable and is reported rather than failed. `sweep.sh` USED TO be in the same
+# file with no gate at all: an unconditional `pkill -f '[m]ono EmuHawk'` before
+# every job, killing other projects' emulators and -- measured, see
+# `src/testing/test_sweep_pids.py` check 2 -- the shell running the pkill itself.
+# It is fixed: `sweep.sh` now reaps only the PIDs it recorded as its own, through
+# `tools/bizhawk/emuhawk_pids.sh`. Check 14a below is the pin, and it is a real
+# check rather than the NOTE this replaced, because a NOTE cannot fail.
+sweep_kills = pattern_kills(BIZ / "sweep.sh")
+check(not sweep_kills,
+      "check 14a: sweep.sh has NO pattern-based process kill anywhere in it. It "
+      "used to run `pkill -f '[m]ono EmuHawk'` unconditionally before every job "
+      "-- the incident isolation.sh exists to prevent, committed inside the "
+      "tooling committed to prevent it. It now reaps only recorded PIDs",
+      "\n         ".join(f"{i}: {ln}" for i, ln in sweep_kills))
+
+for p in (BIZ / "run.sh",):
     for i, ln in pattern_kills(p):
         gated = "MAGICIAN_KILL_STALE" in p.read_text()
         print(f"  NOTE {p.relative_to(ROOT)}:{i} still uses a pattern kill"
-              f"({'behind the MAGICIAN_KILL_STALE=1 opt-in' if gated else 'UNCONDITIONAL -- kills another project\'s emulator too'}): {ln[:70]}")
+              f"({'behind the MAGICIAN_KILL_STALE=1 opt-in -- accepted' if gated else 'UNCONDITIONAL'}): {ln[:70]}")
 
 # ==================================== 15-18: the four bizhawk tools, structurally
 display = strip_shell_comments((BIZ / "display.sh").read_text())
