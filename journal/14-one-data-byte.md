@@ -250,3 +250,69 @@ proven for that reason.
    — are **not started**. All three are unblocked now. Task 2's watch item:
    `X0.PDS:352` `4 :1=ignore START & SELECT` masks both buttons per object, so
    whatever consumes the remapped START must respect it.
+---
+
+## ADDENDUM, same session — re-run under BizHawk
+
+The claim above was that the fix was **tracer evidence only** and needed BizHawk
+before anything could be said. Run:
+
+    MAGICIAN_ALLOW_CONCURRENT=1 python3 src/play/milestones/m1_first_town.py \
+        --rebuild --label m1_rebuild_fixed
+
+`MAGICIAN_ALLOW_CONCURRENT=1` because two orphaned `EmuHawk --gdi` processes from a
+killed `tools/bizhawk_probe.sh` were up and the pid guard correctly refused to
+start. They were **not** killed: they belong to another run, and the guard's own
+escape hatch is the sanctioned way round. `Run.start` asserted that this run's
+launch added its own pid (1370576) and named the two stale ones.
+
+### The wedge is fixed, under the instrument `src/play/` is verified on
+
+    [1/7] title          68f   1/1    phase=0 curlev=$00 mapind=0
+    [2/7] new_game       42f   2/6    phase=10(g0a map screen) curlev=$E2 mapind=0
+    [3/7] into_level     42f   2/6    phase=0(g00) curlev=$10 mapind=1 plr=(60,140)   <-- WAS 0/8
+    [4/7] walk           70f   4/12   (60,140) -> (18,140)
+
+`into_level` went from **no attempt in 8** reaching the success test to **2 of 6**,
+with the same 2-of-6 that Beta 1 gets on the identical route.
+
+And `walk` reproduced Beta 1's survey **exactly** — same four successes, same
+coordinates, same walls:
+
+    Down  (60,140) -> (60,140)   wall, 5 attempts
+    Left  (60,140) -> (18,140)   42 px
+    Right (60,140) -> (128,140)  68 px
+    Up    (60,140) -> (60,140)   wall, 2 attempts
+
+Four segments of a seven-segment milestone now pass on our own ROM. The driver is
+unchanged and was already proven on Beta 1, so this is a finding about our ROM and
+not about the harness.
+
+### And there is a SECOND instance of the same symptom, newly reachable
+
+    [5/7] inventory      600f   0/8    phase=3(g03 enter level) curlev=$E0 mapind=1
+                                      plr=(18,140) nmiflag=1 bnksel=$07
+
+**The `g03` wedge is not one bug. It is what a failed level load looks like, and
+there are at least two levels that fail.** With `stlev=$01` the failing level was
+`$20`; with `$00` the game now enters `$10` correctly and fails on `$E0`, the
+inventory, in the same phase with the same `nmiflag=1`.
+
+This was not reachable before the fix — `into_level` failed, so the run never got
+this far — so it is new information, and it reframes the previous entry: the
+`g03` symptom was never a single bug at all, it was a shared symptom with at
+least two independent causes. Journal 13 read it as "one byte and one frame", which
+was true *of the first one found* and wrong as a generalisation.
+
+The two are worth separating before either is investigated further: if `$E0`'s
+cause were the same as `$20`'s, fixing `stlev` would have fixed both, and it did
+not. So the next attempt should localise the `$E0` load, and it should start from
+`newlev`'s level-descriptor read for `$E0` rather than from `mapind`.
+
+### Still not verified
+
+The replay-from-power-on gate did not run, because the run stops at the first
+failing segment — `run fingerprint None`. So: four segments hold on MAIN, the
+milestone is **NOT COMPLETE**, and the "reproduced from power-on in a fresh
+emulator" claim remains unclaimed for our rebuild. `MILESTONE 1 NOT COMPLETE`,
+exit 1, which is the correct outcome and not a regression.
