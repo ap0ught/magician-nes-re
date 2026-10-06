@@ -1,0 +1,72 @@
+# Run one magician-nes milestone under systemd.  `systemctl --user start magician-nes-run@<name>`
+#
+#     systemctl --user start   magician-nes-run@m1
+#     journalctl --user -u magician-nes-run@m1 -f
+#     systemctl --user stop    magician-nes-run@m1
+#
+# WHY THIS FILE IS THE ONE THAT MATTERED
+# -------------------------------------
+# The incident that produced it: a service in THIS project launched BizHawk out of
+# ANOTHER project's emulator directory, and a `pkill` in that service killed a
+# 136,526-frame replay that belonged to the other project and was not even running
+# under this unit. Two problems, and this file fixes both:
+#
+#   1. THE EMULATOR DIRECTORY. `MAGICIAN_BIZHAWK` below names THIS project's own
+#      install. It is set explicitly rather than inherited because the failure mode
+#      of getting it wrong is silent: the run starts, produces numbers, and every
+#      number came out of somebody else's directory.
+#   2. THE DISPLAY. A user unit does NOT inherit the session's DISPLAY, so a
+#      BizHawk launched from here without `Environment=DISPLAY=` fails with
+#      `Could not open display (X-Server required)` -- a message that names a
+#      missing X server and not a missing environment variable. `DISPLAY` is
+#      exported by `tools/bizhawk/run.sh` too, so the window lands on the nested
+#      display either way; setting it here as well means the failure, if there is
+#      one, happens at a point where the log says which display was wanted.
+#
+# `HOME` is set for the same reason: `tools/bizhawk/bizpath.sh` builds its default
+# install location out of `$HOME`, and a unit without one would fail to say where
+# it wanted the emulator.
+#
+# No `ExecStopPost` sends a pattern-based kill, deliberately. `pkill -f EmuHawk` and
+# `pkill -f Xephyr` both match OTHER projects' processes -- the first is the exact
+# mechanism of the incident -- so this unit stops its own main process and nothing
+# else. The neighbouring project's replay must survive this unit being stopped.
+#
+# `%i` is the instance name; it is passed to the milestone script as argv[1].
+
+[Unit]
+Description=magician-nes run %i
+Documentation=file://%h/code/games/magician-nes/journal/14-our-own-emulator-and-our-own-display.md
+# The display must be up first, or this fails with "Could not open display".
+Wants=magician-nes-display.service
+After=magician-nes-display.service
+# A unit that claims its own work while another of ours is already running will
+# contend for the same window and the same checkpoint names, and run.sh refuses
+# beside an EmuHawk it did not start -- loudly, which is the right behaviour, but
+# it is better not to get there.
+Conflicts=magician-nes-run@%i
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/games/magician-nes
+Environment=HOME=%h
+Environment=DISPLAY=:2
+Environment=MAGICIAN_DISPLAY=:2
+# THIS project's emulator. Never another project's, and never unset: an unset
+# value here is what made the previous unit point somewhere else.
+Environment=MAGICIAN_BIZHAWK=%h/code/games/magician-nes-bizhawk/BizHawk-2.11.1-linux-x64
+# Unbuffered, or a killed process loses everything buffered and the log just
+# stops mid-segment looking perfectly healthy.
+ExecStart=/usr/bin/python3 -u src/play/milestones/%i.py
+# Long runs are the point; the default 90 s would kill every one of them.
+TimeoutStartSec=infinity
+# Detached enough to survive the terminal being closed, which is the whole reason
+# to use a unit at all.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

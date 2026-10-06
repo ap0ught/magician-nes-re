@@ -258,4 +258,12 @@ _magician_resolve() {
   return 0
 }
 
-_magician_resolve || return 1
+if [ "${MAGICIAN_BIZHAWK_CONSTANTS_ONLY:-0}" != "1" ]; then
+  _magician_resolve || return 1
+fi
+# `MAGICIAN_BIZHAWK_CONSTANTS_ONLY=1` defines the version, the directory name and
+# the default install root WITHOUT resolving or validating anything, for
+# `tools/bizhawk/setup.sh` -- which has to be runnable precisely when there is no
+# install yet, and would be refused by its own resolver. The version and the
+# directory name therefore have exactly one definition, which is the thing a
+# literal repeated in two files never has.

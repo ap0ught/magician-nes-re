@@ -1,0 +1,55 @@
+# Xephyr on :2 -- magician-nes's own nested X display.
+#
+#     systemctl --user start  magician-nes-display
+#
+# WHY A UNIT FOR THIS
+# -------------------
+# BizHawk is a GUI program and this project drives it headfully, so something has
+# to provide an X server. Under a desktop session your own does. Under a systemd
+# user service it does NOT: a user unit does not inherit the session's
+# environment, so `DISPLAY` is unset and BizHawk's Mono/WinForms layer fails with
+#
+#     Could not open display (X-Server required)
+#
+# which says nothing about the cause. The neighbouring project has a directory of
+# scout logs from exactly that failure.
+#
+# :2, NOT :1. :1 belongs to another checkout on this machine. Two projects on one
+# display cannot both be watched, which is the entire reason for nesting one. If
+# you need a different number, override it:
+#
+#     systemctl --user set-environment MAGICIAN_DISPLAY=:3
+#
+# Xephyr NESTS, so this unit needs the session's DISPLAY to already be right. That
+# is why it is `WantedBy=default.target` rather than wanted by graphical-session
+# -- and why the `ExecStart` re-exports whatever DISPLAY the manager was given.
+#
+# NO WINDOW MANAGER, and that is measured rather than lazy: on a bare Xephyr with
+# no WM, BizHawk maps a real 586x503 window named "magician-rebuilt [NES] -
+# BizHawk", the Lua bridge answers in about two seconds, and the work-RAM
+# fingerprint is IDENTICAL to the one on :0. The instrument reads the core through
+# Lua and takes its screenshots from client.screenshot(), so nothing it measures
+# depends on window placement. The neighbouring project runs five windows as a
+# documentary and does need a tiling WM; this one does not.
+
+[Unit]
+Description=magician-nes nested X display (:2)
+Documentation=file://%h/code/games/magician-nes/tools/bizhawk/display.sh
+After=graphical-session.target
+
+[Service]
+Type=simple
+# `Environment=` and not `PassEnvironment=`: the point of the unit is to be
+# explicit about the display, not to inherit whatever happened to be there.
+Environment=DISPLAY=:0
+Environment=MAGICIAN_DISPLAY=:2
+ExecStartPre=-/usr/bin/test -S /tmp/.X11-unix/X0
+ExecStart=/usr/bin/Xephyr :2 -screen 1280x800 -resizeable -ac -nolisten tcp
+Restart=on-failure
+RestartSec=3
+# The nested server is disposable: stopping it must not leave state behind.
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

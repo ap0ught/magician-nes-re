@@ -5,11 +5,15 @@
 #   make check      rebuild and fail if the output moved
 #   make verbose    per-file incbin trace
 #   make gaps       the committed stock-vs-rebuild comparison and gap map
+#   make doctor     is the emulator, the display and the cartridges in place
+#   make emu-setup  install this project's OWN BizHawk (~150 MB) and core.so
+#   make display-up start Xephyr on :2 -- this project's own nested display
 #   make probe      run the rebuilt ROM beside the cartridge in BizHawk
 #   make movie      parse the TAS movie and emit the input table (needs MOVIE)
 #   make replay     replay MOVIE into $(ROM) in BizHawk and report the sync frame
 #   make guard      fail if a cartridge, a movie, or vendor/ is staged
 #   make check-py   run the instrument test suite (no emulator, no cartridge)
+#   make check-isolation  prove no run touched another project's emulator tree
 #   make testsuite  run tools/nestrace.py against koute's nes-testsuite
 #   make clean      remove generated output
 #
@@ -47,8 +51,38 @@ CART ?= $(shell python3 tools/cartref.py)
 TS ?= /tmp/opencode/pinky/nes-testsuite
 TS_FRAMES ?= 120
 
+# ------------------------------------------------------------------ the instrument
+# The emulator and the display, both of which used to belong to another project.
+#
+# WHERE THE EMULATOR IS: `tools/bizhawk/bizpath.sh` decides, from `MAGICIAN_BIZHAWK`
+# (or the `BIZHAWK` alias), falling back to
+#
+#     $HOME/code/games/magician-nes-bizhawk/BizHawk-2.11.1-linux-x64
+#
+# and NEVER onto another directory that happens to exist. `MAGICIAN_BIZHAWK=...`
+# on any command line below overrides both. The old default was a hardcoded path
+# into a sibling checkout in three files, and a caller who exported the variable
+# got a guard that certified their directory and a launch out of the other
+# project's -- see journal/14 and src/testing/test_bizpath.py.
+#
+# WHERE THE DISPLAY IS: `MAGICIAN_DISPLAY`, default :2. NOT :1, which is the
+# neighbouring project's, so a search in either can be watched while the other
+# runs. `run.sh` exports DISPLAY to the emulator, because a systemd user service
+# does not inherit the session's DISPLAY and otherwise ends up at "Could not open
+# display (X-Server required)" with nothing to say why.
+#
+# There is no Xvfb on this machine and no `xorg-server-xvfb` package -- that is
+# still true and `pacman -Ss` still offers it. What is also true, and was measured
+# on 2026-10-05 before this was written: Xephyr IS installed
+# (`xorg-server-xephyr` 21.1.24) and BizHawk runs on `Xephyr :2` with no window
+# manager, producing the same work-RAM fingerprint as `:0`. The old claim here --
+# "there is no Xvfb on this machine", paired with nestrace.py's "BizHawk is
+# GUI-only with no Xvfb" -- was literally true about Xvfb and was read as a
+# statement about BizHawk, which it was not.
 .PHONY: all extract assemble rom check verbose gaps probe testsuite clean guard \
-        movie replay install-hooks check-py
+        movie replay install-hooks check-py \
+        doctor emu-setup display-up display-down display-status check-isolation \
+        install-units
 
 all: extract assemble rom
 
@@ -105,8 +139,8 @@ verbose: extract
 gaps: assemble
 	$(PYTHON) tools/gapmap.py --write --probe --boot
 
-# BizHawk's Mono build needs a GL context; --gdi avoids it, and there is no Xvfb
-# on this machine. Both windows are moved side by side over X11 by tools/.
+# BizHawk's Mono build needs a GL context; --gdi avoids it. Both windows are moved
+# side by side over X11 by tools/.
 probe: rom
 	@tools/bizhawk_probe.sh "$(CART)" "$(ROM)"
 
@@ -169,6 +203,61 @@ replay: movie
 # for the live bugs it found while being written.
 check-py:
 	$(PYTHON) src/testing/run_all.py
+
+# ------------------------------------------------------- the instrument, on disk
+# What is present, what is missing, and how to get it. One exit code per class of
+# thing, in dependency order, because "not ok" makes the operator go and look and
+# this project has a documented habit of fixing the wrong thing:
+#
+#   0 ready   2 emulator   3 runtime tools   4 display   5 a cartridge or the rebuild
+#
+# Deliberately NOT part of check-py. check-py must stay runnable in seconds with no
+# emulator, no cartridge, no display and no network, because it gates every commit;
+# everything this target reports is a property of the MACHINE.
+doctor:
+	@tools/bizhawk/doctor.sh
+
+# Install this project's own BizHawk. Downloads the official tarball, verifies its
+# sha256 against a pin, and builds Lua/socket/core.so -- which BizHawk does not
+# ship and which src/play/bridge.lua's `require("socket.core")` needs. Nothing it
+# does touches any other project's directory.
+emu-setup:
+	@tools/bizhawk/setup.sh
+
+# Xephyr on :2, this project's own nested display, with NO window manager.
+# Measured: none is needed. BizHawk maps a real window on a bare Xephyr and the
+# bridge answers; the instrument reads the core through Lua and screenshots come
+# from client.screenshot(), so window placement cannot affect a number it
+# produces. `display-down` kills by pid, after checking that pid's command line,
+# and never uses `pkill -f Xephyr` -- another project runs one on :1.
+display-up:
+	@tools/bizhawk/display.sh up
+
+display-down:
+	@tools/bizhawk/display.sh down
+
+display-status:
+	@tools/bizhawk/display.sh status
+
+# Symlink the two units in tools/systemd/ into ~/.config/systemd/user. They are
+# NOT committed to the user's systemd directory by this repository -- a checkout
+# that installed units behind your back would be doing something invasive -- so
+# this target is explicit and prints what it did.
+install-units:
+	@tools/bizhawk/install_units.sh
+
+# ------------------------------------------------------- the isolation proof
+# Not a claim: a recursive listing with sizes and mtimes, plus a sha256 of every
+# file, of a DIRECTORY THIS PROJECT IS NOT ALLOWED TO TOUCH, taken before and
+# after a run. `make check-isolation` names the directory; the point is that the
+# answer is a comparison rather than a promise.
+#
+# The default is empty, because naming another project's emulator directory in this
+# Makefile is exactly the thing the previous commits removed. Set it explicitly:
+#
+#   make check-isolation ISOLATE=/path/to/the/other/BizHawk-... cmd='make probe'
+check-isolation:
+	@tools/isolation.sh "$(ISOLATE)" $(if $(cmd),-- "$(cmd)",)
 
 guard:
 	@tools/guard_staged.sh

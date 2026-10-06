@@ -1,4 +1,4 @@
-# Magician (NES) — moddable core
+# Magician Redux — moddable core
 
 A Rust reconstruction of the machine **Magician** (Taxan Kaga, 1991) runs on, intended
 to be built around the original Eurocom source that Chris Shrigley released in 2012,
