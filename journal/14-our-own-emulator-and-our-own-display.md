@@ -288,7 +288,18 @@ lie.
    time**, so a caller naming a different home got the real machine's path back.
    Found by section F comparing the Python and bash answers under the same three
    environments — a check a comment saying "these agree" could never have been.
-9. **Two of my own test expectations were wrong and the code was right**: I asserted
+9. **`setup.sh` had never been run.** `make emu-setup` died with
+   `MAGICIAN_BIZHAWK_DIR: unbound variable` on every invocation — it referenced
+   the *resolved* directory in a mode that only defines the *default*. The reason
+   it survived review is the embarrassing one: I performed its steps by hand
+   (download, verify, extract, build `core.so`) and then never ran the script. I
+   wrote a test suite, a doctor, a README section and this journal entry about a
+   script I had never executed. All three paths are now run: idempotent (exit 0),
+   `--force` (exit 0, sha256 pin matched, `core.so` 103 696 bytes, against a
+   throwaway destination so the live install was untouched), a destination that
+   exists without `EmuHawkMono.sh` (exit 5, refuses to merge), and no tools on
+   `PATH` (exit 4, names the packages, never runs `sudo`).
+10. **Two of my own test expectations were wrong and the code was right**: I asserted
    the resolver should succeed with an absent default (it must *refuse*), and that
    `child_env()` should re-resolve its `base` argument (it must pin the module's
    value, or the guard and the launch could diverge again). Both were corrected in
