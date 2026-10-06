@@ -45,8 +45,17 @@
 #                     wait gives up. Set it for any dumping script: without it
 #                     the wait returns on the first non-empty byte and the caller
 #                     diffs a truncated file
-#   MAGICIAN_SRAM     the SaveRAM directory (default $BIZ/NES/SaveRAM)
+#   MAGICIAN_SRAM     the SaveRAM directory to LOOK in (default
+#                     $MAGICIAN_BIZHAWK_DIR/NES/SaveRAM). See the SaveRAM
+#                     section: this does not change where BizHawk writes
 #   MAGICIAN_CORE     the SystemID that must be loaded (default NES)
+#   MAGICIAN_BIZHAWK  where this project's own BizHawk is. See bizpath.sh for
+#                     the whole contract; `BIZHAWK` is accepted as an alias and
+#                     setting the two to different directories is a hard error.
+#   MAGICIAN_DISPLAY  the X display the window goes on (default :2, or whatever
+#                     DISPLAY was inherited). Exported to the emulator here,
+#                     because a systemd user service does not inherit the
+#                     session's DISPLAY and ends up at "Could not open display".
 
 set -uo pipefail
 
@@ -54,11 +63,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="${1:?usage: run.sh <script.lua> <rom> [logfile]}"
 ROM="${2:?usage: run.sh <script.lua> <rom> [logfile]}"
 LOG="${3:-/tmp/opencode/bizhawk_run.log}"
-BIZ="${BIZHAWK:-$HOME/code/games/aibeatszelda/BizHawk-2.11.1-win-x64}"
 WANT_SYSTEM="${MAGICIAN_SYSTEM:-NES}"
 # The board name is a second core fingerprint and it costs nothing: NullHawk has
 # no board to name, so this catches a fallback even if getsystemid() lied.
 WANT_BOARD="${MAGICIAN_BOARD:-}"
+
+# WHERE THE EMULATOR AND THE DISPLAY ARE. One file, sourced, so `run.sh` and
+# `src/play/emu.py` cannot disagree about which directory a run is about -- which
+# is exactly what they did: run.sh read $BIZHAWK and emu.py read
+# $MAGICIAN_BIZHAWK, each with its own hardcoded default, and emu.py never handed
+# BIZHAWK to the child. A caller who exported MAGICIAN_BIZHAWK got a guard that
+# certified their directory and a launch out of another project's. See
+# tools/bizhawk/bizpath.sh and journal/14.
+#
+# `|| exit 1` rather than bare `.`: run.sh runs under `set -uo pipefail` without
+# `-e`, and bizpath.sh signals a refusal by returning 1 with the reason already
+# on stderr. Propagating it means the exit code is the resolver's, not a later
+# coincidence.
+. "$ROOT/tools/bizhawk/bizpath.sh" || exit 1
+BIZ="$MAGICIAN_BIZHAWK_DIR"
 
 # Both paths must be absolute before the `cd "$BIZ"` below. A relative ROM path is
 # not an error: BizHawk fails to load the file, falls back to NullHawk, and the
@@ -67,7 +90,6 @@ WANT_BOARD="${MAGICIAN_BOARD:-}"
 [ -f "$SCRIPT" ] || { echo "run.sh: no script at $SCRIPT" >&2; exit 1; }
 ROM="$(readlink -f "$ROM")"
 SCRIPT="$(readlink -f "$SCRIPT")"
-[ -d "$BIZ" ] || { echo "run.sh: BizHawk not at $BIZ; set BIZHAWK=/path" >&2; exit 1; }
 
 # A leftover EmuHawk: does a second launch get diverted into the first?
 #
@@ -334,6 +356,7 @@ export MONO_WINFORMS_XIM_STYLE=disabled
 export MONO_CRASH_NOFILE=1
 
 echo "run.sh: $ROM ($ROM_SHA1) with $SCRIPT"
+echo "run.sh: emulator $BIZ (from $MAGICIAN_BIZHAWK_SOURCE), window on $MAGICIAN_DISPLAY (from $MAGICIAN_DISPLAY_SOURCE)"
 echo "run.sh: want system=$WANT_SYSTEM board=${WANT_BOARD:-<any>} rom=$(basename "$ROM")"
 printf 'run.sh: want $%04X = %s\n' "$WIN_AT" "$WIN_HEX"
 # Every fd of the launcher subshell is detached, not just EmuHawk's: EmuHawkMono.sh
@@ -469,7 +492,7 @@ if [ -n "${MAGICIAN_EXPECT:-}" ]; then
 fi
 
 if pgrep -f 'EmuHawk.exe' >/dev/null; then
-  echo "run.sh: EmuHawk alive; window should be on :0"
+  echo "run.sh: EmuHawk alive; its window is on $MAGICIAN_DISPLAY ($MAGICIAN_DISPLAY_SOURCE)"
 else
   echo "run.sh: EmuHawk has exited (the script called client.exit())"
 fi

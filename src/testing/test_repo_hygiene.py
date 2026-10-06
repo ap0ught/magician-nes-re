@@ -19,6 +19,10 @@ Twenty checks:
   D. the guard exits 0 on a clean index, so it can be wired into a hook
   E. `vendor/` is byte-identical to what is committed, and the upstream pin in
      LEGAL.md and README.md is the same 40 characters in both
+  F. no CODE in this repository reaches into another project's checkout. Prose,
+     docstrings and `journal/` may name it -- that is where the provenance lives
+     -- but a default path may not. See `src/testing/nodep.py` for why the
+     distinction is not made by `grep`.
 
 PROVENANCE OF THE NUMBERS HERE
 
@@ -313,6 +317,76 @@ for f in TRACKED:
             offenders.append(f"{f}: {pat}")
 check("no committed source incbins a cartridge or embeds a base64 blob",
       not offenders, "\n         ".join(offenders))
+
+# =====================================================================================
+# F. No code reaches into another project's checkout.
+# =====================================================================================
+# THE INCIDENT. A service in this project launched BizHawk out of a *different*
+# project\'s emulator directory, and a `pkill` in that service killed a
+# 136,526-frame replay belonging to that other project. Two checkouts shared one
+# BizHawk directory with no lock on its config.ini or its NES/SaveRAM, and nothing
+# in either project said so.
+#
+# WHY THIS IS NOT A GREP. `aibeatszelda` appears in dozens of files here and almost
+# all of them are correct: honest credit for the MAIN/SCOUT split ported into
+# `src/play/`, two real bugs found by reading that project\'s tests, and a
+# `journal/` that is a truthful record. A grep that failed on those would get
+# deleted, and then the check would be gone. So `nodep.py` strips comments and
+# docstrings first and looks at what is left, which is the only part that can
+# determine a path.
+#
+# WHAT IT DOES NOT CATCH, and the reason this is not the whole answer: a SYMLINK
+# from this project\'s install into another project\'s would satisfy this check
+# exactly as it satisfies `grep`. The install is a real copy for that reason, and
+# `journal/14` records the measurement of what BizHawk actually writes -- six
+# paths, none of them shared -- which is what makes the copy cheap enough to be
+# the right answer rather than merely the cautious one.
+import nodep as nd  # noqa: E402  (src/testing/nodep.py)
+
+hits = nd.find_dependency_hits(ROOT)
+check("no source file in this repository reaches into another project's checkout",
+      not hits,
+      "Code naming `" + nd.SIBLING + "`:\n"
+      + "\n".join(f"{rel}:{ln}: {line}" for rel, ln, line in hits))
+
+# ...and a POSITIVE CONTROL, without which the check above is vacuous: the stripper
+# must actually be able to see a dependency. Written to a scratch file outside the
+# tree and pointed at directly, because a fixture inside the repository would be a
+# dependency by construction.
+_scratch = TMP / "nodeptest"
+_scratch.mkdir(parents=True, exist_ok=True)
+(_scratch / "bad.sh").write_text(
+    "BIZ=${BIZHAWK:-$HOME/code/games/" + nd.SIBLING + "/BizHawk}\n", encoding="utf-8")
+(_scratch / "good.sh").write_text(
+    "# mentions " + nd.SIBLING + " in a comment, which is provenance\n"
+    "BIZ=${MAGICIAN_BIZHAWK:-$HOME/code/games/magician-nes-bizhawk}\n",
+    encoding="utf-8")
+check("the scan DOES see a dependency written the old way",
+      [h for h in nd.find_dependency_hits(_scratch) if h[0] == "bad.sh"],
+      "if this fails the scan is not looking, and 'no hits' above means nothing. "
+      "A guard that cannot fail is not a guard -- the `[ x -lt 0x8000 ]` case in "
+      "test_run_sh.py section F.")
+check("...and does NOT flag the same name in a comment",
+      not [h for h in nd.find_dependency_hits(_scratch) if h[0] == "good.sh"],
+      "over-reporting is how a check like this gets deleted instead of fixed")
+
+# And the provenance that must SURVIVE, asserted positively. A future session
+# "tidying up" the sibling's name out of these files would be removing the record
+# of where a design came from, and this is the check that says so.
+prov = {
+    "src/play/bridge.lua": "Ported from",
+    "src/play/emu.py": "aibeatszelda",
+    "src/play/runner.py": "aibeatszelda",
+    "src/play/search.py": "aibeatszelda",
+}
+missing = [f for f, needle in prov.items()
+           if needle not in (ROOT / f).read_text(encoding="utf-8")]
+check("the provenance that credits the ported design is still there",
+      not missing,
+      "these are the honest credits for the MAIN/SCOUT split and the bridge, and "
+      "this project values knowing where a thing came from. If one of these was "
+      "removed on purpose, delete this check deliberately rather than because a "
+      f"grep complained. Missing from: {missing}")
 
 print(f"repo hygiene: {ok} checks")
 print("all checks passed")

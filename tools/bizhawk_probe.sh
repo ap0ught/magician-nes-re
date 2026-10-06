@@ -46,10 +46,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CART="${1:-$(python3 "$ROOT/tools/cartref.py")}"
 ROM="${2:-$ROOT/asm/out/magician-rebuilt.nes}"
-BIZ="${BIZHAWK:-$HOME/code/games/aibeatszelda/BizHawk-2.11.1-win-x64}"
+
+# WHERE THE EMULATOR IS. Sourced, so this script and tools/bizhawk/run.sh cannot
+# each carry their own default and drift -- which is what they did, both pointing
+# into another project's install. `set -e` is on here, so a refusal exits with
+# bizpath.sh's own exit status and its reason already printed.
+. "$ROOT/tools/bizhawk/bizpath.sh"
+BIZ="$MAGICIAN_BIZHAWK_DIR"
 
 [ -f "$ROM" ] || { echo "no rebuilt ROM at $ROM -- run 'make rom' first" >&2; exit 1; }
-[ -d "$BIZ" ] || { echo "BizHawk not found at $BIZ; set BIZHAWK=/path" >&2; exit 1; }
 
 export LD_LIBRARY_PATH="$BIZ/dll:$BIZ:/usr/lib"
 export MONO_WINFORMS_XIM_STYLE=disabled
@@ -63,9 +68,14 @@ launch() {  # launch <ini> <rom> <logfile>
       </dev/null >"$3" 2>&1 & )
 }
 
-# Only ever read, never written -- but a stale SRAM file makes the cartridge look
-# like it boots to a resumed save, and `NOTES` below is where that happened.
-SRAM="${BIZHAWK_SRAM:-$BIZ/NES/SaveRAM}"
+# The SaveRAM directory is this project's own now. The comment above used to say
+# "only ever read, never written" over three lines that do `mkdir -p` and `rm -f`,
+# and they did it inside ANOTHER PROJECT's install -- so `make probe` was writing
+# to a directory two projects share, which is the whole reason they must not
+# share one. The names are normalised too: `MAGICIAN_SRAM` is what run.sh calls
+# it, `BIZHAWK_SRAM` is what this file used to call it, and two names for one
+# setting is how `BIZHAWK`/`MAGICIAN_BIZHAWK` diverged in the first place.
+SRAM="${MAGICIAN_SRAM:-${BIZHAWK_SRAM:-$BIZ/NES/SaveRAM}}"
 
 echo "clearing $SRAM"
 mkdir -p "$SRAM"

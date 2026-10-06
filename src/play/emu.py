@@ -61,10 +61,112 @@ from typing import Iterable, Sequence
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
-BIZHAWK = pathlib.Path(os.environ.get("MAGICIAN_BIZHAWK")
-                       or (pathlib.Path.home() / "code/games/aibeatszelda/BizHawk-2.11.1-win-x64"))
+# ------------------------------------------------------------------ WHERE THINGS ARE
+# One name, one answer, and the answer is a directory THIS PROJECT owns.
+#
+# The measured shape of the bug this replaces (2026-10-05, journal/14):
+#
+#     exported              this guard checked         run.sh launched
+#     --------------------  -------------------------  --------------------------
+#     BIZHAWK=/new          ANOTHER PROJECT's dir       /new
+#     MAGICIAN_BIZHAWK=/new     /new                   ANOTHER PROJECT's dir
+#
+# `run.sh` read `$BIZHAWK`, this module read `$MAGICIAN_BIZHAWK`, both had their
+# own hardcoded default into the other project's install, and `__init__` built the
+# child environment from `dict(os.environ)` while mentioning only `MAGICIAN_*`
+# keys -- so the guard and the launch could not agree even in principle. Setting
+# `MAGICIAN_BIZHAWK` got you a guard that certified your directory and a run out
+# of somebody else's, both reporting success. The bill came due when a service
+# pointed at that install and a `pkill` killed a 136,526-frame replay that was
+# not its own.
+#
+# So `MAGICIAN_BIZHAWK` is canonical and `BIZHAWK` is an accepted alias -- the
+# alias stays because every existing invocation and every shell test sets it, and
+# because "keep the env-var override working" is part of the requirement -- and the
+# two DISAGREEING is an error rather than a preference to be resolved quietly.
+#
+# `tools/bizhawk/bizpath.sh` is the same rule in bash, and the two are compared
+# against each other in `src/testing/test_bizpath.py` section F rather than
+# assumed to agree. Two copies of a rule in two languages drift silently; a
+# comment claiming they match is worth nothing.
+#
+# RESOLUTION DOES NOT TOUCH THE FILESYSTEM. Five files in `src/testing/` import
+# this module and the suite must stay emulator-free, so "is there a BizHawk here"
+# is a question for `__init__`, which is where it already was, and the import
+# cannot fail on a machine with no emulator installed.
+BIZHAWK_VERSION = "2.11.1"
+# Named `-linux-x64`, not `-win-x64`: the other project's copy carries the
+# Windows name because ITS launcher derives the directory name from its checkout.
+# Nothing here derives anything, so the name can be the truth -- which also means
+# `BizHawk-2.11.1-win-x64` appearing in one of our log lines reads immediately as
+# "that was not us".
+BIZHAWK_DIRNAME = f"BizHawk-{BIZHAWK_VERSION}-linux-x64"
+# The `HOME`-relative part, kept as a constant rather than a whole path because
+# the whole path is `$HOME`-dependent: the first version of `resolve_bizhawk`
+# built it at IMPORT time from the real `$HOME`, so a caller (or a test) whose
+# environment named a different home got the real machine's default back and the
+# Python and bash halves disagreed. `src/testing/test_bizpath.py` section F is
+# what found it.
+BIZHAWK_HOME_SUFFIX = ("code", "games", "magician-nes-bizhawk")
+BIZHAWK_HOME_DEFAULT = pathlib.Path.home().joinpath(*BIZHAWK_HOME_SUFFIX)
+
+
+class BizHawkConfigError(RuntimeError):
+    """The emulator directory is configured twice, differently.
+
+    Its own exception rather than a `FileNotFoundError` because it is not a
+    missing file: nothing is missing, and a caller that catches
+    `FileNotFoundError` to report "install it with `make emu-setup`" would report
+    the wrong fix for the wrong problem.
+    """
+
+
+def resolve_bizhawk(env: dict | None = None) -> tuple[pathlib.Path, str]:
+    """`(directory, where that answer came from)` from an environment mapping.
+
+    Deliberately takes the mapping rather than reading `os.environ` inside, so a
+    test can ask what a given environment resolves to without mutating this
+    process's own -- the difference between checking the rule and checking one
+    particular invocation of it.
+
+    Raises `BizHawkConfigError` if both names are set to different directories.
+    Returns a path that may not exist; existence is `BizHawk.__init__`'s question,
+    because this module is imported by a test suite that has no emulator.
+    """
+    e = os.environ if env is None else env
+    canon = e.get("MAGICIAN_BIZHAWK") or ""
+    alias = e.get("BIZHAWK") or ""
+    if canon and alias and os.path.abspath(canon) != os.path.abspath(alias):
+        raise BizHawkConfigError(
+            f"the emulator directory is set twice, differently:\n"
+            f"    MAGICIAN_BIZHAWK = {canon}\n"
+            f"    BIZHAWK           = {alias}\n"
+            f"These are one setting with two names, not two settings. They "
+            f"disagree, so it is not knowable from here which one the run would "
+            f"use, and picking one would be a guess in the one place this project "
+            f"cannot afford a guess. Unset one of them.")
+    if canon:
+        return pathlib.Path(os.path.abspath(canon)), "MAGICIAN_BIZHAWK"
+    if alias:
+        return pathlib.Path(os.path.abspath(alias)), "BIZHAWK (alias)"
+    home = pathlib.Path(os.path.abspath(
+        e.get("MAGICIAN_BIZHAWK_HOME") or e.get("HOME")
+        or BIZHAWK_HOME_DEFAULT))
+    return home.joinpath(*BIZHAWK_HOME_SUFFIX) / BIZHAWK_DIRNAME, \
+        "the default location"
+
+
+BIZHAWK, BIZHAWK_SOURCE = resolve_bizhawk()
+
 RUN_SH = ROOT / "tools" / "bizhawk" / "run.sh"
 BRIDGE_LUA = HERE / "bridge.lua"
+# `bridge.lua` opens with `require("socket.core")`. BizHawk ships only the Windows
+# `Lua/socket/core.dll`, so on Linux the module has to be BUILT for NLua's embedded
+# Lua 5.4 and installed beside it -- `make emu-setup` does that, and it is the one
+# thing about this project's emulator that no tarball provides. Checked HERE
+# rather than in `bizpath.sh` because `run.sh` also drives scripts that never open
+# a socket (title.lua, replay.lua, frame.lua); only this module needs it.
+SOCKET_SO = "Lua/socket/core.so"
 
 LOGS = ROOT / "logs"
 SHOTS = ROOT / "shots"
@@ -192,6 +294,38 @@ class Result:
         return out
 
 
+def child_env(base: dict | None = None) -> dict:
+    """The environment `run.sh` is launched with, with the emulator pinned in it.
+
+    THE FUNCTION THIS PROJECT WAS MISSING, and the smallest expression of the
+    measured bug. `__init__` used to do `env = dict(os.environ)` and add only
+    `MAGICIAN_*` keys, so `run.sh` inherited whatever `BIZHAWK` happened to hold
+    and this module's own `MAGICIAN_BIZHAWK` never reached it. The guard in
+    `__init__` and the launcher below it were then reading two different variables
+    with two different defaults, and both halves could be right.
+
+    Both names are set, and to the SAME value, deliberately:
+
+      * setting `MAGICIAN_BIZHAWK` is what `bizpath.sh` reads first, so this is
+        the name that decides;
+      * setting `BIZHAWK` too OVERWRITES rather than coexists. If only one were
+        set and the caller's environment carried the other, `bizpath.sh` would
+        see two different directories and refuse -- which is the correct outcome,
+        but it would be a refusal at launch time for something decided at import
+        time. Overwriting makes the disagreement unrepresentable instead of
+        merely detectable.
+
+    `base` exists so a test can ask what the environment would be under a given
+    mapping instead of mutating this process's own. Checked by
+    `src/testing/test_bizpath.py` section F.
+    """
+    env = dict(os.environ if base is None else base)
+    env["MAGICIAN_BIZHAWK"] = str(BIZHAWK)
+    env["BIZHAWK"] = str(BIZHAWK)
+    env["MAGICIAN_BIZHAWK_SOURCE"] = BIZHAWK_SOURCE
+    return env
+
+
 class BizHawk:
     """One EmuHawk instance, driven frame by frame over a loopback socket."""
 
@@ -207,9 +341,41 @@ class BizHawk:
                 "committed (LEGAL.md).")
         if not RUN_SH.exists():
             raise FileNotFoundError(f"no launcher at {RUN_SH}")
+        # The emulator, checked HERE rather than only inside run.sh, and the two
+        # are held together by `child_env()` below handing run.sh this same path.
+        # A missing install is a refusal that names the fix, never a fallback onto
+        # some other directory that happens to exist: this is the bug class
+        # `journal/14` is about, and `${VAR:-<the sibling>}` cannot express "no".
         if not BIZHAWK.is_dir():
             raise FileNotFoundError(
-                f"no BizHawk at {BIZHAWK}; set MAGICIAN_BIZHAWK=/path")
+                f"no BizHawk at {BIZHAWK} (from {BIZHAWK_SOURCE}).\n"
+                f"  This project runs its OWN emulator install; it does not share "
+                f"one with another checkout.\n"
+                f"  make emu-setup            installs "
+                f"{BIZHAWK_DIRNAME} (~150 MB) into\n"
+                f"                            {BIZHAWK_HOME_DEFAULT} and builds "
+                f"{SOCKET_SO},\n"
+                f"                            which BizHawk does not ship.\n"
+                f"  MAGICIAN_BIZHAWK=/path    use an install you already have.")
+        if not (BIZHAWK / SOCKET_SO).is_file():
+            # Measured, not assumed: `bridge.lua:50` is `require("socket.core")`
+            # and BizHawk's tarball carries only the Windows `core.dll`. Without
+            # this module the bridge dies on its first line and the run then
+            # reports a *connect timeout*, which reads like a networking problem
+            # rather than a missing 100 KB file.
+            raise FileNotFoundError(
+                f"no {SOCKET_SO} in {BIZHAWK}, so src/play/bridge.lua cannot "
+                f"`require('socket.core')`.\n"
+                f"  BizHawk ships only the Windows core.dll; the Lua 5.4 module "
+                f"has to be built.\n"
+                f"  make emu-setup            downloads, extracts and builds it.")
+        if not (BIZHAWK / "EmuHawkMono.sh").is_file():
+            raise FileNotFoundError(
+                f"no EmuHawkMono.sh in {BIZHAWK} -- that directory exists but is "
+                f"not a BizHawk install.\n"
+                f"  A path that happens to exist is not the same thing as an "
+                f"emulator.\n"
+                f"  make emu-setup            installs one.")
 
         for d in (LOGS, SHOTS, CHECKPOINTS, INPUTS):
             d.mkdir(parents=True, exist_ok=True)
@@ -240,7 +406,7 @@ class BizHawk:
         # its own RAM. run.sh's own guard is what refused. Both are recorded in
         # runner.N_EMULATORS; this comment is only here so the flag's meaning is
         # readable at the place it is used.
-        env = dict(os.environ)
+        env = child_env()
         env["MAGICIAN_BRIDGE_LOG"] = str(self.bridge_log)
         env.pop("MAGICIAN_BRIDGE_PORT", None)
         if concurrent:
