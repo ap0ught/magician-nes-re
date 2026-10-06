@@ -69,7 +69,15 @@ LUASOCKET_URL="https://github.com/lunarmodules/luasocket/archive/refs/tags/v3.1.
 LUASOCKET_SHA256="bf033aeb9e62bcaa8d007df68c119c966418e8c9ef7e4f2d7e96bddeca9cca6e"
 
 FORCE=0
-DEST="${MAGICIAN_BIZHAWK_DIR}"
+# The DEFAULT, not `MAGICIAN_BIZHAWK_DIR`. That is the *resolved* directory and it
+# only exists after a resolution -- which is exactly what this script cannot do,
+# since it has to be runnable before there is anything to resolve. Constants-only
+# mode defines the DEFAULT and the DIRNAME, and referencing the resolved name here
+# was a bug: `MAGICIAN_BIZHAWK_DIR: unbound variable` on every invocation, which
+# nobody noticed because the first thing I did instead was perform this script's
+# steps by hand and then never run it. A script that has only been read is not a
+# script that has been run.
+DEST="${MAGICIAN_BIZHAWK_DEFAULT}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
