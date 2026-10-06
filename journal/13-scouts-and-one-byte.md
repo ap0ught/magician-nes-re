@@ -139,20 +139,31 @@ The level-pointer tables cannot be the first thing to differ, because the thing
 that decides which pointer to read differs first.
 
 **`stlev` is not it either — and the cartridge says so.** The source writes
-`stlev db $01` (x5.pds:8), and `initvars` does `lda stlev / sta hilev / sta
-mapind` (x1.pds:27-29) — the only place in the source that writes that pair from
-one value, which made it the obvious suspect. Disassembling our `initvars` at
-$850E finds it, and it is the same code as the cartridge's:
+    `stlev db $01` (x5.pds:8), and `initvars` does `lda stlev / sta hilev / sta
+    mapind` (x1.pds:27-29) — the only place in the source that writes that pair from
+    one value, which made it the obvious suspect. Disassembling our `initvars` at
+    $850E finds it, and it is the same code as the cartridge's:
 
-    ours   prg+$000553:  AD 00 C3 8D 19 07 85 4D      lda $C300 / sta hilev / sta mapind
-    Beta 1 prg+$000540:  AD 00 C3 8D 19 07 85 4D      (identical operands)
+        ours   prg+$000553:  AD 00 C3 8D 19 07 85 4D      lda $C300 / sta hilev / sta mapind
+        Beta 1 prg+$000540:  AD 00 C3 8D 19 07 85 4D      (identical operands)
 
-`stlev` is at `$C300` in both, and **`$C300` is `$7A` filler in both** — not
-`$01`. So `lda $C300` returns `$7A` on the cartridge that works, which means the
-C=0 branch is never taken there, and no hypothesis that depends on `$C300`
-holding `$01` can be true. Recorded because it was the most plausible wrong
-answer available, and because the instrument that refuted it
-(`--pattern 8d1907 854d`) is now a committed mode rather than a shell command.
+    `stlev` is at `$C300` in both, and **`$C300` is `$7A` filler in both** — not
+    `$01`. So `lda $C300` returns `$7A` on the cartridge that works, which means the
+    C=0 branch is never taken there, and no hypothesis that depends on `$C300`
+    holding `$01` can be true. Recorded because it was the most plausible wrong
+    answer available, and because the instrument that refuted it
+    (`--pattern 8d1907 854d`) is now a committed mode rather than a shell command.
+
+    > **CORRECTED — journal 14. This refutation was wrong, and it was wrong about
+    > the address, not the argument.** `$C300` is PRG file offset **`$1C300`**, not
+    > `$10300`: `X5.PDS:14-21` says `$C000-$DFFF : from bank $0E`, which is 8 KiB
+    > slot 14, the last-but-one slot of a 128 KiB PRG. `$10300` is slot 8 and is
+    > full of `$7A`. The real values are `$01` in our build and `$00` on Beta 1,
+    > `stlev` **is** the cause, and setting it to `$00` fixes the wedge. The
+    > reasoning here is sound and would have been right at `$1C300`; the offset
+    > was six slots out. Journal 14 records this as the third PRG-offset slip in
+    > the tree and treats the general cause -- `$C000-$DFFF` is switchable on
+    > MMC3 -- rather than the one byte as the finding.
 
 Note for anyone repeating this: `sta mapind` assembles as `85 4D`
 (zero-page), not `8D 4D 00`. Searching for the absolute form finds nothing in
@@ -162,12 +173,15 @@ either ROM and reads as "the routine is not there".
 
 Recounted on this machine, source-derived and manifest-derived kept apart:
 
-    PRG 96413/131072 (73.56%, reported as 73.6%)
+PRG 96413/131072 (73.56%, reported as 73.6%)
       from the source alone : 96413
       from the patch manifest: 0        (asm/patches.manifest has no regions)
 
-Unchanged from journal 12. `dl`/`dh` (4db43ee) are still in, and the 78555 /
-59.9% figure is still stale.
+    Unchanged from journal 12. `dl`/`dh` (4db43ee) are still in, and the 78555 /
+    59.9% figure is still stale.
+
+    > **MOVED — journal 14.** 96414, source-derived. The extra byte is
+    > `src/magician/STARTLEV.PDS`. Manifest-derived is still 0.
 
 ## The harness's own bugs, all of which a check caught
 
@@ -192,10 +206,20 @@ Unchanged from journal 12. `dl`/`dh` (4db43ee) are still in, and the 78555 /
    measurement. The four writers in the source are `x1.pds:28`, `x0.pds:951`,
    `x6.pds:625` and `initob`'s neighbourhood; the frame is inside
    `newlev $E2`, so it is the first of those.
+
+    > **ANSWERED — journal 14.** Not `newlev` at all. `initvars` (`x1.pds:27-29`),
+    > at frame 81, from `stlev` at `$C300`. The frame is the map screen at level
+    > `$E2` *because* `mapind` is 1 on our build at that point, not the other way
+    > round; the level being wrong is a consequence of the byte.
 2. **`$01FA-$01FC`**, three bytes with no symbol that differ at the same frame.
    They may be the same write's side effect or they may be the cause. The ram
    map has a hole there and adding fields for it is a prerequisite for
    anything that reads that region.
+
+   > **PARTLY — journal 14.** `mapind` and `hilev` are the *only* durable
+   > differences, and they were equal to each other, which is the signature of one
+   > write to two cells. `$01FA-$01FC` has not been re-checked against the fixed
+   > build and is still open.
 3. Then re-run the milestone **unchanged**. The route is correct and verified on
    the cartridge; `into_level` is the only thing standing between our build and
    the same verified run.

@@ -108,6 +108,13 @@ UNOFFICIAL_LEN = {
     0x04: 2, 0x0C: 2, 0x14: 2, 0x1C: 2, 0x34: 2, 0x3C: 2, 0x44: 2, 0x54: 2,
     0x5C: 2, 0x64: 2, 0x6C: 2, 0x74: 2, 0x7C: 2, 0xD4: 2, 0xDC: 2, 0xFC: 2,
     0x80: 2, 0x82: 2, 0x89: 2, 0xC2: 2, 0xE2: 2,
+    # The six one-byte NOPs. Real 6502 code from 1990 does use them, and this
+    # cartridge does: Beta 1 executed `$1A` at $A709 on frame 131 and the tracer
+    # stopped the run there with "illegal opcode", which is indistinguishable
+    # from a crash. It is not a crash -- it is a two-byte-per-cycle NOP, and a
+    # tracer that cannot decode it cannot follow the game past frame 131, so it
+    # cannot answer any question about the rest of a 307-frame route.
+    0x1A: 1, 0x3A: 1, 0x5A: 1, 0x7A: 1, 0xDA: 1, 0xFA: 1,
 }
 
 MODE_LEN = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "zpx": 2, "zpy": 2,
@@ -189,6 +196,13 @@ class CPU:
 
     def step(self):
         bus = self.bus
+        # Which instruction is executing, for `Bus.ram_writes`. Set here rather
+        # than in the main loop: `run_frames()` -- the other driver in this
+        # file, used by the nes-testsuite runner -- does not set it, so a store
+        # made under that driver was attributed to PC $0000. $0000 is not an
+        # address any of these ROMs executes from, and it read as a plausible
+        # answer: it is the same shape of bug as the $10300 offset in journal 13.
+        bus.cur_pc = self.pc
         if self.nmi_pending:
             self.nmi_pending = False
             self.nmi()
@@ -568,6 +582,24 @@ class Bus:
         self.sprite0_x = -1
         self.sprite0_y = -1
         self.dma_pending = 0
+        # Controller. `$4016` read 0. A game that polls the pad and this returns a
+        # constant 0 sees "nothing ever pressed, forever" -- and this project's
+        # whole milestone route IS button presses, so a tracer without this is
+        # not a diagnostic, it is a different program. `buttons` is the current
+        # frame's state in the hardware's own bit order (bit 0 = A ... bit 7 =
+        # Right); `pad_latch`/`pad_i` are the standard 8-deep serial shift.
+        self.buttons = 0
+        self.pad_latch = 0
+        self.pad_i = 8
+        self.pad_reads = 0
+        # Every write to a watched RAM cell, with the instruction that made it.
+        # BizHawk has no memory callback on this core -- `QuickNES.
+        # get_MemoryCallbacks()` throws unconditionally, measured in
+        # tools/bizhawk/writes.lua -- so this is the only way to answer "who
+        # writes $004D", and a RAM snapshot cannot: the byte that decides the
+        # level index is written and read inside a single frame and is gone by
+        # the next frame boundary.
+        self.ram_writes: dict[int, list[tuple[int, int, int, int]]] = {}
         self.halted = ""
 
     # -- PRG mapping, by mapper.
@@ -659,7 +691,22 @@ class Bus:
             return self.ppu_read(self.v & 0x3FFF) if (a & 7) == 7 else 0
         if a < 0x4020:
             if a == 0x4016:
-                return 0
+                # Standard NES serial read: bit 0 of the shift register walks A,
+                # B, Select, Start, Up, Down, Left, Right; after eight reads the
+                # hardware returns 1s, which is what terminates the game's
+                # `cmp #$01 / bcc` loop (DISP.SRC:340-344, `jk0`). Returning 0
+                # forever would hang it.
+                self.pad_reads += 1
+                if self.pad_i >= 8:
+                    return 1
+                v = (self.pad_latch >> self.pad_i) & 1
+                self.pad_i += 1
+                return v
+            if a == 0x4017:
+                # $4017 write-only on the NES (APU frame counter); the game never
+                # reads it, and the 2-bit-per-button read it does not do is
+                # folded into $4016 above.
+                return 1
             if a == 0x4014:
                 self._oam_dma_pending = True
                 return 0
@@ -694,7 +741,22 @@ class Bus:
         a &= 0xFFFF
         v &= 0xFF
         if a < 0x2000:
-            self.ram[a & 0x7FF] = v
+            addr = a & 0x7FF
+            self.ram[addr] = v
+            if addr in self.ram_writes:
+                # (frame, cycle, PC, value). The PC is `cur_pc`, which the main
+                # loop sets to the address of the instruction being executed --
+                # set BEFORE the step, so a store that happens on an instruction's
+                # last cycle is attributed to that instruction and not the next.
+                self.ram_writes[addr].append(
+                    (self.frame, self.cycles, self.cur_pc, v))
+            return
+        if a == 0x4016:
+            # Strobe. On hardware any write reloads the shift register; the game
+            # writes 1 then 0 immediately before its eight reads (DISP.SRC:336-340),
+            # so both writes reload and the second one is the one that matters.
+            self.pad_latch = self.buttons
+            self.pad_i = 0
             return
         if a < 0x4000:
             r = a & 7
@@ -1170,13 +1232,83 @@ def load_syms(rom: pathlib.Path) -> dict[str, int]:
 
 
 def resolve(s: str, syms: dict[str, int]) -> int:
-    """`$F5D4`, `0xF5D4`, `62932` or `movepal` -> a PC."""
+    """`$F5D4`, `0xF5D4`, `62932` or `movepal` -> a PC.
+
+    The `$` form is the one this project's own symbol table uses (mag.sym writes
+    `mapind = $004D`), and it was the one that did not work: `int(s, 0)` rejects
+    a leading `$`, so `--where $F5D4` raised ValueError and every other spelling
+    was fine. A documented spelling that raises is worse than an undocumented
+    one, because it is the one people try.
+    """
     t = s.strip()
     if t in syms:
         return syms[t]
     if "|" in t and t.split("|", 1)[0] in syms:
         return syms[t.split("|", 1)[0]]
+    if t.startswith("$"):
+        return int(t[1:], 16)
     return int(t, 0)
+
+
+# --------------------------------------------------- recorded input replay
+#
+# src/play records one line per frame: "-" for nothing pressed, otherwise a
+# comma-separated list of button names, under a `# frames=N valid_from_poweron=`
+# header (src/play/emu.py:save_inputs). Reading that format HERE, rather than
+# inventing a second one, is the whole point: the input log that verified
+# Beta 1 is the input log this replays, so a difference found here is a
+# difference between two ROMs under identical input, not between two harnesses.
+#
+# The button NAMES are mapped to the hardware's own bit order for $4016 --
+# bit 0 A, 1 B, 2 Select, 3 Start, 4 Up, 5 Down, 6 Left, 7 Right -- which is
+# the order `jk0` collects with `rol` (DISP.SRC:336-344). Note that this is NOT
+# the order src/play lists them in (`BUTTONS = Up,Down,Left,Right,Select,Start,
+# B,A`), which is BizHawk's button enumeration and not a bit layout.
+HARDWARE_BITS = {"A": 0, "B": 1, "Select": 2, "Start": 3,
+                 "Up": 4, "Down": 5, "Left": 6, "Right": 7}
+
+
+def load_input_log(path: pathlib.Path) -> tuple[list[int], dict[str, str]]:
+    """Return (per-frame button masks, header key=value pairs).
+
+    Refuses to be quiet about the two ways a log can be wrong: a header that
+    claims N frames over a body of a different length, and a line naming a
+    button this machine has never heard of. Both read as "the replay ran" when
+    they are not.
+    """
+    head: dict[str, str] = {}
+    masks: list[int] = []
+    for lineno, line in enumerate(path.read_text().splitlines(), 1):
+        if line.startswith("#"):
+            for tok in line[1:].split():
+                k, _, v = tok.partition("=")
+                head[k] = v
+            continue
+        if not line.strip():
+            # The writer emits "-" for an idle frame precisely because an empty
+            # line is skipped by the reader. If one turns up anyway, say so
+            # rather than silently spending one frame fewer than the log claims.
+            raise SystemExit(
+                f"{path}:{lineno}: blank line in an input log. The format writes "
+                f"'-' for an idle frame; a blank line here would replay one "
+                f"frame fewer than the log claims and still look like a run.")
+        m = 0
+        if line.strip() != "-":
+            for name in (b for b in line.split(",") if b):
+                if name not in HARDWARE_BITS:
+                    raise SystemExit(
+                        f"{path}:{lineno}: button {name!r} is not one of "
+                        f"{sorted(HARDWARE_BITS)}. Guessing a bit for it would put "
+                        f"a plausible wrong edge into the replay.")
+                m |= 1 << HARDWARE_BITS[name]
+        masks.append(m)
+    claimed = head.get("frames")
+    if claimed is not None and claimed.isdigit() and int(claimed) != len(masks):
+        raise SystemExit(
+            f"{path}: header says frames={claimed} but the body holds "
+            f"{len(masks)} frames. Replaying the body would run the machine a "
+            f"different length than the run that recorded it.")
+    return masks, head
 
 
 def make_machine(rom: pathlib.Path):
@@ -1410,6 +1542,23 @@ def main() -> int:
                          "on the stack actually asks")
     ap.add_argument("--ram", type=lambda s: int(s, 0), nargs=2, metavar=("LO", "HI"),
                     help="hex-dump CPU RAM over [lo,hi) at the end")
+    ap.add_argument("--inputs", type=pathlib.Path, default=None,
+                    help="replay a src/play input log (.inputs.txt): one line per "
+                         "frame, '-' for idle, comma-separated button names. The "
+                         "buttons are the frame's state from power-on; the log's "
+                         "own header is checked against its body length.")
+    ap.add_argument("--watch-ram", action="append", default=[],
+                    metavar="NAME",
+                    help="record every write to a RAM cell, with the PC that made "
+                         "it. NAME is a mag.sym symbol or $hex. Repeatable. This is "
+                         "the only way to answer 'who wrote this byte': a frame "
+                         "snapshot cannot, because the byte can be written and "
+                         "read inside one frame, and BizHawk's core here has no "
+                         "memory callback at all.")
+    ap.add_argument("--ram-watch-window", type=lambda s: int(s, 0), default=0,
+                    help="only report writes in frames >= this. A RAM cell that is "
+                         "written every frame forever buries the one write you are "
+                         "looking for, so the window is usually the honest filter.")
     ap.add_argument("--vram", type=lambda s: int(s, 0), nargs=2, metavar=("LO", "HI"),
                     help="hex-dump PPU nametaps over [lo,hi) at the end")
     ap.add_argument("--last", type=int, default=0,
@@ -1446,7 +1595,27 @@ def main() -> int:
     cpu.pc = bus.read(0xFFFC) | (bus.read(0xFFFD) << 8)
     print(f"entry: nmi=${bus.read(0xFFFA)|(bus.read(0xFFFB)<<8):04X} "
           f"reset=${cpu.pc:04X} irq=${bus.read(0xFFFE)|(bus.read(0xFFFF)<<8):04X}")
-    total = int(args.frames * 29780.5)
+
+    # Input replay. Armed for the whole run, because a button state that starts
+    # partway through is a different program and reads like a different ROM.
+    log_masks: list[int] = []
+    if args.inputs:
+        log_masks, head = load_input_log(args.inputs)
+        want_frames = len(log_masks)
+        if not head.get("valid_from_poweron", "").startswith("True"):
+            print(f"WARNING: {args.inputs.name} says valid_from_poweron="
+                  f"{head.get('valid_from_poweron')!r}. Replaying a log that does "
+                  f"not start at power-on measures whatever state the log assumes.")
+        if args.frames and int(args.frames) < want_frames:
+            print(f"input log holds {want_frames} frames; --frames asked for "
+                  f"{args.frames}. The tail is not replayed.")
+        want_frames = min(want_frames, int(args.frames) or want_frames)
+        print(f"input: {args.inputs.name}, {want_frames} frames, "
+              f"{sum(1 for m in log_masks if m)} with a button held, "
+              f"{len(head)} header field(s)")
+    else:
+        want_frames = int(args.frames)
+    total = int((want_frames or args.frames) * 29780.5)
     traced = 0
     seen: collections.Counter = collections.Counter()
     watch: dict = {}
@@ -1457,6 +1626,21 @@ def main() -> int:
             watch.setdefault(("w", int(w[2:], 0) & 7), 0)
         else:
             watch.setdefault(("p", resolve(w, syms)), 0)
+    ram_watch: dict[int, str] = {}
+    for name in args.watch_ram:
+        addr = resolve(name, syms)
+        if not 0 <= addr < 0x800:
+            raise SystemExit(
+                f"nestrace: --watch-ram {name} resolved to ${addr:04X}, which is "
+                f"not CPU RAM. Zero page and $0100-$07FF only; the PPU and the "
+                f"mapper have their own counters.")
+        ram_watch[addr & 0x7FF] = name
+    if ram_watch:
+        for a in ram_watch:
+            bus.ram_writes[a] = []
+        print(f"watching RAM: " + ", ".join(
+            f"{n}=${a:04X}" for a, n in sorted(ram_watch.items()))
+            + f"  (frames >= {args.ram_watch_window})")
     halt = ""
     ring: collections.deque = collections.deque(maxlen=args.last or 1)
     halt_at = {resolve(h, syms) for h in args.halt_at}
@@ -1470,6 +1654,14 @@ def main() -> int:
     captures: list[tuple[int, list]] = []
     try:
         while cpu.cycles < total and cpu.cycles < args.max_cycles:
+            # The pad's state for the frame about to run. Applied at the TOP of
+            # the frame, before any instruction of it executes: a game polls
+            # $4016 early in vblank and late in the main loop, and "the state
+            # during frame N" is only well defined if it does not change inside
+            # the frame. That is also what a real controller does -- the buttons
+            # are held for the whole frame the player held them.
+            if log_masks and bus.frame < len(log_masks):
+                bus.buttons = log_masks[bus.frame]
             if traced < args.trace and armed:
                 op = bus.read(cpu.pc)
                 ent = OPS.get(op)
@@ -1547,6 +1739,40 @@ def main() -> int:
     print("vram nonzero per 256-byte block: " + ", ".join(
         f"${b:04X}={sum(1 for v in bus.vram[b:b+256] if v)}" for b in range(0, 0x800, 256)))
     print("hottest: " + ", ".join(f"${a:04X}x{n}" for a, n in seen.most_common(14)))
+
+    # ------------------------------------------------------------- RAM writes
+    #
+    # The report groups by PC, because "which instruction writes this cell" is
+    # the question and a list of every write is 400 lines of the same address.
+    # It prints the frame of the FIRST and LAST write as well as the count, and
+    # it counts writes outside the window too -- a filter that hides how much it
+    # hid is how you end up believing a cell was written once when it was
+    # written four thousand times.
+    for addr in sorted(bus.ram_writes):
+        rows = bus.ram_writes[addr]
+        name = ram_watch.get(addr, f"${addr:04X}")
+        bypc: collections.Counter = collections.Counter()
+        for _f, _c, pc, _v in rows:
+            bypc[pc] += 1
+        inwin = [r for r in rows if r[0] >= args.ram_watch_window]
+        print(f"\nRAM ${addr:04X} ({name}): {len(rows)} write(s) over "
+              f"{bus.frame} frames, {len(inwin)} at frame >= "
+              f"{args.ram_watch_window}")
+        for pc, n in bypc.most_common(12):
+            ex = [(f, v) for f, _c, p2, v in rows if p2 == pc][:6]
+            vals = ", ".join(f"f{f}=${v:02X}" for f, v in ex)
+            sym = next((s for s, a in syms.items() if a == pc), "")
+            print(f"  ${pc:04X}{' ' + sym if sym else '':<12} x{n:<7} {vals}")
+        if not rows:
+            print("  never written -- check the address and whether this cell is "
+                  "reached at all before concluding anything about it")
+    if log_masks and bus.frame < len(log_masks):
+        print(f"\nWARNING: the input log holds {len(log_masks)} frames but the run "
+              f"ended after {bus.frame}. {len(log_masks) - bus.frame} frames were "
+              f"not replayed, so this is not the whole logged route.")
+    if log_masks:
+        print(f"controller: {bus.pad_reads} reads of $4016 across {bus.frame} "
+              f"frames ({bus.pad_reads / max(bus.frame, 1):.1f} per frame)")
     for k in sorted(watch):
         if k[0] != "w":
             continue

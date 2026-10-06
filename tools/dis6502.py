@@ -96,6 +96,12 @@ LITERAL: dict[int, tuple[str, str]] = {
 
 # The undocumented opcodes are listed separately so `--undoc` can include them.
 UNDOC: dict[int, tuple[str, str]] = {
+    # The six one-byte NOPs. nestrace.py hit `$1A` executing on the cartridge and
+    # stopped there as an illegal opcode, so both tables were missing them: a
+    # disassembly that calls a real instruction `.byte $1A` and a tracer that
+    # refuses to execute it are the same mistake in two places.
+    0x1A: ("nop", "imp"), 0x3A: ("nop", "imp"), 0x5A: ("nop", "imp"),
+    0x7A: ("nop", "imp"), 0xDA: ("nop", "imp"), 0xFA: ("nop", "imp"),
     0x04: ("nop", "zp"), 0x14: ("nop", "zpx"), 0x34: ("nop", "zpx"),
     0x44: ("nop", "zp"), 0x54: ("nop", "zp"), 0x64: ("nop", "zp"),
     0x74: ("nop", "zp"), 0x80: ("nop", "imm"), 0x82: ("nop", "imm"),
@@ -266,6 +272,56 @@ def read_cart(path: pathlib.Path) -> bytes:
     return body[:prg]
 
 
+# ------------------------------------------------------- PRG slot arithmetic
+#
+# A 128 KiB MMC3 PRG is eight 16 KiB banks, presented to the CPU as sixteen 8 KiB
+# slots: slots 2N and 2N+1 are the two halves of bank N. Slots 14 and 15 are the
+# FIXED window -- slot 14 at $C000-$DFFF, slot 15 at $E000-$FFFF -- and they are
+# the last 16 KiB of the file, so for the fixed window `file = cpu + $10000`.
+#
+# That identity does NOT extend below $C000, and extending it anyway is the worst
+# kind of wrong: `$8550 + $10000 = $18550` is a perfectly good file offset inside
+# slot 12, so `--from 0x8550` disassembled slot 12's bytes, labelled every one of
+# them with a $8000-window address, and printed a plausible listing. Journal 13
+# recorded the same arithmetic error in `cmpbank.py` -- `a - 0x8000` is right for
+# the $8000 window and wrong above $C000, which made a routine look like a hole
+# of zeroes. Here the hole had plausible opcodes in it, which is worse.
+#
+# So the mapping is stated once, as a table of what each 8 KiB slot IS, and
+# anything that cannot be resolved is refused instead of approximated.
+
+PRG_SLOTS = 16
+SLOT_SIZE = 0x2000
+FIXED_SLOT = 14                      # slot 14 = $C000-$DFFF, slot 15 = $E000-$FFFF
+
+
+def slot_of_file(off: int) -> int:
+    return off // SLOT_SIZE
+
+
+def slot_cpu_base(slot: int) -> int | None:
+    """The CPU address slot N appears at, or None if no slot does.
+
+    Slots 0-13 are switchable and appear at $8000 or $A000 depending on which
+    half of the pair they are; slots 14 and 15 are fixed. A slot's position in
+    the switchable window depends on a runtime bank register, so a file offset
+    in one of those slots has no single CPU address -- which is the fact the
+    old arithmetic papered over.
+    """
+    if not 0 <= slot < PRG_SLOTS:
+        return None
+    if slot >= FIXED_SLOT:
+        return 0xC000 + (slot - FIXED_SLOT) * SLOT_SIZE
+    return 0x8000 + (slot & 1) * SLOT_SIZE
+
+
+def file_of_cpu(a: int) -> int | None:
+    """CPU address -> file offset, for the FIXED window only. None otherwise."""
+    if 0xC000 <= a <= 0xFFFF:
+        return a + 0x10000
+    return None
+
+
 def selfcheck() -> int:
     """Compare this table with `asm/pds6502.py`'s, which the source relies on."""
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "asm"))
@@ -299,7 +355,15 @@ def main() -> int:
     ap.add_argument("--cart", type=pathlib.Path,
                     default=DEFAULT_CART)
     ap.add_argument("--prg", type=pathlib.Path, help="disassemble a raw PRG instead")
-    ap.add_argument("--bank", type=lambda s: int(s, 0), help="16 KiB PRG bank")
+    ap.add_argument("--bank", type=lambda s: int(s, 0),
+                    help="16 KiB PRG bank; printed as its two 8 KiB slots, each "
+                         "with the CPU window it actually runs in")
+    ap.add_argument("--slot", type=lambda s: int(s, 0),
+                    help="8 KiB PRG slot ($00-$0F). Slots 14/15 are the fixed "
+                         "$C000/$E000 windows; the rest are switchable, so the "
+                         "listing is labelled with the window they would be "
+                         "mapped into, which is only where they actually run "
+                         "when the bank register selects that slot")
     ap.add_argument("--range", help="lo:hi, both CPU addresses or file offsets")
     ap.add_argument("--from", dest="start", type=lambda s: int(s, 0),
                     help="CPU address to start at")
@@ -318,25 +382,68 @@ def main() -> int:
     else:
         prg = read_cart(args.cart)
 
-    # CPU address <-> file offset across the fixed window: file = cpu + $10000.
+    # CPU address -> file offset. ONLY the fixed window has one; see the comment
+    # on PRG_SLOTS above for why guessing the rest is worse than refusing it.
     def cpu_to_file(a: int) -> int:
-        return a + 0x10000
+        f = file_of_cpu(a)
+        if f is None:
+            sys.exit(
+                f"dis6502: ${a:04X} is not in the fixed window. A 128 KiB MMC3 PRG\n"
+                f"  presents 8 KiB slots 0-13 through the switchable $8000/$A000\n"
+                f"  windows, so a CPU address below $C000 does not name a file\n"
+                f"  offset without also naming the slot. Use --slot N (8 KiB) or\n"
+                f"  --bank N (16 KiB), or give a file offset to --range.\n"
+                f"  Extending `cpu + $10000` below $C000 reads a different slot and\n"
+                f"  labels it with this address, which looks like an answer.")
+        return f
 
     if args.range:
         lo_s, hi_s = args.range.split(":")
         lo, hi = int(lo_s, 0), int(hi_s, 0)
+        # A range is a FILE range unless both ends name the fixed window. One end
+        # in the switchable window and one in the fixed window is not a range at
+        # all, and averaging them would be nonsense.
+        if (0xC000 <= lo <= 0xFFFF) != (0xC000 <= hi <= 0xFFFF):
+            sys.exit(f"dis6502: {args.range} mixes the fixed window with the "
+                     f"switchable window; those are not contiguous in the file")
         lo = lo if lo >= 0x10000 else cpu_to_file(lo)
         hi = hi if hi >= 0x10000 else cpu_to_file(hi)
+        if not 0 <= lo <= hi <= len(prg):
+            sys.exit(f"dis6502: file range ${lo:05X}:${hi:05X} is outside the "
+                     f"{len(prg)}-byte image")
         off, ln = lo, hi - lo
     elif args.bank is not None:
         off, ln = args.bank * 0x4000, 0x4000
+    elif args.slot is not None:
+        off, ln = args.slot * SLOT_SIZE, SLOT_SIZE
     elif args.start is not None:
         off = cpu_to_file(args.start)
         ln = args.length
     else:
-        off, ln = 0x1C000, 0x4000
+        off, ln = FIXED_SLOT * SLOT_SIZE, 0x4000
 
-    base_cpu = off - 0x10000 if off >= 0x10000 else off + 0x8000
+    # The base address printed next to each line has to be the address the code
+    # really has when it runs, which for a 16 KiB bank is TWO windows: the low
+    # half is at $8000/$A000 and the high half at $C000/$E000.
+    base_cpu = (slot_cpu_base(slot_of_file(off)) if off % SLOT_SIZE == 0
+                else (off - 0x10000) & 0xFFFF)
+    if args.bank is not None:
+        # Emit the two halves with their own bases rather than one run of
+        # $8000-$BFFF labels across bytes that are not contiguous on the CPU bus.
+        for half in (0, 1):
+            hoff = off + half * SLOT_SIZE
+            hbase = slot_cpu_base(slot_of_file(hoff))
+            print(f"; bank {args.bank} slot {args.bank * 2 + half} "
+                  f"file ${hoff:05X} "
+                  + (f"= ${hbase:04X}" if hbase else "= (no fixed address)"))
+            for addr, text in disasm_block(prg[hoff:hoff + SLOT_SIZE],
+                                           (hbase or 0) & 0xFFFF, args.undoc):
+                print(f"{addr:04X}: {text}")
+        return 0
+    if base_cpu is None:
+        sys.exit(f"dis6502: file offset ${off:05X} is in 8 KiB slot "
+                 f"{slot_of_file(off)}, which has no single CPU address; "
+                 f"use --bank N")
     code = prg[off:off + ln]
     lines = disasm_block(code, base_cpu & 0xFFFF, args.undoc)
     for addr, text in lines:

@@ -95,6 +95,18 @@ OUR_MODULES: dict[str, dict] = {
                 "`titdat`, so Eurocom's own `dotitle` loads it with no change to "
                 "vendor/ at all",
     },
+    "STARTLEV.PDS": {
+        # `expect` is the build's assertion that the overlay actually changed the
+        # image, which is a different question from "did it assemble". A module
+        # that emitted its bytes and was then overwritten reports a clean build
+        # and a ROM with somebody else's value in it -- and this byte is the
+        # whole difference between entering level 1 and entering level 2. So the
+        # bytes are named here and read back out of the finished image.
+        "expect": {"stlev": "00"},
+        "note": "the level a new game starts on: X5.PDS:8's `stlev db $01` "
+                "marked `** tmp`, overlaid with the value the cartridge we "
+                "target actually ships. See STARTLEV.PDS for the measurement",
+    },
 }
 
 # Every file a macro can be defined in, ours included, so a module of ours can
@@ -1044,6 +1056,38 @@ def verify_our_scenes(asm, prg: bytearray, packed: bytes, log: list[str]) -> Non
         offs = sorted(asm.writes_by_file.get(m, ()))
         if not offs:
             log.append(f"  *** {m} emitted no bytes; nothing to verify ***")
+            continue
+        expect = OUR_MODULES[m].get("expect")
+        if expect:
+            # A data overlay, not a scene: check the finished image byte for
+            # byte against the values the manifest names, at the offsets this
+            # module is recorded as having written.
+            want = bytes.fromhex("".join(expect.values()))
+            if len(offs) != len(want):
+                raise SystemExit(
+                    f"{m}: the manifest names {len(want)} byte(s) but the module "
+                    f"wrote {len(offs)} (${offs[0]:05X}-${offs[-1]:05X}). The "
+                    f"overlay's size and its declaration have to agree; a "
+                    f"one-byte value that quietly became two is a different "
+                    f"memory layout, not a typo.")
+            for i, (symname, hexv) in enumerate(expect.items()):
+                addr = asm.sym.get(symname)
+                if addr is None:
+                    raise SystemExit(
+                        f"{m}: the manifest expects a byte at `{symname}` but the "
+                        f"build resolved no such symbol. An overlay that orgs an "
+                        f"address the vendor tree does not define would go "
+                        f"somewhere the build cannot name.")
+                off = offs[i]
+                got = prg[off]
+                if got != int(hexv, 16):
+                    raise SystemExit(
+                        f"{m}: the image holds ${got:02X} at ${addr:04X} "
+                        f"(PRG ${off:05X}) and the manifest says ${hexv.upper()}. "
+                        f"The overlay was assembled and then something wrote over "
+                        f"it, or it did not land where it says it did.")
+                log.append(f"  {m}: `${symname}` = ${addr:04X} (PRG ${off:05X}) is "
+                           f"${got:02X} in the image, as declared")
             continue
         first, last = offs[0], offs[-1]
         if first != offs[-1] - len(packed) + 1:
