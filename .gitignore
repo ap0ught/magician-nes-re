@@ -4,6 +4,21 @@ roms/
 *.unif
 *.unl
 
+# BizHawk itself: 150 MB of emulator, never ours to commit.
+#
+# This project's own copy is NOT in this repository -- it is a sibling of it, at
+# ~/code/games/magician-nes-bizhawk/BizHawk-2.11.1-linux-x64, deliberately so,
+# because sharing one install with the aibeatszelda checkout cost that project a
+# 136,526-frame verified replay (journal/14). Two checkouts sharing one emulator
+# share config.ini and NES/SaveRAM/ with no lock on either.
+#
+# So this entry is defence in depth, not the mechanism: it stops a 150 MB
+# emulator being committed here by someone who extracts a tarball into the
+# working tree instead of the sibling directory. `tools/bizhawk/bizpath.sh` is
+# the only thing that decides where the emulator is, and `make check-isolation`
+# is what proves the sibling is untouched.
+/BizHawk-*/
+
 # Generated from the submodule's binary PDS containers by tools/pds_extract.py
 pds-text/
 
@@ -24,3 +39,15 @@ out/
 # Python
 __pycache__/
 *.pyc
+
+# BizHawk capture output: screenshots contain cartridge-derived imagery and the
+# memory dumps are large and reproducible. Never committed.
+tools/bizhawk/out/
+
+# Play-harness output: every BizHawk session log, the recorded input logs, and
+# the checkpoints. The checkpoints hold framebuffer PNGs and full dumps of all
+# nine memory domains, which is cartridge-derived imagery and cartridge-derived
+# data -- exactly what `shots/` and `tools/bizhawk/out/` are already excluded for.
+# The input logs are plain button sequences, but they are large and they are
+# evidence for a particular run, so they stay out of history too.
+logs/

@@ -16,16 +16,36 @@ The cartridge is the user's own. It stays on this machine.
 
 ## The source
 
-`vendor/Magician-NES` is a git submodule pointing at Chris Shrigley's public release of the
-Eurocom source code. It is not vendored into this repository, only referenced. Shrigley's own
-terms, from the package's `_READ_ME.TXT`:
+`vendor/Magician-NES/` is **Eurocom's source code, vendored into this repository as of
+2026-10-03.** It was a git submodule until then, pointing at
+`https://github.com/ap0ught/Magician-NES.git` (itself a fork of `tkcn568/Magician-NES`), at
+commit **`bf653a407cd97e4dfdca665063f25d8b44da130a`**. That commit is recorded here so the
+vendored copy can be traced back to the exact upstream state it came from, and so a future
+re-sync has a known base.
+
+It was vendored rather than kept as a submodule because the work on this cartridge is
+modifying the source — the assembler, the build and the analysis all read it directly, and a
+submodule makes "the source we are editing" and "the source upstream has" two different things
+at the moment anyone runs a build.
+
+The files are **unmodified**. Do not edit them in place: `pds-text/` is the decoded,
+git-ignored form that the build reads, regenerated from the `.PDS` containers by
+`tools/pds_extract.py`. A change that needs to survive a re-sync belongs in the assembler, the
+build or a documented patch, not in a vendored file.
+
+Shrigley's terms, from the vendored package's own `_READ_ME.TXT`:
 
 > This package is the complete project for the NES version of Magician, released by Taxan Kaga
 > in 1991. […] You are free to play with it and do with it as you will, but you are NOT allowed
 > to make money out of it or profit in any way, shape or form.
 
-So: study, modify, redistribute the source. Do not sell it, and do not sell anything derived from
-it.
+So: study, modify, redistribute the source — which is what vendoring it does. Do not sell it,
+and do not sell anything derived from it.
+
+Shrigley asks that links point at <https://shrigley.com/source_code_archive/> rather than at
+the files directly, and that the material be kept to educational use. Both are honoured here.
+The canonical announcement of the package is that page; the vendored copy came from the
+Internet Archive mirror `shrigleysource`, which is where it was retrieved from.
 
 ## Derived work in this repository
 
