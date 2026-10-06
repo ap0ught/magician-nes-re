@@ -56,6 +56,19 @@ BIZ="$MAGICIAN_BIZHAWK_DIR"
 
 [ -f "$ROM" ] || { echo "no rebuilt ROM at $ROM -- run 'make rom' first" >&2; exit 1; }
 
+# ABSOLUTE, before anything launches. `EmuHawkMono.sh` does
+# `cd "$(dirname "$(realpath "$0")")"`, so a relative ROM path resolves against
+# BizHawk's own directory, the file never opens, and BizHawk comes up on a
+# different core while this script goes on to report what it found. This is the
+# same trap run.sh documents for the relative-path NullHawk fallback, and
+# `make probe` had it: the rebuilt ROM arrived as the relative string
+# `asm/out/magician-rebuilt.nes`, which `$BIZ/asm/out/` does not contain.
+#
+# The cartridge argument is absolute by default (tools/cartref.py prints an
+# absolute path) but a caller may pass a relative one, so both are resolved.
+ROM="$(readlink -f "$ROM")"
+CART="$(readlink -f "$CART")"
+
 export LD_LIBRARY_PATH="$BIZ/dll:$BIZ:/usr/lib"
 export MONO_WINFORMS_XIM_STYLE=disabled
 
