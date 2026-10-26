@@ -1,0 +1,76 @@
+;   Aggression predicate — second piece of the shared drawing layer.
+;
+;   Issue #3 draws health bars for the *aggressive* enemies, so the layer needs
+;   one shared answer to "is this object attacking?", and it must read the same
+;   fields the game reads, in the same way, or the health bars will name a
+;   different set of objects than the game's own combat does.
+;
+;   Measured where the game itself defines aggression (Beta 1 source):
+;
+;     * The per-type table obchars (MISC.SRC:1425, at $D90D in this build)
+;       names all 44 object types through the `c` macro. Its field comments
+;       (MISC.SRC:1405-1424) define exactly the agression axis that issue #3
+;       needs: `oc_attak equ 3 ;interact : "he/she ignores you." cnt=0:attack`
+;       — and the types that carry oc_attak are the monsters (mushroom,
+;       troll, spectre, monk, winged serpent, werebat, venworm, skeleton,
+;       spider, stoneman, rat, fire elemental, demon, abadon, statue), while
+;       people (boatman, beggar, wise man, ...) carry oc_noone/oc_ignor/
+;       oc_inter and things carry oc_noone.
+;     * At activation the game copies that byte into the live field: actob
+;       (X6.PDS:516-549) does `lda obchars,y : sta obchr,x` (X6.PDS:522-523),
+;       Y=type. So obchr IS obchars[type], made mutable — the game then edits
+;       it per instance (e.g. `eor #%00001100` "set to always ignore",
+;       X4.PDS:373-374; bullets explode/damage, X2.PDS:269-271).
+;     * obtyp is X0.PDS:542's `zp obtyp,maxob ;type/active flag`. Bit 7 SET
+;       means the object is deleted/unused: X1.PDS:45-46 wipes the table with
+;       `sec / ror obtyp,x` (carry in = bit 7 set), and every active test in
+;       the tree reads it the same way — `ldy obtyp,x : bpl` at X3.PDS:182,
+;       X4.PDS:52, X4.PDS:314, X6.PDS:516.
+;     * obchr is X0.PDS:552's `zp obchr,maxob ;characteristics`, laid out by
+;       the `c` macro at X0.PDS:165-168: `@1` physical/ethereal in bit 7, `@2`
+;       searchability in bit 6, `@3` physical bullet action in bits 5-4, `@4`
+;       attack/interact CONTROL in bits 3-2, `@5` the inter/attack COUNT in
+;       bits 1-0.
+;     * The interaction handler consumes those two fields together
+;       (X4.PDS:353-357): `and #$03` reads the count, then
+;       `lsr / lsr / and #$03` reads the control, and pages through exactly
+;       four cases — X4.PDS:359 "0=always no one there", 1 "always he/she
+;       ignores you", 2 "interact if cnt=0 else he/she ignores you", 3
+;       (X4.PDS:403) "attack if cnt=0 else he/she ignores you", where 3+cnt=0
+;       sets the object's event flag to PERMANENT ATTACK (X4.PDS:404).
+;
+;   So an object is aggressive exactly when it is active AND its obchr control
+;   is 3 AND its count has run out. That is this router's own branch, copied
+;   from the game's, not a re-derivation.
+;
+;   obmod is measured and deliberately NOT in the predicate: X4.PDS:101 routes
+;   by mode value into movement/animation handlers (`dw jumping,falling,...` at
+;   X4.PDS:247-248), and none of the m_* equates (X4.PDS:234-244) says
+;   anything about hostility — a m_walk skeleton is as hostile as a m_walk
+;   barbarian, per obchr, while the per-object m_* handlers get their drive
+;   from event flags and animation timings. Journal 18's open question
+;   "obmod vs obstat" is answered the same way: neither carries it; obchr
+;   does.
+;
+;   IN:  X = object index, 0..maxob-1 (caller's job to keep in range)
+;   OUT: A = 1 if the object is aggressive toward the player right now,
+;        0 if not. X and Y preserved. N/V/C reflect A as per `lda #`.
+;   USES: A only
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $fb0a
+obaggro  lda obtyp,x
+        bmi obaggro_no
+        lda obchr,x
+        and #$0c
+        cmp #$0c
+        bne obaggro_no
+        lda obchr,x
+        and #$03
+        bne obaggro_no
+        lda #$01
+        rts
+obaggro_no
+        lda #$00
+        rts

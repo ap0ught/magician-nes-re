@@ -107,6 +107,23 @@ OUR_MODULES: dict[str, dict] = {
                 "marked `** tmp`, overlaid with the value the cartridge we "
                 "target actually ships. See STARTLEV.PDS for the measurement",
     },
+    "AGGRO.PDS": {
+        "slot": 15,
+        "origin": 0xFB0A,
+        # The same expect readback as DRAW.PDS: the placed 27 bytes must be in
+        # the final image. Placed directly behind DRAW.PDS inside the same
+        # measured Beta 1 $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 =
+        # 38 used, $FB23-$FB7F pad left between ours and SAM.SAM's first byte
+        # at $FB80.
+        "expect_bytes": "BD F4 04 30 13 BD 30 05 29 0C C9 0C D0 0A BD 30 05 29 03 "
+                        "D0 03 A9 01 60 A9 00 60",
+        "entry": "obaggro",
+        "expect_cpu": 0xFB0A,
+        "note": "issue #3 aggression predicate: obtyp active bit + obchr "
+                "attack-control(=3)/attack-count(=0), the interaction "
+                "handler's own branch, as a callable the drawing layer can "
+                "ask for 'is object X attacking?'",
+    },
     "DRAW.PDS": {
         "slot": 15,
         "origin": 0xFAFF,
