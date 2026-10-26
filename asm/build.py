@@ -1362,6 +1362,7 @@ def build_chr(cart_chr: bytes, verbose: bool) -> tuple[bytearray, list[str]]:
         entries.append((dat_file(name), None))
     for bank in range(SPRITE_FIRST, SPRITE_LAST + 1):
         entries.append((dat_file(f"SPR/BANK{bank:02X}.DAT"), None))
+    entries.append((dat_file("IN.CHR"), None))
 
     log: list[str] = []
     cursor = 0

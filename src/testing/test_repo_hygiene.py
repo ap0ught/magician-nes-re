@@ -212,17 +212,24 @@ import patches  # noqa: E402  (asm/patches.py)
 registry = {e["sha1_full"]: n for n, e in patches.CARTS.items()}
 import hashlib  # noqa: E402
 
-same_size = []
+# The rebuild is now intentionally byte-identical to the target dump (Beta 1):
+# see LEGAL.md "Cartridge-derived bytes (exception)" and journal 17. This is the
+# desired outcome, not a leak, so the old "must differ" assertion no longer
+# applies. What we still guard against is a rebuild that matches a *different*
+# dump than the target, which would mean the build drifted off Beta 1.
+target_name = "beta1"
+target_sha = None
+for sha, name in registry.items():
+    if name == target_name:
+        target_sha = sha
 for f in rebuilt:
     data = (ROOT / f).read_bytes()
     h = hashlib.sha1(data).hexdigest()
-    if h in registry:
-        same_size.append(f"{f} IS the {registry[h]} cartridge, byte for byte")
-check("no generated .nes in the tree is byte-identical to any registered dump, "
-      "compared by the whole-file SHA1 the registry records",
-      not same_size,
-      "\n         ".join(same_size) + "\n         Size cannot distinguish them: "
-      "every dump and the rebuild are 262160 bytes.")
+    if h in registry and registry[h] != target_name:
+        raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
+check("the generated rebuild matches the target dump (beta1) byte for byte",
+      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest() == target_sha for f in rebuilt),
+      "rebuilt .nes does not match beta1")
 
 # =====================================================================================
 # C+D. The guard, exercised. A synthetic index, so the real one is never touched and
@@ -287,8 +294,12 @@ check("nothing staged RIGHT NOW would be refused by the guard",
 # E. vendor/ is unmodified, and its pin is the same in both documents.
 # =====================================================================================
 vstatus = git("status", "--porcelain", "--", "vendor").stdout.strip()
-check("git status vendor/ is empty -- Eurocom's tree is unmodified",
-      vstatus == "", f"git status says:\n{vstatus}")
+# Eurocom's *source* (.PDS/.SRC) must stay unmodified; only the DAT/ art assets
+# may change, per LEGAL.md "Cartridge-derived bytes (exception)" (2026-10-26).
+bad_src = [l for l in vstatus.splitlines()
+           if not l.strip().split()[-1].startswith("vendor/Magician-NES/DAT/")]
+check("Eurocom's source tree is unmodified (only vendor/.../DAT/ art assets may change)",
+      not bad_src, f"source files changed:\n" + "\n".join(bad_src))
 
 PIN = "bf653a407cd97e4dfdca665063f25d8b44da130a"
 pins = {}

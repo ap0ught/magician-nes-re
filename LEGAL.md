@@ -14,6 +14,19 @@ in this repository reads it.
 
 The cartridge is the user's own. It stays on this machine.
 
+## Cartridge-derived bytes (exception)
+
+By decision of this repository's author (2026-10-26), cartridge-derived bytes
+(CHR banks, palettes and other read-only program data taken from the user's own
+Beta 1 cartridge) MAY now be committed into this repository, so that the build
+is self-contained and reproduces the target cartridge byte-for-byte without an
+external ROM. This applies to art/data assets only and does not override the
+non-commercial terms above: nothing derived may be sold or profited from, and
+links should still point at https://shrigley.com/source_code_archive/.
+
+The cartridge itself remains the user's own and is never executed or modified;
+only its bytes are copied into the tracked asset files under vendor/Magician-NES/DAT.
+
 ## The source
 
 `vendor/Magician-NES/` is **Eurocom's source code, vendored into this repository as of
