@@ -1,0 +1,63 @@
+;   Health scale rasterizer — third piece of the shared drawing layer (issue #3).
+;
+;   obaggro answers "is this object aggressive right now?"; a health bar also
+;   needs to know how much health to draw, on a scale the game itself defines.
+;   Measured where the game itself stores and spends health (Beta 1 source):
+;
+;     * `obhel` is one byte per object at $0524 (X0.PDS:550,
+;       `zp obhel,maxob ;health`; asm/out/mag.sym: `obhel = $0524`).
+;     * ACTIVATION SETS $FF FOR EVERY OBJECT. actob (X6.PDS:538-539) does
+;       `lda #$ff / sta obhel,x ;start with maximum health` — objects are
+;       activated by slot type, enemies included, so a fresh monster starts
+;       at $FF exactly like the player. A level reboot re-writes it the same
+;       way for the player: X7.PDS:261 `dex / stx obhel+pi ;max health`
+;       (X=$FF after the `dex`).
+;     * THERE IS NO PER-TYPE HEALTH TABLE. The obchars table (MISC.SRC:1425,
+;       the 44 `c` rows) and its field equates (MISC.SRC:1405-1424) carry
+;       physical/ethereal, searchable, bullet action, interact/attack control
+;       and the inter/attack count — no health field anywhere. All health that
+;       exists is the same 0-$FF byte for everything.
+;     * $FF IS MAXIMUM, NOT "FULL + OVERFLOW". `heal` (MISC.SRC:155-161)
+;       adds a signed amount to obhel+pi with carry cleared and clamps the
+;       result at $FF (`bcc !a / lda #$ff`) — the only upward writer, and it
+;       treats 255 as a hard ceiling. The init comments say the same thing in
+;       Eurocom's own words ("maximum health" / "max health").
+;     * COMBAT WRITES ARE ALL `harm` (MISC.SRC:9+), one signed amount on
+;       A against one object's byte:
+;         player path  — `adc obhel+pi` (MISC.SRC:15), carry-out means dead
+;         (MISC.SRC:16-18 `bcs !a / lda #$00 ;dead`), then the message bands
+;         at $AC/$57/$01 (MISC.SRC:20-24, 172..255 / 87..171 / 1..85);
+;         enemy path   — `adc obhel,x` (MISC.SRC:43), no-carry (underflow
+;         past 0) means killob (MISC.SRC:44), else the result stored.
+;       `harm`'s callers in the combat chain write no other byte: the venom
+;       tick (X4.PDS:94, `jsr harm` guarded by `lda obhel,x` at X4.PDS:91
+;       "don't handle venom if ob is already dying"), the bullet hit
+;       (x3.pds:763 `lda #-32` then harm), and the energy-drain charm
+;       (X4.PDS:899-903). `killob` (MISC.SRC:81) and `killplr`
+;       (MISC.SRC:120) only ever write 0. Nothing else writes obhel, so
+;       combat only ever lowers a health byte, and losing health is what
+;       turns a monster into a permanent attacker (MISC.SRC:46-53
+;       `ora #%00001100` to obchr — the same field obaggro reads).
+;     * THE DISPLAY SCALE THE GAME DEFINES IS /32. `helind` (X6.PDS:33-39)
+;       turns the player's health byte into a message index by five `lsr`
+;       instructions — `health rating = health / 32`, giving 0..7 — and that
+;       divisor is the only scale the game ever defines on obhel. This
+;       rasterizer reuses exactly that shift, so a health bar drawn from it
+;       is expressed in the game's own units: obhel $FF renders as 7 of 8
+;       tiles, 0 renders as none.
+;
+;   IN:  X = object index, 0..maxob-1 (caller's job to keep in range)
+;   OUT: A = bar length in tiles on the game's own /32 scale, obhel/32 (0..7).
+;        X and Y preserved. N/V/C reflect A as per the last `lsr`.
+;   USES: A only
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $fb25
+obhbar  lda obhel,x
+        lsr a
+        lsr a
+        lsr a
+        lsr a
+        lsr a
+        rts

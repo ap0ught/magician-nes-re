@@ -152,3 +152,79 @@ in the built image, which is exactly what tests 12-13 of test_aggression do.
 - Max health scale measurement (`obhel` 16x).
 - Weakness icon source (`obchr` or per-type table).
 - Spell slot 27 wiring, four tiers, HUD integration.
+
+## Iteration 4 — 2026-10-26: the health scale, measured then encoded
+
+The measurement ("max health scale measurement, obhel 16x"), taken from the
+Beta 1 source before any byte was written:
+
+- `obhel` is one byte per object at $0524 (X0.PDS:550
+  `zp obhel,maxob ;health`; asm/out/mag.sym confirms `obhel = $0524`).
+- **$FF is maximum, not "full + overflow".** Three independent pieces of
+  evidence: actob (X6.PDS:538-539) inits EVERY object's obhel to $FF with
+  Eurocom's own comment "start with maximum health" — enemies included, since
+  objects are activated to `obhel` by slot type, not per-player; `heal`
+  (MISC.SRC:155-161) does `clc / adc obhel+pi / bcc !a / lda #$ff` and
+  clamps at $FF, the only upward writer; X7.PDS:261 re-inits the player
+  `dex / stx obhel+pi ;max health`.
+- **There is no per-type health table.** The 44-row `obchars` table
+  (MISC.SRC:1425) and its field equates (MISC.SRC:1405-1424) carry only
+  physical/ethereal, searchable, bullet action, interact/attack control and
+  inter/attack count — no health field. Every object that exists has the same
+  0..$FF scale.
+- **Combat writes all go through `harm` (MISC.SRC:9+)**, one signed amount:
+  the enemy path is `!d / adc obhel,x / bcc killob ;not dead / sta obhel,x`
+  (MISC.SRC:43-45) — underflow past 0 kills, no clamp at the top (correct,
+  since combat only lowers health), and losing health turns a monster into a
+  PERMANENT attacker (`ora #%00001100` to obchr, MISC.SRC:46-53 — the very
+  field obaggro reads). Callers: the venom tick (X4.PDS:91-94, guarded by
+  `lda obhel,x ;don't handle venom if ob is already dying`), the bullet hit
+  (x3.pds:763, `lda #-32` then harm), the energy-drain charm (X4.PDS:899-903).
+  `killob` (MISC.SRC:81) and `killplr` (MISC.SRC:120) write only 0. Full grep
+  of obhel across pds-text/ verifies: those are all the writes.
+- **The display scale the game defines is /32.** `helind` (X6.PDS:33-39)
+  turns health into a message index by five `lsr` instructions
+  ("health rating = health / 32", 0..7). That divisor is the only scale the
+  game defines on obhel, so it is the scale the bar uses.
+
+Implemented (the smallest piece the measurement supports):
+
+- `src/magician/HEALTH.PDS` — `obhbar` — at **$FB25**, 9 bytes
+  (`BD 24 05 4A 4A 4A 4A 4A 60`), directly behind AGGRO.PDS. X = object
+  index in, A = obhel/32 (0..7) out, by the game's own helind divisor, so a
+  bar is drawn in the game's own units ($FF renders 7 of 8 tiles, 0 none).
+- `asm/build.py`: `HEALTH.PDS` in OUR-modules manifest (slot 15, origin
+  $FB25, `expect_bytes`/`expect_cpu`/entry, note).
+- `src/testing/test_health_scale.py` — 16 checks: manifest/placement/bytes/
+  disassembly as in test_aggression; the measurement's load-bearing source
+  facts re-checked from vendor/ by regex (X6 init, heal clamp, harm enemy
+  path, 44-row table with no health field); and the placed code EXECUTED in
+  tools/nestrace.py's 6502 core — a bar-boundary sweep of 15 named health
+  values (0, 1, 31..33, 63/64, 86/87, 127, 171/172, 223, 254/255 — helind's
+  /32 boundaries) plus 8 random samples, each run against `obhel=h //32`,
+  and the game's own harm message bands (MISC.SRC:20-24) rendered and
+  compared to what helind's divisor gives.
+
+Match accounting, WITH DRAW + AGGRO + HEALTH in the build:
+
+|                 | after iter 3   | after iter 4    |
+|-----------------|---------------:|----------------:|
+| cmpbank bank    | 131034/131072  | 131025/131072   |
+| differ vs Beta1 | 38 bytes $FAFF-$FB24 | 47 bytes $1FAFF-$1FB2D |
+| distinguishes   | drawfill + obaggro | + obhbar (obhel/32) |
+
+A byte-exact sweep of PRG offsets confirms every differing byte against
+Beta 1 lies in $1FAFF-$1FB2D — the contiguous placed window, nothing outside
+it. Ledger byte count 38 → 47; the fixed-window $FF run has 129 - 47 = **82
+bytes** left, ending $FB2E.
+
+- `src/testing/test_repo_hygiene.py`: derived sha gate aff6e610... →
+  65d86b4b..., as the ledger requires.
+
+All gates green after the change: make (262,160-byte .nes), cmpbank bank
+(38 differ bytes → 47, all ours), make check-py 26 files/26 pass (296 checks
+or more), make guard clean, titletest PASS (6 checks).
+
+Remaining for health-bar feature:
+- Weakness icon source (obchr or per-type table).
+- Spell slot 27 wiring, four tiers, HUD integration.

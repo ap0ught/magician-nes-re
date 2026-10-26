@@ -124,6 +124,22 @@ OUR_MODULES: dict[str, dict] = {
                 "handler's own branch, as a callable the drawing layer can "
                 "ask for 'is object X attacking?'",
     },
+    "HEALTH.PDS": {
+        "slot": 15,
+        "origin": 0xFB25,
+        # The same expect readback as AGGRO.PDS: the placed 9 bytes must be in
+        # the final image. Placed directly behind AGGRO.PDS inside the same
+        # measured Beta 1 $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 +
+        # 9 = 47 used, $FB2E-$FB7F pad left between ours and SAM.SAM's first
+        # byte at $FB80. (`lda obhel,x` is BD 24 05: obhel = $0524, per
+        # X0.PDS:550 and asm/out/mag.sym.)
+        "expect_bytes": "BD 24 05 4A 4A 4A 4A 4A 60",
+        "entry": "obhbar",
+        "expect_cpu": 0xFB25,
+        "note": "issue #3 health scale rasterizer: obhel/32 by five lsrs, "
+                "the game's own helind divisor (X6.PDS:33-39), so a health "
+                "bar is drawn in the game's own units (obhel $FF = 7 of 8)",
+    },
     "DRAW.PDS": {
         "slot": 15,
         "origin": 0xFAFF,
