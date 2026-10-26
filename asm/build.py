@@ -110,6 +110,25 @@ OUR_MODULES: dict[str, dict] = {
     "DRAW.PDS": {
         "slot": 15,
         "origin": 0xFAFF,
+        # The build's own readback: the placed code must be FINALLY in the
+        # image, byte for byte, in this order, contiguous, at the entry symbol
+        # the assembler resolved. This is STARTLEV.PDS's `expect` idea extended
+        # to a code module: assembly reporting "11 bytes written" is not the
+        # same fact as "the image carries the code" -- when the assemble order
+        # was wrong (our_modules() sorted DRAW.PDS in front of SLOT15.PDS) the
+        # writes happened and the image still read $FF.
+        #
+        # Measured against Beta 1 (this build's target): $FAFF-$FB7F is the
+        # cartridge's own end-of-code padding, all $FF (X7.PDS:1716-1719 pads
+        # the same range with $00 in a build where X7's `ds` runs after ours;
+        # here SLOT15.PDS recreates it from the dump first, and this module's
+        # 11 bytes replace 11 of those padding bytes). Our bytes differ from
+        # the dump there, so the PRG identical count is 131072 - 11 = 131061
+        # and cmpbank.py's `differ` run names exactly this range. Everything
+        # else must stay byte-identical.
+        "expect_bytes": "E0 00 F0 06 8D 07 20 CA D0 FA 60",
+        "entry": "drawfill",
+        "expect_cpu": 0xFAFF,
         "note": "shared drawing layer scaffold: horizontal fill primitive "
                 "(A=tile, X=count) writing to $2007, for enemy health bars and "
                 "the status HUD",
@@ -209,9 +228,39 @@ def check_our_manifest() -> list[str]:
     return problems
 
 
+# Which of our modules recreate a whole 8 KiB slot from the Beta 1 dump rather
+# than add to it. This is an assembly-ORDER rule, not a classification of
+# content: a SLOTx.PDS recreate writes every byte of its slot, so any module of
+# ours that is placed inside that slot has to be assembled *after* the recreate,
+# or the recreate erases it and the module silently vanishes from the image.
+#
+# That is not hypothetical. DRAW.PDS was placed at origin $FAFF in slot 15 and
+# the build reported 11 byte(s) written there -- while the finished image still
+# read $FF at every one of those offsets, because `our_modules()` sorted
+# `DRAW.PDS` alphabetically in front of `SLOT15.PDS`, which then overwrote the
+# whole slot with the Beta 1 bytes. `cmpbank.py bank` kept printing 131072/131072
+# identical, because both images carry Beta 1's own $FF padding at that
+# address: a 100.00% match over a module that was not in the ROM.
+# verify_our_scenes() caught the residue ("wrote 11 byte(s) that are not the
+# scene we packed"), but nothing failed on it until the expect readback below.
+OUR_SLOT_RECREATES = frozenset(f"SLOT{i}.PDS" for i in range(16))
+
+
 def our_modules() -> list[str]:
-    """Our module names, in assembly order, verified against what is on disk."""
-    return sorted(OUR_MODULES)
+    """Our module names, in assembly order, verified against what is on disk.
+
+    The order is the role rule above: the slot recreates go first, then
+    everything that deliberately adds to what they wrote. Both halves are
+    name-sorted inside themselves, and STARTLEV.PDS/TITLE.SRC keep the order
+    they have always had (they sort after every SLOT name either way).
+    """
+    missing = OUR_SLOT_RECREATES - set(OUR_MODULES)
+    if missing:
+        raise SystemExit(f"OUR_SLOT_RECREATES names module(s) the manifest does "
+                         f"not know: {', '.join(sorted(missing))}")
+    recreates = sorted(n for n in OUR_MODULES if n in OUR_SLOT_RECREATES)
+    overlays = sorted(n for n in OUR_MODULES if n not in OUR_SLOT_RECREATES)
+    return recreates + overlays
 
 # ---------------------------------------------------------------------------
 # The bank map, and what is known about each module's slot.
@@ -1200,6 +1249,53 @@ def verify_our_scenes(asm, prg: bytearray, packed: bytes, log: list[str]) -> Non
         offs = sorted(asm.writes_by_file.get(m, ()))
         if not offs:
             log.append(f"  *** {m} emitted no bytes; nothing to verify ***")
+            continue
+        expect_bytes = OUR_MODULES[m].get("expect_bytes")
+        if expect_bytes:
+            # A placed code module, not an overlay label and not a scene: read
+            # the finished image back at the offsets this module is recorded as
+            # having written and demand the manifest's code, contiguous and in
+            # order. Anything that overwrote the placement after assembly --
+            # another of our modules, a recreate, an overlay in the wrong
+            # order -- fails here instead of shipping a ROM that never held
+            # the code.
+            want = bytes.fromhex(expect_bytes.replace(" ", ""))
+            first, last_off = offs[0], offs[-1]
+            if len(offs) != len(want) or last_off != first + len(want) - 1:
+                raise SystemExit(
+                    f"{m}: the manifest's expect_bytes is {len(want)} byte(s) but "
+                    f"the module wrote {len(offs)} (${first:05X}-${last_off:05X}), "
+                    f"which is not a contiguous run of that length. A hole or a "
+                    f"non-contiguous write is a different placement, not a "
+                    f"typo.")
+            entry = OUR_MODULES[m].get("entry")
+            expect_cpu = OUR_MODULES[m].get("expect_cpu")
+            if entry is not None:
+                resolved = asm.sym.get(entry)
+                if resolved is None:
+                    raise SystemExit(
+                        f"{m}: the manifest names entry `{entry}` but the build "
+                        f"resolved no such symbol.")
+                if expect_cpu is not None and resolved != expect_cpu:
+                    raise SystemExit(
+                        f"{m}: `{entry}` resolved to ${resolved:04X} and the "
+                        f"manifest says ${expect_cpu:04X}. The module's entry "
+                        f"point did not land where the manifest records it.")
+            got = bytes(prg[first:first + len(want)])
+            cpu_of_first = first - 0x10000 if first >= 0x10000 else None
+            cpu_txt = (f" (CPU ${cpu_of_first:04X})" if cpu_of_first is not None
+                       else "")
+            if got != want:
+                raise SystemExit(
+                    f"{m}: the image at PRG ${first:05X}{cpu_txt} holds "
+                    f"{got.hex(' ').upper()} and the manifest says "
+                    f"{want.hex(' ').upper()}. The module assembled and then "
+                    f"something overwrote it -- check the order our modules "
+                    f"are assembled in.")
+            addr = asm.sym.get(entry) if entry is not None else None
+            sym_txt = (f", `{entry}` at ${addr:04X}" if addr is not None else "")
+            log.append(f"  {m}: {len(want)} byte(s) at PRG ${first:05X}{cpu_txt}"
+                       f" are the module's code as declared{sym_txt}")
             continue
         expect = OUR_MODULES[m].get("expect")
         if expect:

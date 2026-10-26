@@ -212,11 +212,23 @@ import patches  # noqa: E402  (asm/patches.py)
 registry = {e["sha1_full"]: n for n, e in patches.CARTS.items()}
 import hashlib  # noqa: E402
 
-# The rebuild is now intentionally byte-identical to the target dump (Beta 1):
-# see LEGAL.md "Cartridge-derived bytes (exception)" and journal 17. This is the
-# desired outcome, not a leak, so the old "must differ" assertion no longer
-# applies. What we still guard against is a rebuild that matches a *different*
-# dump than the target, which would mean the build drifted off Beta 1.
+# The rebuild is now intentionally byte-identical to the target dump (Beta 1)
+# EXCEPT the deliberate bytes our own modules place into it: see LEGAL.md
+# "Cartridge-derived bytes (exception)", journal 17, and journal 18's
+# iteration 2 (DRAW.PDS at $FAFF, 11 bytes). Each deliberate change is recorded
+# in asm/build.py:OUR_MODULES with an expect readback, and the image here is
+# what the build --Beta 1 targeted-- produces. The identity assertion is
+# therefore against the sha of THAT build, a derived constant, not a dump in
+# the registry:
+#
+#   sha1(asm/out/magician-rebuilt.nes) after the 2026-10-26 honest placement
+#   check = 7ca9428b... (the constant below); it must be re-measured and
+#   updated together with OUR_MODULES whenever a placement changes on purpose.
+#
+# The guard against drift stays: the rebuild must never equal the sha of a
+# dump it is not supposed to be. A rebuild equal to beta1 whole-file would now
+# mean our code silently vanished from the ROM again, which is the failure the
+# per-byte placement checks exist for.
 target_name = "beta1"
 target_sha = None
 for sha, name in registry.items():
@@ -227,9 +239,13 @@ for f in rebuilt:
     h = hashlib.sha1(data).hexdigest()
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
-check("the generated rebuild matches the target dump (beta1) byte for byte",
-      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest() == target_sha for f in rebuilt),
-      "rebuilt .nes does not match beta1")
+# Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "7ca9428b5aac952017224e9e09bafc629601280e"
+check("the generated rebuild matches Beta 1 except the placed bytes recorded "
+      "in OUR_MODULES (derived sha, journal 18 iteration 2)",
+      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
+          == REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 for f in rebuilt),
+      "rebuilt .nes does not match the derived Beta-1-except-placements sha")
 
 # =====================================================================================
 # C+D. The guard, exercised. A synthetic index, so the real one is never touched and
