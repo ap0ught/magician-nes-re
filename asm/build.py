@@ -95,6 +95,10 @@ OUR_MODULES: dict[str, dict] = {
                 "`titdat`, so Eurocom's own `dotitle` loads it with no change to "
                 "vendor/ at all",
     },
+    "PULTAB.PDS": {
+        "note": "our pultab: drops the duplicate pulse-colour row Eurocom's source "
+                "carries that the target cartridge does not, so X6 fits the slot",
+    },
     "STARTLEV.PDS": {
         # `expect` is the build's assertion that the overlay actually changed the
         # image, which is a different question from "did it assemble". A module
