@@ -227,10 +227,66 @@ try:
           "before the write and compared them, which is check 12 again with extra "
           "steps",
           f"rc={r4.returncode}")
+
+    # --- 13b: EVERY WORD AFTER `--` IS THE COMMAND.
+    #
+    # isolation.sh did `CMD="${2:?-- needs a command}"`, which took ONE argument
+    # after `--`. Every example in its header quotes the command, so the
+    # documented form worked and the bug was invisible -- until it was used the
+    # obvious way:
+    #
+    #     tools/isolation.sh <sibling> -- bash tools/bizhawk/run.sh ...
+    #
+    # which ran bare `bash`, exited 0, and printed
+    #
+    #     ---- running: bash
+    #     ---- command exited 0
+    #     OK -- .../BizHawk-2.11.1-win-x64 is byte-for-byte and mtime-for-mtime unchanged.
+    #
+    # BizHawk never started. No log file was created. The project's proof of
+    # isolation reported a perfect result for a run that did not happen, and it is
+    # the worst failure this tool can have: a guard that passes because it
+    # executed nothing.
+    #
+    # So the assertion is the SIDE EFFECT, not the exit code. The directory is
+    # unchanged whether or not the command ran, so "exit 0 and unchanged" passes
+    # either way and proves nothing. `touch` is used because it is a real command
+    # whose effect is a file, with no quoting to get wrong.
+    marker = watched / "ran.txt"
+    r = iso("--", "touch", str(marker))
+    check(marker.exists(),
+          "check 13b: an UNQUOTED multi-word command after `--` is captured whole "
+          "-- here three words, the last naming a file that must appear. The "
+          "assertion is the file, not the exit code: the watched directory is "
+          "unchanged either way, so exit 0 would pass even if only `touch` had "
+          "been run and the rest dropped. A version that captured one word still "
+          "exits 0 and still says unchanged",
+          f"rc={r.returncode} marker_exists={marker.exists()}\n"
+          f"{r.stdout}{r.stderr}")
+    if marker.exists():
+        marker.unlink()
+
+    # ...and the quoted single-argument form must still work identically, because
+    # that is the form the header documents and the other checks here use.
+    r = iso("--", f"touch {marker}")
+    check(marker.exists(),
+          "check 13c: the QUOTED single-argument form (`-- 'cmd arg'`) still "
+          "works, since joining the words changes nothing when there is only one",
+          f"rc={r.returncode}\n{r.stdout}{r.stderr}")
+    if marker.exists():
+        marker.unlink()
+
+    # `--` with nothing after it must NOT be treated as an empty command and
+    # compared against itself.
+    r = iso("--")
+    check(r.returncode == 2 and "no command" in (r.stdout + r.stderr),
+          "check 13d: `--` with NO command after it is exit 2 and says so. An "
+          "empty command would compare a directory against itself and report OK, "
+          "which is check 3 passing for the wrong reason",
+          f"rc={r.returncode}\n{r.stdout}{r.stderr}")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-# ================================ 14: no pattern-based process kill, anywhere
 # The incident was a `pkill`. `pkill -f PATTERN` matches its own command line,
 # which is why this project's own rule is "kill by PID, and read /proc/<pid>/comm
 # first". Comments are stripped, so the tools that warn against `pkill` are not

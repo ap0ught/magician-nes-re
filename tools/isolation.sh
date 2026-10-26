@@ -102,8 +102,34 @@ BEFORE=""
 AFTER=""
 CMD=""
 if [ "${1:-}" = "--" ]; then
-  CMD="${2:?-- needs a command}"
-  shift 2
+  shift
+  # EVERY remaining word is the command, not just the first.
+  #
+  # This was `${2:?-- needs a command}`, which took ONE argument after `--`. The
+  # header's own examples all quote the command (`-- 'make probe'`), so the
+  # documented form worked and nobody noticed -- but the unquoted form
+  # `-- make probe` silently ran bare `bash`, which exits 0 immediately.
+  #
+  # MEASURED, and this is the worst class of bug this tool can have: bracketing
+  # `bash tools/bizhawk/run.sh ... ` that way printed
+  #     ---- running: bash
+  #     ---- command exited 0
+  #     OK -- .../BizHawk-2.11.1-win-x64 is byte-for-byte and mtime-for-mtime unchanged.
+  # BizHawk never started, no log file was created, and the tool reported a
+  # perfect isolation result for a run that did not happen. A guard that passes
+  # because it executed nothing is worse than no guard, and this one is the
+  # proof of isolation for the whole project.
+  #
+  # `"$*"` keeps the quoted single-argument form working identically (it is one
+  # word, so joining changes nothing) and makes the unquoted form work instead
+  # of lying.
+  if [ "$#" -eq 0 ]; then
+    echo "isolation.sh: FAIL -- '--' was given with no command after it." >&2
+    echo "  Exiting 2 without comparing, rather than reporting OK on a command" >&2
+    echo "  that never ran." >&2
+    exit 2
+  fi
+  CMD="$*"
 elif [ -n "${ISOLATE_CMD:-}" ]; then
   CMD="$ISOLATE_CMD"
 fi

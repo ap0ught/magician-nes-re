@@ -6,8 +6,8 @@ A shared helper for two checks that answer the same question at two scopes:
 
 THE QUESTION, PRECISELY
 -----------------------
-`aibeatszelda` appears in 69 files of this repository and almost none of them are
-a problem. Three different things share one string:
+`aibeatszelda` appears in **75** files of this repository and none of them are
+a dependency. Three different things share one string:
 
   1. **DEPENDENCY.** A default path, an import, or a symlink that makes this
      project run out of another project's files. THIS is what must be zero. It is
@@ -19,6 +19,29 @@ a problem. Three different things share one string:
      None of it is to be scrubbed; this project values knowing where a thing came
      from.
   3. **HISTORY.** `logs/` is a truthful record of what ran where. Never edited.
+
+**MEASURED 2026-10-06: category 1 is empty.** `find_dependency_hits()` returns 0
+hits, and has since this project's own BizHawk copy existed. The number is not
+argued from the default having been changed; it is the output of the function
+below, which `test_bizpath.py` and `test_repo_hygiene.py` both assert is zero.
+
+What is *still* true, and is why the check stays:
+
+  * The sibling's directory is still **physically present** and still holds four
+    files this project wrote into it before the copy existed -- two savestates
+    under `NES/State/`, named `magician-rebuilt...` and `Magician (USA) (Beta 1)
+    ...`, plus whatever the sibling's own runs left. They are **evidence and are
+    deliberately not deleted**; their sizes, mtimes and sha256 are recorded in
+    `journal/16`. A dependency check asks whether this project's CODE can still
+    reach in. It cannot. It says nothing about what is already there.
+  * `journal/`, `README.md` and `PROVENANCE.md` still name the sibling, on
+    purpose. The incident is the reason this file exists; an account of it that
+    had been scrubbed would be an account of nothing.
+  * `MAGICIAN_BIZHAWK` / `BIZHAWK` remain overridable, so a caller *can* point a
+    run at any directory. The guard makes that a deliberate, named act and
+    refuses when the two names disagree -- but no check can forbid an operator
+    from naming a path. `make check-isolation` is what covers that case, by
+    measuring the sibling before and after a real run.
 
 The distinction cannot be made by grepping the raw text, because a name in a
 *comment* is provenance and a name in a *default* is a dependency, and both look
@@ -238,3 +261,28 @@ def find_dependency_hits(repo: Path) -> list[tuple[str, int, str]]:
             if SIBLING in line:
                 hits.append((rel, lineno, line.strip()))
     return hits
+
+
+def files_naming_sibling(repo: Path) -> list[str]:
+    """Every file, of ANY kind and in ANY position, whose text contains the name.
+
+    This is the number in this module's docstring ("75 files"), and it exists as a
+    function so the number is derived rather than a literal that rots -- the same
+    reason `test_sweep_pids.py` asserts its own check list instead of printing a
+    hardcoded total.
+
+    It is deliberately NOT a check and cannot fail. Almost every file it lists is
+    correct to exist: the dependency count is `find_dependency_hits`, and this is
+    only here so a reader who wonders whether the docstring's number still holds
+    can ask, rather than trusting a figure from a date.
+    """
+    out = []
+    for path in sorted(repo.rglob("*")):
+        if not path.is_file() or ".git/" in str(path):
+            continue
+        try:
+            if SIBLING in path.read_text(encoding="utf-8", errors="replace"):
+                out.append(str(path.relative_to(repo)))
+        except OSError:
+            continue
+    return out

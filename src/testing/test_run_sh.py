@@ -150,7 +150,7 @@ class Fake:
         (self.dir / "stub_noverdict").unlink(missing_ok=True)
 
     # ---- what run.sh is asked to do
-    def run(self, rom, script=None, env=None, timeout=60):
+    def run(self, rom, script=None, env=None, timeout=60, log=None, cwd=None):
         if script is None:
             script = TMP / "noop.lua"
         e = dict(os.environ)
@@ -188,8 +188,11 @@ class Fake:
             e.pop(k, None)
         e["MAGICIAN_ALLOW_CONCURRENT"] = "1"
         e.update(env or {})
-        return subprocess.run(["bash", str(RUN_SH), str(script), str(rom)],
-                              capture_output=True, text=True, env=e, timeout=timeout)
+        argv = ["bash", str(RUN_SH), str(script), str(rom)]
+        if log is not None:
+            argv.append(str(log))
+        return subprocess.run(argv, capture_output=True, text=True, env=e,
+                              timeout=timeout, cwd=str(cwd) if cwd else None)
 
     def env_exported(self):
         """The MAGICIAN_* environment run.sh handed the emulator, as a dict."""
@@ -304,6 +307,61 @@ check("none of the pre-launch failures reached the launcher at all",
       "stub_env is written by the fake launcher, so its absence is proof that "
       "nothing was launched. A guard that fires after the emulator has started "
       "costs a window and a session for a mistake that was detectable first.")
+
+# -------------------------------------------------------------------------------------
+# A2. THE LOG PATH MUST BE ABSOLUTE BEFORE THE `cd "$BIZ"`.
+#
+# The launcher is invoked as
+#     ( cd "$BIZ" && setsid ./EmuHawkMono.sh ... >"$LOG" 2>&1 & )
+# so a relative `$LOG` is resolved against the EMULATOR'S directory -- and if the
+# directory it names does not exist there, the redirection fails and the launcher
+# never runs. `$ROM` was made absolute long ago (journal/14) precisely because a
+# relative path there silently measures nothing; `$LOG` was missed.
+#
+# MEASURED, real BizHawk, this machine, with `logs/isolation/beta1.log`:
+#     run.sh: FAIL -- BizHawk produced no verdict after 5s.
+#     run.sh: EmuHawk is not running -- it exited before the preamble finished.
+#     run.sh: log follows
+#     cat: logs/isolation/beta1.log: No such file or directory
+# "it exited before the preamble finished" is a guess, and it is wrong: it never
+# started. The identical command with an absolute log gives `verdict ok`.
+#
+# The load-bearing part of this test is that the STUB RAN. Asserting only
+# "exit 0" would pass on a run where the redirect failed, because run.sh's own
+# failure path is also exercised -- so stub_env, which only the fake launcher
+# writes, is what separates "placed the windows" from "launched at all".
+FAKE_A2 = Fake("fake_a2")
+rel_log = TMP / "relout" / "run.log"
+rel_dir = TMP / "relout"
+rel_dir.mkdir(parents=True, exist_ok=True)
+p = FAKE_A2.run(ROM, log="relout/run.log", cwd=TMP,
+                env={"MAGICIAN_EXPECT_SHA1": WANT_SHA1})
+check("a RELATIVE log path is made absolute before the launcher runs, so the "
+      "emulator is actually launched. `stub_env` is written by the fake launcher "
+      "and by nothing else, so its absence is the signature of the bug: the "
+      "redirect into `$BIZ/<relative path>` fails, the launcher never runs, and "
+      "run.sh reports 'EmuHawk ... exited before the preamble finished'",
+      p.returncode == 0 and (FAKE_A2.dir / "stub_env").exists(),
+      f"exit={p.returncode} stub_env={bool((FAKE_A2.dir / 'stub_env').exists())}\n"
+      f"{p.stdout}\n{p.stderr}")
+check("the relative log path did NOT land inside the emulator directory -- that "
+      "is where it used to go, because `cd \"$BIZ\"` runs before the redirection",
+      not (FAKE_A2.dir / "relout").exists(),
+      f"stray tree under the fake emulator: "
+      f"{sorted(str(x) for x in (FAKE_A2.dir / 'relout').rglob('*'))}")
+
+# And the diagnostic must not be the one it used to give. "it exited before the
+# preamble finished" asserts a cause; the honest message when the log cannot be
+# written is that the log path is the problem.
+FAKE_A2b = Fake("fake_a2b")
+p = FAKE_A2b.run(ROM, log="relout/run.log", cwd=TMP,
+                 env={"MAGICIAN_EXPECT_SHA1": WANT_SHA1})
+check("when a relative log path IS given and the launcher does run, run.sh never "
+      "claims the emulator 'exited before the preamble finished'. That sentence "
+      "is a guess about a cause, and it was the wrong guess for this bug",
+      "exited before the preamble finished" not in p.stdout + p.stderr
+      or (FAKE_A2b.dir / "stub_env").exists(),
+      f"{p.stdout}\n{p.stderr}")
 
 # =====================================================================================
 # B. The happy path, and the two lines that carry the evidence.

@@ -84,12 +84,43 @@ WANT_BOARD="${MAGICIAN_BOARD:-}"
 BIZ="$MAGICIAN_BIZHAWK_DIR"
 
 # Both paths must be absolute before the `cd "$BIZ"` below. A relative ROM path is
-# not an error: BizHawk fails to load the file, falls back to NullHawk, and the
-# run then measures nothing while reporting success.
+# not an error: BizHawk fails to load the file, falls back to NullHawk, and the run
+# then measures nothing while reporting success.
 [ -f "$ROM" ] || { echo "run.sh: no ROM at $ROM" >&2; exit 1; }
 [ -f "$SCRIPT" ] || { echo "run.sh: no script at $SCRIPT" >&2; exit 1; }
 ROM="$(readlink -f "$ROM")"
 SCRIPT="$(readlink -f "$SCRIPT")"
+
+# ...AND SO MUST THE LOG, which was missed when the ROM was fixed.
+#
+# The launch is `( cd "$BIZ" && setsid ./EmuHawkMono.sh ... >"$LOG" 2>&1 & )`.
+# That `cd` happens FIRST, so a relative `$LOG` is resolved against the emulator's
+# own directory -- and if the directory it names does not exist there, the
+# redirection fails and the command never runs.
+#
+# MEASURED, and the failure is reported as something it is not. With
+# `logs/isolation/beta1.log`:
+#
+#     run.sh: FAIL -- BizHawk produced no verdict after 5s.
+#     run.sh: EmuHawk is not running -- it exited before the preamble finished.
+#     run.sh: log follows
+#     cat: logs/isolation/beta1.log: No such file or directory
+#
+# "it exited before the preamble finished" is a guess, and here it is wrong: it
+# never started. The `cat` failing is the real evidence -- the guard was
+# reporting a cause it had not established, on a run that never happened. The
+# identical command with an absolute log path gives `verdict ok` and all nine
+# memory domains.
+#
+# Same class as the relative-ROM trap directly above, and the same fix.
+LOG="$(readlink -f "$LOG" 2>/dev/null || printf '%s' "$LOG")"
+case "$LOG" in
+  /*) ;;
+  *) echo "run.sh: cannot make the log path absolute: $LOG" >&2
+     echo "       pass an absolute path, e.g. \$PWD/$(basename "$LOG")" >&2
+     exit 1 ;;
+esac
+mkdir -p "$(dirname "$LOG")"
 
 # A leftover EmuHawk: does a second launch get diverted into the first?
 #

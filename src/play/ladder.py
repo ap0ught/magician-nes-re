@@ -538,6 +538,90 @@ def _delta(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
 
 
 
+def p_icon(rng, rec, max_frames, icon=None, answer=False):
+    """Move the shop cursor to `icon` (0..7) and press A.
+
+    shopind is 0..7 in a 2x4 grid: lr edge moves +/-4, ud edge moves +/-1
+    (x5.pds:736-748, mask #$07). An A that sets ynflag has ASKED; with
+    answer=True a second A buys.
+
+    Movement is edge-triggered (g07a reads the debounced `dlr`/`dud`, which
+    are non-zero only on the frame the direction changes), so each step is a
+    single-frame tap followed by a release frame, and we re-read shopind to
+    confirm the cursor actually moved before issuing the next tap.
+    """
+    if icon is None:
+        icon = rng.choice(range(8))
+    img = rec.emu.work_ram()
+    cur = ram.f("shopind").get(img)
+
+    def tap(direction):
+        nonlocal cur
+        if rec.remaining(max_frames) <= 8:
+            return
+        rec.step((direction,), 1)
+        rec.step((), 3)
+        img2 = rec.emu.work_ram()
+        cur = ram.f("shopind").get(img2)
+
+    # plan: horizontal (columns, +/-4) then vertical (rows, +/-1)
+    hr = (icon // 4) - (cur // 4)
+    vr = (icon % 4) - (cur % 4)
+    for _ in range(abs(hr)):
+        if hr > 0:
+            tap("Right")
+        else:
+            tap("Left")
+    for _ in range(abs(vr)):
+        if vr > 0:
+            tap("Down")
+        else:
+            tap("Up")
+
+    # A is edge-triggered too: `waityn` reads the debounced `dfirea`, which
+    # is non-zero only on the frame the button changes from released to pressed.
+    # So the press must be a single-frame tap, preceded by a release so the
+    # debounce is clear, and the shop may need the press re-issued if the first
+    # tap landed during a fade. Re-tap up to three times, 12 frames apart, until
+    # ynflag is set (or, for answer=True, until the second press is accepted).
+    for _tap in range(3):
+        if rec.remaining(max_frames) <= 14:
+            break
+        rec.step((), 8)            # let the debounce clear
+        rec.step(("A",), 1)        # single-frame tap
+        rec.step((), 6)
+        for _ in range(6):
+            if rec.remaining(max_frames) <= 24:
+                break
+            rec.step((), 12)
+            img = rec.emu.work_ram()
+            if ram.f("ynflag").get(img) != 0:
+                break
+        if ram.f("ynflag").get(rec.emu.work_ram()) != 0:
+            break
+    if answer and rec.remaining(max_frames) > 12:
+        # release any lingering A edge before the second press
+        rec.step((), 10)
+        for _tap in range(3):
+            if rec.remaining(max_frames) <= 14:
+                break
+            rec.step((), 8)
+            rec.step(("A",), 1)
+            rec.step((), 6)
+            for _ in range(6):
+                if rec.remaining(max_frames) <= 24:
+                    break
+                rec.step((), 12)
+                img = rec.emu.work_ram()
+                if ram.f("invop").get(img) != 0 or ram.f("ynflag").get(img) == 0:
+                    break
+            img = rec.emu.work_ram()
+            if ram.f("invop").get(img) != 0 or ram.f("ynflag").get(img) == 0:
+                break
+    img = rec.emu.work_ram()
+    return f"icon {icon}: shopind={ram.f('shopind').get(img)} {_brief(img)}"
+
+
 def p_enter_shop(rng, rec, max_frames, shop=None):
     """Walk to one of the seven doors and press UP to go in.
 
@@ -877,7 +961,7 @@ def town_quests() -> Route:
     r.add("shop_door",
           lambda s=1: (lambda emu, rec, rng, mf: p_enter_shop(
               rng, rec, mf, shop=s)),
-          shop_pred(1), tries=16, max_frames=900, first_success=False,
+          shop_pred(1), tries=16, max_frames=1400, first_success=False,
           accept_after=16,
           why="the town's seven shops are seven `pt_shop` triggers in one row "
               "along the top of the map (PROBDAT.SRC:98-104) and `pr07` is "
@@ -890,14 +974,15 @@ def town_quests() -> Route:
               "and Up unsampled in milestone 1")
 
     r.add("shop_ask",
-          lambda: (lambda emu, rec, rng, mf: p_icon(rng, rec, mf,
-                                                    rng.choice([0, 1, 2, 3, 4]))),
+          lambda: (lambda emu, rec, rng, mf: p_icon(rng, rec, mf, 1)),
           holds(ram.pred("ynflag", "ne", 0)), tries=10, max_frames=500,
           first_success=False,
-          why="inside the shop, put the cursor on an icon and press A. An A that "
+          why="inside the shop, put the cursor on icon 1 and press A. An A that "
               "sets `ynflag` has ASKED (`sbuy` builds the price line and "
               "`syesno` sets ynflag) rather than bought, which is the honest "
-              "first half of a purchase")
+              "first half of a purchase. Icon 1 is a `buy`/`yn` icon in both the "
+              "unmarked shop and the church, so the ynflag test is shop-agnostic "
+              "and exercises the tap-based edge-triggered A path")
 
     r.add("shop_buy",
           lambda: (lambda emu, rec, rng, mf: p_icon(rng, rec, mf, 0, answer=True)),
