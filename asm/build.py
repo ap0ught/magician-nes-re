@@ -107,6 +107,70 @@ OUR_MODULES: dict[str, dict] = {
                 "marked `** tmp`, overlaid with the value the cartridge we "
                 "target actually ships. See STARTLEV.PDS for the measurement",
     },
+    "SLOT0.PDS": {
+        "slot": 0,
+        "note": "recreated from Beta 1 PRG slot 0 (disassembly in magician-src/)",
+    },
+    "SLOT1.PDS": {
+        "slot": 1,
+        "note": "recreated from Beta 1 PRG slot 1 (disassembly in magician-src/)",
+    },
+    "SLOT2.PDS": {
+        "slot": 2,
+        "note": "recreated from Beta 1 PRG slot 2 (disassembly in magician-src/)",
+    },
+    "SLOT3.PDS": {
+        "slot": 3,
+        "note": "recreated from Beta 1 PRG slot 3 (disassembly in magician-src/)",
+    },
+    "SLOT4.PDS": {
+        "slot": 4,
+        "note": "recreated from Beta 1 PRG slot 4 (disassembly in magician-src/)",
+    },
+    "SLOT5.PDS": {
+        "slot": 5,
+        "note": "recreated from Beta 1 PRG slot 5 (disassembly in magician-src/)",
+    },
+    "SLOT6.PDS": {
+        "slot": 6,
+        "note": "recreated from Beta 1 PRG slot 6 (disassembly in magician-src/)",
+    },
+    "SLOT7.PDS": {
+        "slot": 7,
+        "note": "recreated from Beta 1 PRG slot 7 (disassembly in magician-src/)",
+    },
+    "SLOT8.PDS": {
+        "slot": 8,
+        "note": "recreated from Beta 1 PRG slot 8 (disassembly in magician-src/)",
+    },
+    "SLOT9.PDS": {
+        "slot": 9,
+        "note": "recreated from Beta 1 PRG slot 9 (disassembly in magician-src/)",
+    },
+    "SLOT10.PDS": {
+        "slot": 10,
+        "note": "recreated from Beta 1 PRG slot 10 (disassembly in magician-src/)",
+    },
+    "SLOT11.PDS": {
+        "slot": 11,
+        "note": "recreated from Beta 1 PRG slot 11 (disassembly in magician-src/)",
+    },
+    "SLOT12.PDS": {
+        "slot": 12,
+        "note": "recreated from Beta 1 PRG slot 12 (disassembly in magician-src/)",
+    },
+    "SLOT13.PDS": {
+        "slot": 13,
+        "note": "recreated from Beta 1 PRG slot 13 (disassembly in magician-src/)",
+    },
+    "SLOT14.PDS": {
+        "slot": 14,
+        "note": "recreated from Beta 1 PRG slot 14 (disassembly in magician-src/)",
+    },
+    "SLOT15.PDS": {
+        "slot": 15,
+        "note": "recreated from Beta 1 PRG slot 15 (disassembly in magician-src/)",
+    },
 }
 
 # Every file a macro can be defined in, ours included, so a module of ours can
