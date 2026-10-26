@@ -107,6 +107,13 @@ OUR_MODULES: dict[str, dict] = {
                 "marked `** tmp`, overlaid with the value the cartridge we "
                 "target actually ships. See STARTLEV.PDS for the measurement",
     },
+    "DRAW.PDS": {
+        "slot": 15,
+        "origin": 0xFAFF,
+        "note": "shared drawing layer scaffold: horizontal fill primitive "
+                "(A=tile, X=count) writing to $2007, for enemy health bars and "
+                "the status HUD",
+    },
     "SLOT0.PDS": {
         "slot": 0,
         "note": "recreated from Beta 1 PRG slot 0 (disassembly in magician-src/)",
