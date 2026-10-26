@@ -12,11 +12,19 @@
 PYTHON ?= python3
 ROOT   := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
+# Our own sources are build inputs. They were not listed here, which meant
+# `src/magician/STARTLEV.PDS` could be edited, committed, and built into a
+# release note while `make` reported "Nothing to be done" -- and the whole point
+# of the split is that a change there IS a change to the ROM. A build system
+# that ignores the directory you are told to put your changes in is the quietest
+# possible way to lose them.
+OUR_SRC := $(wildcard $(ROOT)/src/magician/*.PDS $(ROOT)/src/magician/*.SRC)
+
 .PHONY: all rom check verbose extract clean
 
 all: $(ROOT)/asm/out/prg.bin
 
-$(ROOT)/asm/out/prg.bin: $(ROOT)/tools/pds_extract.py $(ROOT)/asm/build.py $(ROOT)/asm/pds6502.py
+$(ROOT)/asm/out/prg.bin: $(ROOT)/tools/pds_extract.py $(ROOT)/asm/build.py $(ROOT)/asm/pds6502.py $(OUR_SRC)
 	$(PYTHON) $(ROOT)/asm/build.py
 
 rom: $(ROOT)/asm/out/magician-rebuilt.nes

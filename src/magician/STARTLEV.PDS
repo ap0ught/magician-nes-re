@@ -1,0 +1,63 @@
+;   The level a new game starts on.
+;
+;   Eurocom's source says, at X5.PDS:8:
+;
+;       stlev   db $01   ;** tmp level to start on
+;
+;   `stlev` is a byte in the fixed $C000 window (X5.PDS:14-21 says $C000-$DFFF
+;   is bank $0E, which is 8 KiB slot 14, which is the last-but-one 8 KiB slot
+;   of the 128 KiB PRG -- PRG file offset $1C300, NOT $10300). `initvars` reads it
+;   with the one instruction that has two dependents:
+;
+;       X1.PDS:27-29   lda stlev
+;                      sta hilev     ;reached level 0.?
+;                      sta mapind    ;start game at level 1.0 - 1.0
+;
+;   Both values come from the same byte, so they are always equal after a new
+;   game, and `mapind` is the one that decides the level the map screen then
+;   jumps to (X0.PDS:624-625 `inc mapind`, "start game at next main level").
+;   With $00: `mapind` is 0, the `inc` makes it 1, and the game enters $10,
+;   which is what "start game at level 1.0 - 1.0" says and what the cartridge
+;   that works actually does. With $01: `mapind` is 1, the `inc` makes it 2,
+;   and the game tries to load level $20 -- the second level -- at the title
+;   screen's first A press. The comment and the value contradict each other,
+;   and `** tmp` is Eurocom telling us which one to believe.
+;
+;   MEASURED, not argued. Replaying logs/inputs/m1_first_town_beta1.inputs.txt
+;   from power-on into both ROMs with tools/nestrace.py --watch-ram gives
+;   exactly one write of `mapind` and one of `hilev` in the first 130 frames,
+;   both in `initvars`, both at frame 81, and the value written is the byte at
+;   $C300:
+;
+;       $004D (mapind)  frame  81   $8543  = $00   (beta 1)
+;                       frame  81   $8556  = $01   (this build, before the fix)
+;       $0719 (hilev)   frame  81   $8540  = $00   (beta 1)
+;                       frame  81   $8553  = $01   (this build, before the fix)
+;       $004D (mapind)  frame 111   $ECDD  = $01   (beta 1)
+;                       frame 111   $ECDD  = $02   (this build, before the fix)
+;
+;   So the wedge is this one data byte and nothing else. It was recorded in
+;   journal 13 as refuted -- correctly, on the evidence available then, because
+;   $C300 was read at PRG offset $10300, one 8 KiB slot low, and $7A filler was
+;   found in both ROMs. $7A is what slot 13 holds there. The refutation was
+;   right about the arithmetic it did and wrong about the address.
+;
+;   PER DUMP. `stlev` is not at $C300 in every Magician build, and this value is
+;   not universal -- it is a property of the target, measured on each:
+;
+;       beta 1   $00    the build src/play is verified against
+;       beta 2   $01    what the released source says
+;       beta     $41    ('A' -- the start of a string; `stlev` has moved)
+;       beta 3   $41
+;       beta 4   $41
+;       release  $41
+;
+;   So if the target ever moves off Beta 1 this byte has to be re-derived, and
+;   asm/build.py's `expect` check below is what makes that a build failure
+;   rather than a quiet wrong level. It asserts the image really carries the
+;   byte named here -- not that the file assembled.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org stlev              ; the label `initvars` already reads (X1.PDS:27)
+stlev  db $00

@@ -1,0 +1,17 @@
+;   The title screen's 64 attribute bytes -- 4 rows of 16. They start at $23C0,
+;   which is why a full scene is 960 + 64 bytes and not 960.
+;
+;   Like nametable.txt, these are Eurocom's own: `vendor/Magician-NES/DAT/TIT.DAT`
+;   decoded by tools/datcodec.py, and the grid re-packs to the shipped file byte
+;   for byte. The build asserts that round trip on every run.
+;
+;   A byte is four 2-bit quadrant selectors: bits 0-1 choose a sub-palette for the
+;   left half of a 4x4 tile block, 2-3 the right, 4-5 the top, 6-7 the bottom.
+;   Every one of the 256 byte values is therefore in range by construction -- there
+;   is no out-of-range attribute to catch -- but the *choice* is what paints the
+;   screen, and getting it wrong recolours the logo without any error. Measured
+;   against beta1 at frame 60 these are 64/64 identical.
+00 00 00 00 00 00 00 00 AA 02 00 00 88 AA AA AA ; attr block row 0
+AA 00 00 00 C0 FA 8A AA A2 54 54 11 80 23 88 AA ; attr block row 1
+EA 75 D5 75 5A A2 AA AA 7D DF FD FF 37 0A 0A 6A ; attr block row 2
+5D 05 7D 4F 00 50 50 54 05 05 05 05 04 05 04 05 ; attr block row 3

@@ -1,0 +1,41 @@
+;   Our title screen.
+;
+;   Eurocom's source already loads a title scene: X7.PDS:997 says
+;
+;       titdat   load tit.dat       ;title scn chr+col data
+;
+;   and X0.PDS:624-625 hands it straight to the decompressor:
+;
+;       bnk 7,#btit               ;bank in title data
+;       lda #<titdat              ;uncrunch title scn
+;       ldx #>titdat
+;       jsr unrunscn
+;
+;   So the screen is described entirely by the packed bytes at `titdat`, and by
+;   nothing else. Eurocom's own 314-byte TIT.DAT is the starting point but not
+;   the finished screen -- see src/magician/title/nametable.txt for what we
+;   decoded out of it and what we changed.
+;
+;   This module overlays `titdat`. It does not change a line of vendor/, does not
+;   add a call, and does not move a label: `dotitle` still reads `#<titdat`, and
+;   the address that resolves to is the same one it always was. Everything that
+;   makes the screen different is in the bytes we emit here.
+;
+;   The overlay has to be sized against its neighbour. X7.PDS:997-998 lays the
+;   three scene blobs end to end --
+;
+;       titdat   load tit.dat
+;       pwdat    load pw.dat
+;       pandat   load pan.dat
+;
+;   -- so there are exactly 314 bytes between `titdat` and `pwdat` and not one
+;   spare. A scene that packed one byte longer would put its tail on top of the
+;   password screen's data, which fails as a wrong password screen rather than
+;   as a failed build. asm/build.py measures the budget from these two symbols
+;   and refuses to assemble a scene that does not fit, then reads the finished
+;   image back and decodes it to confirm the ROM really does carry our screen.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org titdat              ; the label Eurocom's own `dotitle` already reads
+titscn  incbin ..\..\asm\out\ours\TIT.DAT

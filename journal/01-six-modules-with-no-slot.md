@@ -2,6 +2,135 @@
 
 2026-10-02
 
+> ## CORRECTIONS, appended later the same day
+>
+> This entry's headline — "six modules and no slot" — is **closed**, and three
+> statements in it were wrong. Left in place rather than edited, because the point
+> of a journal entry is what was believed at the time and what killed it.
+>
+> ### 1. The eight tables were never missing. **This was false.**
+>
+> `asm/pds6502.py`'s `SOURCE_GAPS` comment and the build's own output said the
+> eight tables `cphtab cpltab dphtab dpltab xphtab xpltab yphtab ypltab` are "a
+> gap in the 2012 release", "defined nowhere in the release", and that "no amount
+> of reading the source will produce the values".
+>
+> `vendor/Magician-NES/SEQ.SRC` defines all eight and ships in the release:
+>
+> | symbol | line | symbol | line |
+> |---|---|---|---|
+> | `XPLTAB` | `SEQ.SRC:784` | `CPLTAB` | `SEQ.SRC:839` |
+> | `YPLTAB` | `SEQ.SRC:801` | `XPHTAB` | `SEQ.SRC:847` |
+> | `DPLTAB` | `SEQ.SRC:816` | `YPHTAB` | `SEQ.SRC:864` |
+> | `CPHTAB` | `SEQ.SRC:902` | `DPHTAB` | `SEQ.SRC:879` |
+>
+> They read as orphans because nothing reaches `SEQ.SRC`. Its only `include` edge
+> is `DISP.SRC:130`, spelled **`include \zdev\seq.src`** — a DOS path from the
+> Atari ST development machine. On a case-sensitive POSIX filesystem that cannot
+> resolve, and `DISP.SRC` is itself included by no bank, so the edge is dead at
+> both ends. **The values were never missing; they were unreachable.**
+>
+> Cost of that wrong belief: one session spent concluding the source "cannot fully
+> assemble", and eight tables emitting zeros. `SEQ.SRC` is now built at
+> `org $a000`, slot 5: **497 symbols added, 0 names shared with the banks' 3 125,
+> 0 existing symbols moved**, 8 192 bytes placed at file `$0A000-$0BFFF`, **1 312
+> of them matching the cartridge**, whole build 38 467 → **39 204**.
+>
+> **How to not repeat it.** The check that settles this class of question is not
+> "is it defined in a file the build reads" — it is "is it defined *anywhere* in
+> the release, including files no build path reaches". `grep -rn` over
+> `vendor/` first, and read the `include` lines for whether their paths can
+> resolve on *this* filesystem, before writing "not in the release".
+>
+> `DISP.SRC` is separately **not** the missing code: it assembles to 797 bytes and
+> matches 5 times at every one of the sixteen slots. Only its `org $a000` line is
+> load-bearing.
+>
+> ### 2. Slot 5 was already measured, by a 24-byte literal.
+>
+> The prediction recorded for this work — "0 occurrences of those table bytes at
+> any of the 16 slots", so including `SEQ.SRC` "will not improve the cartridge
+> match" — was **wrong**, and for a reason worth keeping:
+>
+> ```
+> SEQ.SRC:4   ANIMTAB  HEX 094000000000
+> SEQ.SRC:5             HEX 094001010100
+> SEQ.SRC:6             HEX 084002020200
+> ```
+>
+> Those 24 bytes occur **once in 131 072**, at file `$0A000` — slot 5, offset 0,
+> CPU `$A000`. One hit is not a percentage. It pins both the origin and the slot
+> with no search, and it agrees with the release's own code: `ANIM.SRC:262-284`
+> computes `$A000 | 6*(frame+fbase)` via `ora #>$a000` and indexes `(te),y` down
+> from y=5 — a table of 272 six-byte entries at `$A000` and nothing else.
+>
+> **How to not repeat it.** When a placement is in doubt, look for a *literal* in
+> the module — a `hex`/`db` run with no operands — and search the cartridge for
+> the whole run. Literals are not code, so no zero-page/absolute choice can perturb
+> them. Per-byte scoring of code is at chance (0.3–2.1% against 0.39%); per-byte
+> scoring of literals is decisive. This entry's "Ruled out" section threw away the
+> only tool in this project that actually works.
+>
+> ### 3. Placement was provable from the source all along.
+>
+> This entry's Open list said "Place X0–X5. **Untested** — the probe that tries it
+> fails", and its Ruled out section said scoring finds nothing. Both true and both
+> irrelevant: **the source documents its own bank map.** `X5.PDS:10-21`:
+>
+> ```
+> ;The MMC3 map-mode bit (register 0,bit-6) is always set to zero
+> ;in this game giving the following PRG memory map :-
+> ;$8000-$9FFF : from bank in MMC3 register 6 ($00..$0F)
+> ;$A000-$BFFF : from bank in MMC3 register 7 ($00..$0F)
+> ;$C000-$DFFF : from bank $0E
+> ;$E000-$FFFF : from bank $0F
+> ```
+>
+> Every `bnk 6,#N` therefore names the slot at `$8000` and every `bnk 7,#N` the slot
+> at `$A000`, and `farjsr67` (`X7.PDS:828-848`) takes both and then `jsr`s a
+> target — so **each call site states which window its target is in**. Five
+> placements follow with no matching at all:
+>
+> | module | slot | from |
+> |---|---|---|
+> | X0 | 0 | `reset` does `bnk 6,#$0` then `jmp start`; `start` is `X0.PDS:602`, i.e. its `$8000` |
+> | X1 | 0, chained after X0 | `pob01` reached by `farjsr67` R6=0,R7=1 ("do bank 0/1 plr ob routines") |
+> | X2 | 1 | `firespell` is its own first code, reached by `farjsr67` R7=1 → `$A000` |
+> | X3 | 4 | `memchk a000,4`, and `X5.PDS:516 bnk 6,#4` then `jsr dobullets` |
+> | X4 | 2 | `handleobs` reached by `farjsr67` R6=2; `memchk c000,$2` agrees |
+>
+> ### 4. The reset vector was the whole answer, and the entry nearly found it.
+>
+> Open item 4 here said "Close the `$1126` vector gap … until it closes the CPU is
+> sent to the wrong address and nothing else matters". Right diagnosis, and the
+> offset was closable in one step: **X7 does not start at the bottom of slot 15.**
+> Nothing says it does, and nothing should. `reset` sits `$085B` bytes into X7, so
+> the cartridge's `$F9C1` means the cartridge's X7 begins at `$F166`. Anchored
+> there: `reset` = `$F9C1` and `irq` = `$F9B3`, **both exact**, `nmi` = `$F9A8`
+> against `$F9AB` — 3 bytes early, because the release's NMI handler does not
+> read `$2002` and this source does. This entry also had the direction backwards:
+> "3 bytes are emitted too many". They are too few.
+>
+> ### 5. Two more things measured out, so they are not re-chased
+>
+> - **X5 → X6 → X7 chaining: falsified.** X6 and X7 have no `org`, so "continue
+>   where the last module stopped" is the natural reading, and the chain puts X7's
+>   start at `$F0D3` so `reset` lands at `$F92E` — 147 bytes short of `$F9C1`,
+>   against 0x1166 out with no chain. Much better, still wrong. Kept as a comment
+>   in `asm/build.py: CHAINED`.
+> - **X6's "16/64 DAT bytes at slot 12" is a false positive.** Slot 12 is level 5's
+>   slot by X7's own `b = $c` counter, X6's 64 bytes are `inv.col` — which the
+>   cartridge does not contain at all — and 25% of 64 bytes is chance. X6 is pinned
+>   to slot 3 by elimination instead.
+>
+> ### 6. Open items 1 and 3 of this entry are closed; the rest stands
+>
+> Item 1 (the `scan_statements` segment index) was fixed in `cbc505e`: all eight
+> banks assemble. Item 3 ("Place X0–X5") is closed for five of six by §3 above.
+> The dead ends in "Ruled out" are still dead ends — but note that they were
+> dead ends *for code*, and the two paragraphs above are why that distinction is
+> the whole lesson of this entry.
+
 **Goal.** Place all eight `X?.PDS` modules in the 128 KiB PRG image so the rebuilt
 cartridge boots, and settle whether the rebuild can be a usable base for the
 moddable core at all.

@@ -1,0 +1,539 @@
+#!/usr/bin/env python3
+"""What `src/play/ladder.py` claims about itself, checked.
+
+THE POINT OF THIS FILE
+----------------------
+A ladder is a list of things to assert, and the failure mode of one is a rung
+that *looks* asserted and is not: a predicate that is true from power-on, a
+policy that presses a button the game does not read, a claim with no
+measurement behind it, a segment whose success test no longer describes what its
+policy does. None of those make the run fail -- they make the run SUCCEED for
+the wrong reason, which is the only kind of wrong this project has to work
+hardest against.
+
+So every check here is a coverage check, not a behaviour check:
+
+  1-4.   the route exists, its segments have unique names, every segment has a
+         policy that is a factory, and every success test is callable
+  5-8.   every predicate the route sends to the emulator is a `ram.Pred` on a
+         NAMED field -- no addresses, no bare arithmetic
+  9-11.  the DRINK bound: three is the number of `g1,set,drink` triples in the
+         source, four is death, and the policy refuses rather than the assertion
+  12-15. the shop scripts quoted in `TOWN_SHOPS` are the source's own bytes,
+         that each of the seven town doors has an entry, and that the icons the
+         ladder drives exist in the shop the segment says it is in
+  16-18. every CLAIM has an id, a `read_in` naming where the claim was read, an
+         `against` that says what the SOURCE says, and a `settled_by`
+  19-21. the walkthrough is referenced BY PATH and its text is not in the tree
+  22-25. the source's line numbers that the ladder's comments cite are real --
+         a comment citing `x6.pds:175` for a line that is about something else
+         is a measurement that reads as a fact
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import re
+import sys
+
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+os.chdir(_ROOT)
+sys.path.insert(0, str(_ROOT / "src"))
+
+from play import ladder, ram  # noqa: E402
+from play import first_town  # noqa: E402
+from play.route import Route, Segment  # noqa: E402
+
+_fails = 0
+_n = 0
+
+
+def ok(what: str, got=None) -> None:
+    global _fails, _n
+    _n += 1
+    if got is None:
+        print(f"  ok   {what}")
+    elif isinstance(got, bool):
+        if got:
+            print(f"  ok   {what}")
+        else:
+            _fails += 1
+            print(f"  FAIL {what}")
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    ok(f"check {name}: {name}" if cond else f"check {name}: {name} -- {detail}",
+       cond)
+
+
+route = ladder.town_quests()
+
+# =========================================================== 1-4. the shape
+ok("check 1: the route builds with no emulator present "
+   f"-- {len(route.segments)} segments, digest {route.digest()}")
+names = [s.name for s in route.segments]
+check("2: every segment name is unique -- a repeated name means one segment's "
+      "checkpoint directory is another's, and `snapshot()` refuses the collision "
+      "at the worst possible moment",
+      len(names) == len(set(names)), str([n for n in names if names.count(n) > 1]))
+check("3: every segment's factory returns a POLICY, not a policy: the runner "
+      "calls `factory()` once per attempt and then calls the result",
+      all(callable(s.factory) and s.factory() is not s.factory
+          for s in route.segments))
+# A success test is EITHER a callable on a RAM image or a `ram.Pred` -- the
+# bridge evaluates a Pred itself, so `callable()` is False for one and a check
+# that only allowed callables would have refused the flag and item rungs.
+check("4: every segment has a success test the runner can use -- a callable, "
+      "or a `ram.Pred` the bridge evaluates itself -- and every segment says "
+      "WHY in its own words",
+      all((callable(s.success) or isinstance(s.success, ram.Pred))
+          and s.why.strip() for s in route.segments),
+      str([s.name for s in route.segments
+           if not ((callable(s.success) or isinstance(s.success, ram.Pred))
+                   and s.why.strip())]))
+check("4b: every segment has a frame budget large enough for its policy's own "
+      "fixed costs -- a budget below the policy's unavoidable walk would cut "
+      "every attempt at zero frames, which is the mistake milestone 1's "
+      "lead-in draws made",
+      all(s.max_frames >= 90 for s in route.segments))
+
+# ================================ 5-8. every predicate is on a NAMED field
+preds: list[tuple[str, object]] = []
+for s in route.segments:
+    t = s.success
+    if s.prepare:
+        t = t(bytes(0x800))                      # the factory form
+        preds.append((s.name, t))
+    elif isinstance(t, tuple):
+        for x in t:
+            preds.append((s.name, x))
+    elif isinstance(t, list):
+        for x in t:
+            preds.append((s.name, x))
+    else:
+        preds.append((s.name, t))
+
+
+def collect(node, seen):
+    if isinstance(node, ram.Pred):
+        seen.append(node)
+    elif isinstance(node, (list, tuple)):
+        for x in node:
+            collect(x, seen)
+    return seen
+
+
+flat = []
+for segname, t in preds:
+    flat += [(segname, p) for p in collect(t, [])]
+check(f"5: {len(flat)} of the route's predicates are `ram.Pred` objects, so "
+      "every one of them is a single named field the bridge can evaluate",
+      len(flat) > 0, "none found")
+bad_addr = [f"{n}: {p}" for n, p in flat
+            if not isinstance(p.field, ram.Field) or p.field.addr < 0
+            or p.field.addr + p.field.length > 0x800]
+check("6: none of them names a byte outside $0000-$07FF", not bad_addr,
+      "; ".join(bad_addr[:4]))
+bad_op = [f"{n}: {p}" for n, p in flat if p.op not in ram._OPS]
+check("7: every op is one the bridge knows -- an op ram.py accepts and "
+      "bridge.lua does not is a predicate that passes in Python and is rejected "
+      "on the wire", not bad_op, "; ".join(bad_op[:4]))
+# The op sets on the two sides must be the same SET, not merely overlapping.
+bridge = (_ROOT / "src" / "play" / "bridge.lua").read_text(encoding="utf-8")
+lua_ops = set(re.findall(r'op == "(\w+)"', bridge))
+check("7b: ram.py's ops and bridge.lua's ops are the same set -- "
+      f"python {sorted(ram._OPS)} vs lua {sorted(lua_ops)}",
+      set(ram._OPS) == lua_ops,
+      f"only python: {sorted(set(ram._OPS) - lua_ops)}, "
+      f"only lua: {sorted(lua_ops - set(ram._OPS))}")
+# And each op must be BITWISE on both sides, which is the correction this session
+# made and the thing a future edit could silently undo.
+lua_band = re.search(r'op == "band"\s*then f = function\(x\)([^)]*)\)', bridge)
+check("7c: bridge.lua's `band` is a bitwise AND and not a modulo -- "
+      f"{lua_band.group(1).strip() if lua_band else 'NOT FOUND'}",
+      bool(lua_band) and "%" not in lua_band.group(1) and "&" in lua_band.group(1))
+
+# ============================================ 9-11. the drink bound, exactly
+def read_raw(path: pathlib.Path) -> str:
+    """Bytes in, text out, no newline translation. See `source_lines`."""
+    return path.read_bytes().decode("latin-1")
+
+
+shopdat = read_raw(_ROOT / "vendor" / "Magician-NES" / "SHOPDAT.SRC")
+tankard = [l for l in shopdat.splitlines()
+           if "gover" in l and "set,drink" in l]
+# `g1` is the pub's "-1 gold" opcode, so the number of DRINKS is the number of
+# `g1` commands on the line, not the number of `set,drink`: only the first
+# press sets the flag (`g1,set,drink,msg,$01`) and the next two are
+# `g1,msg,$01` and `g1,msg,$02`. Counting `set,drink` would have said 1.
+check(f"9: the pub's tankard script is three drinks and then `gover` -- the "
+      f"source has {len(tankard)} such line(s), and the FIRST sets the drink "
+      f"flag while the next two only charge again",
+      len(tankard) >= 1
+      and tankard[0].count("g1,") == ladder.DRINK_LIMIT
+      and tankard[0].count("set,drink") == 1
+      and tankard[0].rstrip().endswith("gover+$80\t;tankard"),
+      str(tankard[:1]))
+check("10: DRINK_LIMIT is therefore 3, and `safe_to_drink` is false only on "
+      "the FOURTH press -- which is the press that ends the run",
+      ladder.DRINK_LIMIT == 3
+      and [ladder.safe_to_drink(n) for n in range(5)] == [True, True, True, False, False])
+import inspect  # noqa: E402
+drink_src = inspect.getsource(ladder.p_drink)
+n_press = drink_src.count('rec.step(("A",)')
+check(f"11: the ladder's drink policy presses A exactly {n_press} time per "
+      "attempt, so no attempt can reach the fatal fourth press even if it is "
+      "run twice by mistake, and it says REFUSING out loud. This is the one "
+      "place in the project where the wrong answer is not a wrong number but a "
+      "dead run",
+      n_press == 1 and "REFUSING" in drink_src, drink_src[-200:])
+
+# ================= 11b. the door positions are PARSED, not typed in
+def read_raw2(path: pathlib.Path) -> str:
+    return path.read_bytes().decode("latin-1")
+
+
+probd2 = read_raw2(_ROOT / "vendor" / "Magician-NES" / "PROBDAT.SRC")
+block2 = probd2[probd2.index("pt10\titr"):probd2.index("st10\tsti")]
+# The capture groups are (x, y, width, height, shop) -- the shop number is the
+# FIFTH, not the second, and getting that wrong made the first version of this
+# check compare one door against seven.
+want = {int(m.group(5), 16): (int(m.group(1), 16) + 8,
+                              int(m.group(1), 16) + 8 + int(m.group(3), 16) + 8)
+        for m in re.finditer(
+            r"pt\s+([0-9a-f]{4}),([0-9a-f]{4}),([0-9a-f]{4}),([0-9a-f]{4}),"
+            r"pt_shop,([0-9a-f]{2})", block2)}
+check(f"11b: all {len(ladder.TOWN_DOORS)} door rectangles are what re-parsing "
+      f"PROBDAT.SRC gives, expanded through x0.pds's `pt` macro "
+      f"(x + p_hwi, width + 8). The pub is {ladder.TOWN_DOORS[0]} and the church "
+      f"is {ladder.TOWN_DOORS[4]}",
+      ladder.TOWN_DOORS == want, f"module {ladder.TOWN_DOORS} vs source {want}")
+# Not all the same width: the pub and the church differ (`pt 0a68,...,0020,...`
+# against `pt 00c8,...,0018,...`), which is the kind of detail a "32 pixels"
+# assumption would have got wrong for two of the seven.
+check("11c: every door is EAST of the player's start at x=60 and at least 32 "
+      "pixels wide -- the two widths in the source differ -- which is why the "
+      "door segments need a long budget and tap rather than hold",
+      all(lo > 60 and hi - lo >= 32 for lo, hi in ladder.TOWN_DOORS.values())
+      and len({hi - lo for lo, hi in ladder.TOWN_DOORS.values()}) == 2,
+      str(ladder.TOWN_DOORS))
+
+# ============ 11d. `shoplev`: shopdat is NOT the level, and it is parsed
+probs = read_raw2(_ROOT / "vendor" / "Magician-NES" / "PROBS.SRC")
+shoplev_line = next(l for l in probs.split("\n") if l.startswith("shoplev"))
+want_lev = [int(h, 16) for h in re.findall(r"\b([0-9a-f]{2})\b", shoplev_line)]
+check(f"11d: SHOPLEV is what PROBS.SRC's own `shoplev` line says -- "
+      f"{[hex(x) for x in want_lev[:7]]}",
+      [ladder.SHOPLEV[i] for i in range(7)] == want_lev[:7]
+      and len(ladder.SHOPLEV) == len(want_lev))
+check("11e: and shopdat is NOT the level -- shopdat 1 and 3 are both level $D5, "
+      "and the post office is shopdat 2 but level $D0. A door segment that "
+      "asserted only `curlev` would accept the wrong shop",
+      ladder.SHOPLEV[1] == ladder.SHOPLEV[3]
+      and ladder.SHOPLEV[2] != 2
+      and len({ladder.SHOPLEV[i] for i in range(7)}) == 6,
+      str({i: hex(ladder.SHOPLEV[i]) for i in range(7)}))
+
+# ================================ 12-15. the shop scripts are the source's
+check("12: TOWN_SHOPS has one entry per `pt_shop` trigger the first town "
+      f"declares -- {sorted(ladder.TOWN_SHOPS)}",
+      sorted(ladder.TOWN_SHOPS) == list(range(7)))
+probd = read_raw(_ROOT / "vendor" / "Magician-NES" / "PROBDAT.SRC")
+town = probd[probd.index("pt10\titr"):probd.index("st10\tsti")]
+triggers = re.findall(r"pt_shop,(\w+)", town)
+check("12b: and the source's own town block really does fire `pt_shop` "
+      f"{len(triggers)} times, with those data bytes in that order -- "
+      f"{triggers}",
+      [int(t, 16) for t in triggers] == sorted(ladder.TOWN_SHOPS),
+      str(triggers))
+# Every icon index the ladder drives must be a REAL icon of the shop it drives.
+driven = {"drink": (0, 0), "priest": (4, 1), "letter": (4, 1),
+          "post_office": (2, 1)}
+bad_icon = []
+for seg, (shop, icon) in driven.items():
+    scripts = ladder.TOWN_SHOPS[shop][1]
+    if not 0 <= icon < len(scripts):
+        bad_icon.append(f"{seg}: icon {icon} not in shop {shop} "
+                        f"({len(scripts)} icons)")
+    elif scripts[icon].strip().lower().startswith("emp"):
+        bad_icon.append(f"{seg}: icon {icon} of shop {shop} is `emp` (blank)")
+check("13: every icon the ladder drives is a real, non-blank icon of the shop "
+      "the segment says it is in", not bad_icon, "; ".join(bad_icon))
+# The letter's icon must actually mention the letter.
+check("13b: the church icon the ladder presses is the one whose script hands "
+      f"over the letter -- {ladder.TOWN_SHOPS[4][1][1][:60]}",
+      "addob,$1c" in ladder.TOWN_SHOPS[4][1][1]
+      and "set,asked" in ladder.TOWN_SHOPS[4][1][1])
+check("13c: the post office's icon 1 is the one that sets `sentlet` and "
+      f"deletes the letter -- {ladder.TOWN_SHOPS[2][1][1][:60]}",
+      "setp,sentlet" in ladder.TOWN_SHOPS[2][1][1]
+      and "delob,$1c" in ladder.TOWN_SHOPS[2][1][1])
+check("13d: the post office's icon 0 REFUSES without the letter, which is why "
+      "the ladder reaches for icon 1 rather than icon 0",
+      "tst,gotlet" in ladder.TOWN_SHOPS[2][1][0])
+
+# ============================================== 16-18. every claim is a claim
+check(f"16: all {len(ladder.CLAIMS)} claims have an id, a claim, somewhere the "
+      "claim was read, what the source says, and how it is settled",
+      all(all(c.get(k) for k in ("id", "claim", "read_in", "against",
+                                 "settled_by")) for c in ladder.CLAIMS))
+ids = [c["id"] for c in ladder.CLAIMS]
+check("17: the claim ids are unique -- two claims sharing one id would make the "
+      "measurement table ambiguous",
+      len(ids) == len(set(ids)), str(ids))
+check("18: every claim that a source disagrees with says SO, rather than "
+      "reporting the disagreement as a footnote",
+      all("against" in c and c["against"].strip() for c in ladder.CLAIMS))
+check("18b: the two claims the guide and the TAS subtitles independently agree "
+      "on are both in the table -- they are the ones that make the rest "
+      "trustworthy",
+      {"spell_cost", "shop_raises_mana_cap"} <= set(ids))
+
+# ================================= 19-21. the walkthrough stays outside the tree
+refs = re.findall(r"lpwb-magician-nes-walkthrough\.txt", "\n".join(
+    p.read_text(encoding="utf-8") for p in
+    sorted((_ROOT / "src" / "play").rglob("*.py"))))
+check(f"19: the walkthrough is referenced BY PATH in {len(refs)} place(s) and "
+      "never opened -- its prose is copyrighted and stays out of the repository",
+      bool(refs))
+committed_text = [p for p in _ROOT.rglob("*.py")
+                  if "Downloads/Documents/Game-Guides" in p.read_text(
+                      encoding="utf-8", errors="ignore")
+                  and "lpwb" not in p.read_text(encoding="utf-8", errors="ignore")]
+check("19b: nothing in the tree reads the guide's file -- only this repository's "
+      "own derived facts are committed", not committed_text,
+      str([str(p) for p in committed_text]))
+
+# ================== 22-25. the source lines the ladder cites are the lines said
+CITE = re.compile(r"\b((?:x[0-7]\.pds|PROBDAT\.SRC|SHOPDAT\.SRC|MISC\.SRC"
+                  r"|PROBS\.SRC|x7\.pds)):(\d+)(?:-(\d+))?")
+cited: dict[str, set[int]] = {}
+for p in sorted((_ROOT / "src" / "play").rglob("*.py")):
+    for m in CITE.finditer(p.read_text(encoding="utf-8")):
+        cited.setdefault(m.group(1), set()).update(
+            range(int(m.group(2)), int(m.group(3) or m.group(2)) + 1))
+
+
+def source_lines(name: str) -> list[str]:
+    """The file's lines, counted the way every citation in this tree counts.
+
+    READ AS BYTES, and that is the whole trick. The recovered PDS text carries a
+    carriage return at the end of every source RECORD inside a physical line --
+    `x0.pds:15` is four statements separated by `\r` -- so both `read_text()`
+    (which does universal-newline translation and turns each of those `\r` into a
+    `\n`) and `str.splitlines()` (which breaks on `\r` as well) shift every line
+    number after the first record on a line.
+
+    Both were tried here and both were wrong in the same direction: `x7.pds:247`
+    came back as `iny` when `dec mclock` is on that line by every convention the
+    rest of this project uses, because the true line 247 is the 247th `\n`-delimited
+    line and the 322nd line if the records are counted separately. Six spot
+    checks "failed"; all six were the instrument.
+    """
+    f = (_ROOT / "pds-text" / name if name.endswith(".pds")
+         else _ROOT / "vendor" / "Magician-NES" / name)
+    return f.read_bytes().decode("latin-1").split("\n")
+
+
+over = []
+for name, nums in sorted(cited.items()):
+    lines = source_lines(name)
+    for n in sorted(nums):
+        if not 1 <= n <= len(lines):
+            over.append(f"{name}:{n} -- the file has {len(lines)} lines")
+check(f"22: all {sum(len(v) for v in cited.values())} line citations across "
+      f"{len(cited)} source files point at a line that exists "
+      f"({', '.join(sorted(cited))})", not over, "; ".join(over[:5]))
+# ...and that the cited line mentions the thing the comment claims. Spot-checked
+# rather than exhaustive, and the spot checks are the load-bearing ones.
+SPOT = [
+    # (file, line, symbol the comment names). Every one of these is a claim the
+    # ladder rests on, so every one of them is checked against the file rather
+    # than trusted. Two of the original six were wrong -- `x1.pds:51-53` does
+    # not contain `sta wealth` (it is x1.pds:34) and `x7.pds:445` does not
+    # contain `get2` (the whole `addinv` head is on line 444) -- and both were
+    # citations this session wrote from a shell `sed` whose line numbering did
+    # not survive being pasted into a comment.
+    ("x0.pds", 253, "drink"),          # the quest flags themselves
+    ("x0.pds", 262, "gotlet"),         # ...and the permanent ones
+    ("x0.pds", 566, "invop"),          # 36 two-bit counters
+    ("x1.pds", 34, "wealth"),          # 100 gold to start with
+    ("x1.pds", 46, "ror obtyp"),       # an unused slot is $FF, bit 7 SET
+    ("x2.pds", 445, "perflag"),         # the permanent flag twin
+    ("x4.pds", 374, "%00001100"),      # what a talk changes on the object
+    ("x5.pds", 669, "lsr tmpflag"),    # entering a shop CLEARS the drink flag
+    ("x5.pds", 800, "d_drunk"),        # the fourth drink
+    ("x5.pds", 774, "addmtop"),        # the only mana-raising command
+    ("x5.pds", 783, "tmpflag"),        # the shop script's flag byte
+    ("x6.pds", 175, "levmana"),        # 4/8/12/16, the disputed cost table
+    ("x7.pds", 199, "manacur"),        # chkmana -- the spell-cost measurement
+    ("x7.pds", 247, "mclock"),         # the mana gate the guide disagrees with
+    ("x7.pds", 265, "fooddel"),        # the food timer
+    ("x7.pds", 310, "fwdels"),         # ...and its reload value
+    ("x7.pds", 444, "cmp #$03"),       # the carry-three cap
+    ("SHOPDAT.SRC", 83, "gover"),      # three drinks then death
+    ("SHOPDAT.SRC", 101, "gotlet"),    # the post office's 'nothing to post'
+    ("SHOPDAT.SRC", 102, "sentlet"),   # ...and 'the letter is posted'
+    ("SHOPDAT.SRC", 121, "asked"),     # the vicar's letter
+    ("SHOPDAT.SRC", 123, "mana10"),    # the prayer book's +10
+    ("PROBDAT.SRC", 98, "pt_shop"),    # the first town's door
+]
+missed = []
+for name, n, word in SPOT:
+    line = source_lines(name)[n - 1]
+    if word not in line:
+        missed.append(f"{name}:{n} does not mention {word!r}: {line.strip()[:60]}")
+check(f"23: {len(SPOT)} spot-checked citations really do contain the symbol the "
+      "comment names -- a citation that points at a line about something else is "
+      "a measurement that reads as a fact", not missed, "; ".join(missed))
+
+# The lines the ladder's own long comments quote must be quotable, not invented.
+x7 = source_lines("x7.pds")
+check("24: the four drinks/three drinks story is consistent across the two "
+      "independent records: the source's script line count AND the claim table's "
+      "own wording",
+      ladder.DRINK_LIMIT == 3
+      and "four" in next(c["claim"] for c in ladder.CLAIMS
+                         if c["id"] == "four_drinks_ends_the_game").lower())
+check("25: the ladder's mana claim is the one that will be MEASURED, and the "
+      "measurement is on `valsav` -- `manacur - valsav` is what `chkmana` "
+      "computed, so it is a subtraction of two declared fields rather than an "
+      "opinion about a cost table",
+      any("valsav" in s.why for s in route.segments if s.name == "rune_price")
+      and ram.f("valsav").length == 2)
+
+# ============================================ 26. WHICH BUTTON ANSWERS YES
+#
+# IT FAILED WHEN FIRST WRITTEN, in the sense that writing it is what found the
+# error: `shop_buy`'s `why` claimed "`syesno` tells them apart by the carry out of
+# `lsr a`, so A is yes". The source says the opposite, and says something more
+# subtle than the opposite -- A and B mean DIFFERENT THINGS in the two commands.
+#
+# These checks re-derive it from the source text rather than trusting
+# `ladder.A_IS_YES`, because a constant that merely restates a comment is exactly
+# the kind of thing this project has been reduced to before.
+x5 = source_lines("x5.pds")
+
+
+def _x5(n):
+    return x5[n - 1]
+
+
+# BY LABEL, NOT BY LINE NUMBER. The first version of this section hardcoded
+# 809..814 and two checks failed, because `waityn` is at 806 and `sbuy` at 814 --
+# and a check that cites a line number it got wrong is a check that will keep
+# passing or failing for reasons unrelated to the game. `source_lines()` gives the
+# file's lines; finding the block by its own label means a citation that drifts
+# shows up as a diff rather than as a wrong number in a comment.
+def _block(label, nlines=10):
+    """The next `nlines` instructions from `label`, split on CARRIAGE RETURNS too.
+
+    The recovered source carries CRs inside physical lines -- `ladder._load_*`
+    reads these files as BYTES and says so for exactly this reason -- so
+    `x5[i]` can be `"waityn\tjsr showshop\r\tjsr waitpan"`. Splitting only on
+    newlines puts two instructions on one "line", and every index below is then
+    off by one. Two checks failed to that on the first run of this section.
+    """
+    flat = [l for line in x5 for l in line.replace("\r", "\n").split("\n")]
+    for i, line in enumerate(flat):
+        if line.strip().startswith(label):
+            return [l for l in flat[i:i + nlines]]
+    raise AssertionError(f"x5.pds has no label {label!r}")
+
+
+waityn = _block("waityn", 10)
+# Indexed BY INSTRUCTION, and found by pattern rather than position: the first
+# version of this check read waityn[1]..[4] for these four, and with the label's
+# own line at index 0 they are at 2..5. A citation that is off by one is a
+# citation that will be "corrected" into a different claim later.
+_i_ldx = next((i for i, l in enumerate(waityn) if "ldx #$80" in l), -1)
+_i_a = next((i for i, l in enumerate(waityn) if "dfirea" in l), -1)
+_i_inx = next((i for i, l in enumerate(waityn) if l.strip().startswith("inx")), -1)
+_i_b = next((i for i, l in enumerate(waityn) if "dfireb" in l), -1)
+check("26a: `waityn` records $80 for A and $81 for B -- ldx #$80 BEFORE the A "
+      "test, then inx BEFORE the B test, so A is $80 and B is $81 and the order "
+      "matters",
+      min(_i_ldx, _i_a, _i_inx, _i_b) >= 0
+      and _i_ldx < _i_a < _i_inx < _i_b,
+      f"indices ldx={_i_ldx} dfirea={_i_a} inx={_i_inx} dfireb={_i_b}; "
+      "block: " + " | ".join(l.strip() for l in waityn))
+check("26b: and it STORES that value in ynflag, so the button press is what the "
+      "shop script later reads -- and it reads the DEBOUNCED A/B edge bytes, so "
+      "a press must be released between two of them",
+      any("stx ynflag" in l for l in waityn)
+      # The `lda X` and the `bne` are SEPARATE instructions in the recovered
+      # source, one per "line" here. Checking for them in the same string -- which
+      # the first version did -- failed on a block that plainly contains both.
+      and any(l.strip() == "lda dfirea" for l in waityn)
+      and any(l.strip() == "lda dfireb" for l in waityn)
+      and sum(1 for l in waityn if l.strip().startswith("bne")) >= 2,
+      "waityn: " + " | ".join(l.strip() for l in waityn))
+# syesno: `iny / lsr a` then `bcs sjump`. $80 -> C=1 -> sjump (no); $81 -> C=0 ->
+# falls through to `iny / jmp redo` (yes).
+syesno = _block("syesno", 10)
+check("26c: `syesno` distinguishes them by the CARRY out of `lsr a`, and branches "
+      "on C SET to the NO path -- so $80 (A) is NO",
+      any("lsr a" in l for l in syesno) and any("C=0=yes" in l for l in syesno),
+      "syesno: " + " | ".join(l.strip() for l in syesno))
+syesno = _block("syesno", 10)
+sx = [l for l in syesno if "bcs" in l]
+check("26d: and the branch on C-set in that block goes to `sjump`, which is the "
+      "NO path -- the jump target has to be read, not assumed",
+      sx and "sjump" in sx[0],
+      f"the bcs lines in syesno: {[l.strip() for l in sx]}")
+sy = [l for l in syesno if "jmp redo" in l]
+check("26e: and the fall-through after it is `jmp redo`, so $81 (B) is YES. A "
+      "question is answered YES with B",
+      sy and ladder.QUESTION_YES_BUTTON == "B"
+      and ladder.A_IS_YES["syesno"] is False,
+      f"fall-through {[l.strip() for l in sy]} "
+      f"QUESTION_YES_BUTTON={ladder.QUESTION_YES_BUTTON!r}")
+# sbuy: `cpy #$81 / bcc !b`. $80 < $81, so A takes the branch that buys.
+sbuy = _block("sbuy", 45)
+check("26f: `sbuy` uses the OPPOSITE comparison -- `cpy #$81 / bcc` -- so $80 (A) "
+      "is BELOW $81 and takes the buy path. A purchase is confirmed with A, which "
+      "is the opposite of a question",
+      any("cpy #$81" in l for l in sbuy)
+      and ladder.BUY_BUTTON == "A" and ladder.A_IS_YES["sbuy"] is True,
+      "the sbuy lines with cpy/bcc: "
+      + " | ".join(l.strip() for l in sbuy if "cpy" in l or "bcc" in l))
+def _at(needle):
+    """Offset of `needle` within the `sbuy` block, or -1."""
+    for i, line in enumerate(sbuy):
+        if needle in line:
+            return i
+    return -1
+
+
+i_cpy, i_bcc, i_lbl, i_add, i_upw = (_at("cpy #$81"), _at("bcc !b"),
+                                    _at("!b	adc") or _at("!b "),
+                                    _at("addinv"), _at("upwealth"))
+check("26g: and `bcc !b` lands on the BUY path -- the label `!b` is `adc #$21 ; "
+      "save msg`, followed by `addinv` and `upwealth`. So 'A buys' is read off "
+      "the buy path itself, not inferred from the comparison alone",
+      min(i_bcc, i_add, i_upw) >= 0 and i_add > i_bcc and i_upw > i_bcc
+      and i_lbl < i_add,
+      f"cpy #$81 at +{i_cpy}, bcc !b at +{i_bcc}, !b at +{i_lbl}, "
+      f"addinv at +{i_add}, upwealth at +{i_upw} -- !b and addinv must both come "
+      "after the branch, and addinv after the label")
+check("26h: A_IS_YES is not one boolean. The two commands disagree, and a single "
+      "flag would have to be wrong for one of them",
+      ladder.A_IS_YES == {"syesno": False, "sbuy": True}
+      and ladder.A_IS_YES["syesno"] != ladder.A_IS_YES["sbuy"],
+      f"A_IS_YES={ladder.A_IS_YES}")
+check("26i: and no segment's `why` still claims A is yes anywhere",
+      not any("so A is yes" in s.why for s in route.segments),
+      str([s.name for s in route.segments if "so A is yes" in s.why]))
+check("26j: the purchase button is A and the question button is B, and they are "
+      "NAMED SEPARATELY -- a single YES_BUTTON constant is what produced the wrong "
+      "comment in the first place",
+      ladder.BUY_BUTTON == "A" and ladder.QUESTION_YES_BUTTON == "B"
+      and ladder.BUY_BUTTON != ladder.QUESTION_YES_BUTTON,
+      f"BUY_BUTTON={ladder.BUY_BUTTON!r} "
+      f"QUESTION_YES_BUTTON={ladder.QUESTION_YES_BUTTON!r}")
+
+ok(f"the file ran every check above ({_n} checks)", _fails == 0)
+if _fails:
+    print(f"\n{_fails} check(s) FAILED")
+    sys.exit(1)
+print("\nall checks passed")

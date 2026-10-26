@@ -1,0 +1,92 @@
+# Magician patch manifest
+#
+# Every range of the rebuilt PRG that is filled from the cartridge rather than
+# from Eurocom's released source. This file contains **no cartridge bytes**: it
+# is a list of claims, each with a digest to check them against, and
+# `asm/patches.py` is the only thing that turns a claim into bytes. The cartridge
+# is read, never written, and never committed -- see LEGAL.md.
+#
+# ## Fields
+#
+#   region <name>   start a region
+#   class    a|b|c|d|e why the range is filled. See below -- this is the field
+#                     that stops a rising match percentage from being
+#                     indistinguishable from a rising number of hidden bugs.
+#   cart     <dump>  which dump on this machine the bytes come from
+#   sha1     <hex>   that dump's body SHA1 (header stripped). Checked against
+#                     BOTH the manifest's own registry and the file on disk.
+#   prg   <off> <len>  PRG file offset and byte count (hex; `0d` prefix for decimal)
+#   cpu      <addr>  the CPU address that offset is presented at, for reading
+#   reason   <text>  required. Repeated lines are appended.
+#   end            finish the region
+#
+# ## The five classes
+#
+#   a  placement bug. The source is right and the module is in the wrong 8 KiB
+#      slot. **Fix the placement.** Copying the cartridge over it destroys the
+#      only evidence of the bug.
+#   b  a hole. The source emits *nothing* at this address and the target cartridge
+#      emits bytes. Measured against Beta 1 (1990-03-02), the build this source
+#      came from, this class is currently **empty** -- see below.
+#   c  assembler bug. The source is present but `asm/pds6502.py` mis-assembles
+#      it. **Fix the assembler.**
+#   d  data / CHR packing order. A separate problem from code.
+#   e  occupied by the wrong asset. The source *does* emit bytes here, they are
+#      wrong, and no re-placement fixes them, because what belongs here is an
+#      asset this source does not contain in any form. b and e are both filled
+#      the same way and are not the same finding: `b` says the source stopped
+#      short, `e` says the source was working from different data, which in
+#      practice means the layout around it diverged too.
+#
+# Only `b` and `e` may be filled. Every `a` and `c` region found so far is
+# recorded in GAPMAP.md with its evidence and is deliberately *not* filled.
+#
+# ## The manifest is empty, and that is a finding
+#
+# It had one region, `sam-samples-at-fc40`, class `b`, filled from the release.
+# It is gone because the region was an artifact of targeting the release.
+#
+# `X7.PDS:997` says `load mus\sam.sam,$fb80`, and the assembler puts it at $FB80
+# exactly as written. The region recorded that the release has the samples at
+# $FC40 instead, moved up $C0 bytes, and that this was therefore a hole.
+#
+# Against Beta 1 there is no hole. Measured over SAM.SAM's full 1136 bytes at the
+# address the source itself states:
+#
+#   $FB80-$FFF0, source-only build vs beta1   1136/1136 bytes identical
+#   $FB80-$FFF0, source-only build vs release     24/1136 bytes identical
+#
+# All six dumps place SAM.SAM at one of exactly two addresses:
+#
+#   $FB80   beta1, and this build
+#   $FC40   beta2, beta3, beta4, release
+#
+# So the source states the Beta 1 address correctly, and the region was filling
+# 864 bytes that were *already right* with the release's layout. Against Beta 1
+# that is a net **-850** bytes: it turned a correct $FB80 into the release's
+# different content at $FC40. This is the exact failure the class field exists to
+# prevent -- the region's own report said "+850 matched", because it measured
+# itself against the release it named, while the headline measured Beta 1.
+#
+# The general lesson, which is why it is written down here rather than in a
+# journal entry: **a region must be re-derived whenever the target changes.** A
+# manifest region is a claim about one specific dump, and the digest check only
+# proves the bytes came from the dump the region named -- it cannot tell you the
+# region is still the right claim.
+#
+# ## Class `e`: the title scene descriptors, re-derived
+#
+# Class `e` was added for the title and password scene descriptors. Against the
+# release both were unresolvable, and the reason given was a 993-byte layout
+# divergence: this build put `pan.dat` at slot-7 offset $0E05 and the release at
+# $11E6, and the release's bytes at this build's `tit.dat` and `pw.dat` offsets
+# were 6502 code rather than descriptors.
+#
+# Against Beta 1 that gap is 120 bytes, not 993 -- `pan.dat` is at slot-7 offset
+# $0D8D, this build puts it at $0E05 -- and Beta 1 has a real `TIT.DAT` at PRG
+# 60255 where the release has none. So the descriptors are present after all and
+# the class-`e` "absent work" was the release rewriting the title screen. The
+# remaining 120 bytes is a real layout question and is not papered over; see
+# GAPMAP.md.
+
+version 1

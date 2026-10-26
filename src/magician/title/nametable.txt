@@ -1,0 +1,67 @@
+;   The title screen's tile grid -- 32 x 30, one row of 32 hex bytes per line.
+;
+;   THIS IS THE SOURCE. The packed .DAT that TITLE.SRC emits is generated from
+;   this file by tools/datcodec.py on every build (asm/build.py:pack_our_scenes)
+;   and is never committed, so this grid is the only copy of the screen.
+;
+;   ------------------------------------------------------------------
+;   WHERE THESE BYTES COME FROM
+;   ------------------------------------------------------------------
+;   They are Eurocom's own. `vendor/Magician-NES/DAT/TIT.DAT` is 314 packed
+;   bytes; tools/datcodec.py expands it to 960 tile bytes + 64 attribute bytes;
+;   this file is that expansion, one row per line.
+;
+;   The expansion is lossless in the direction that matters: re-packing this grid
+;   with the same token ($E0) reproduces `DAT/TIT.DAT` **byte for byte**, which is
+;   asserted on every build. So this file is a readable view of the shipped
+;   asset, not an interpretation of it, and nothing about it is ours.
+;
+;   Until 2026-10-05 it was not. This grid was hand-authored -- derived by
+;   observing the *release* cartridge and reproducing what it appeared to show,
+;   because every "the title data is absent" measurement in this project had been
+;   taken against the release, and the release genuinely does not contain
+;   TIT.DAT. Measured in BizHawk at frame 60 against **beta1**, that
+;   reconstruction matched Beta 1's nametable for 27 of 30 tile rows and was
+;   wrong across the whole of the bottom three: Beta 1 has real tiles there
+;   ($B0 $93 $94 $95 $96 $B1 $B2 ...) and the reconstruction had a solid $08
+;   backdrop. Palette, attributes and the in-use pattern table already matched
+;   exactly; only the grid was invented.
+;
+;   With these bytes the same measurement is **1024/1024 on the nametable,
+;   4096/4096 on all of CIRAM, 32/32 on the palette, 64/64 on the attributes and
+;   8192/8192 on the pattern table in use** -- see README.md.
+;
+;   Nothing else in src/magician/ needed to change to get there: the packing
+;   pipeline, the token, the size budget against `pwdat`, the read-back through
+;   the assembled image and the tools/titletest.py fail-check gate were all
+;   already right. Only the content was wrong.
+08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 ; row  0
+08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 ; row  1
+08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 ; row  2
+08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 ; row  3
+00 01 02 03 04 05 06 07 08 08 09 0A 0B 08 0C 08 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C ; row  4
+1D 1E 1F 20 21 22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31 32 33 34 35 36 37 38 39 3A 3B 3C ; row  5
+3D 3E 3F 40 41 42 43 44 45 46 47 48 49 4A 4B 4C 4D 4E 4F 50 51 52 53 54 55 56 57 58 59 5A 5B 5C ; row  6
+5D 5E 1E 5F 60 44 61 44 62 63 08 64 65 66 67 68 69 6A 6B 6C 6D 6E 6F 70 71 72 73 74 75 76 77 78 ; row  7
+79 7A 7B 7C 7D 7E 7F 7E 7F 80 81 82 83 84 85 86 87 88 89 8A 8B 8C 8D 8E 8F 90 91 92 93 08 94 95 ; row  8
+96 97 98 99 9A 9B 9C 9D 9E 9F A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 AA AB AC AD AE AF B0 B1 B2 B3 B4 B5 ; row  9
+08 B6 B7 B8 B9 BA BB BC BD BE 08 BF C0 C1 C2 C3 C4 08 C5 C6 C7 C8 C9 08 08 08 CA CB CC CD CE 08 ; row 10
+CF D0 08 08 D1 D2 08 D3 D4 D5 08 08 08 D6 D7 D8 D9 DA DB DC DD DE DF 08 E0 E1 E2 E3 E4 E5 08 08 ; row 11
+E6 08 E7 E8 E9 EA EB EC ED EE 08 08 EF F0 F1 F2 F3 F4 F5 08 F6 F7 08 F8 F9 FA FB FC FD FE 0A 08 ; row 12
+01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 00 00 00 14 15 16 17 18 19 1A 1B 1C 00 ; row 13
+1D 1E 1F 00 20 21 22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31 32 33 34 35 36 37 38 39 3A 3B ; row 14
+3C 3D 3E 00 3F 40 41 42 43 44 45 46 47 48 49 00 4A 4B 4C 4D 4E 4F 50 51 52 53 00 54 55 56 57 58 ; row 15
+59 5A 5B 00 5C 5D 5E 5F 60 61 62 00 00 00 00 00 63 64 65 66 67 68 69 6A 6B 6C 6D 6E 6F 70 71 72 ; row 16
+73 74 75 76 77 78 79 7A 7B 7C 00 00 00 00 00 00 00 7D 00 00 7E 7F 80 81 82 83 84 85 86 87 88 89 ; row 17
+8A 8B 00 00 00 8C 8D 8E 8F 90 91 92 00 00 93 94 95 96 97 98 99 9A 9B 9C 9D 9E 9F A0 A1 A2 A3 A4 ; row 18
+00 00 A5 A6 A7 A8 A9 AA AB AC AD AE AF B0 B1 B2 B3 B4 B4 B4 B5 B6 B7 B8 B9 BA BB BC BD BE BF C0 ; row 19
+C1 97 C2 C3 C4 C5 C6 C7 C8 C9 CA CB CC CD CE CF D0 D1 D2 D3 D4 D5 D6 D7 D8 00 D9 DA DB DC DD DE ; row 20
+00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 0F 10 00 00 11 12 13 14 15 00 16 17 18 19 1A 1B ; row 21
+1C 1D 1E 1F 20 21 22 23 24 25 26 27 28 29 2A 0F 0F 2B 2C 2D 2E 2F 30 31 32 33 34 35 36 37 00 00 ; row 22
+00 3A 3B 3C 3D 3E 3F 40 41 42 43 44 45 46 47 48 49 4A 4B 4C 4D 4E 4F 50 51 52 53 54 55 00 00 56 ; row 23
+3E 00 57 00 58 59 5A 5B 5C 5D 5E 5F 60 61 62 63 00 64 65 66 67 68 69 6A 6B 6C 6D 6E 6F 00 70 71 ; row 24
+72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F 80 81 82 83 84 85 86 87 88 89 8A 8B 8C 8D 8E 8F 90 91 ; row 25
+92 93 94 95 96 97 98 99 9A 9B 9C 9D 9E 9F A0 A1 A2 A3 A4 A5 00 00 A6 A7 A8 A9 AA AB AC AD AE AF ; row 26
+B0 93 94 95 96 B1 B2 B3 B4 B5 B6 B7 9A B8 B9 BA BB BC BD 00 56 BE BF C0 C1 C2 C3 C4 C5 C6 C7 C8 ; row 27
+C9 CA CB 56 CC CD 56 CE CF CA CB 56 CC CD 56 D0 D1 D2 00 70 71 D4 D5 D6 D7 D8 D9 DA DB DC DD DE ; row 28
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ; row 29

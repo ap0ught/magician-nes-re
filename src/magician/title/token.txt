@@ -1,0 +1,5 @@
+;   The packed stream's token byte: the one value that can never appear
+;   literally, because the decoder treats it as the start of a run.
+;   Eurocom's TIT.DAT uses $E0, which does not occur in their tile data;
+;   the grid below must keep it that way or datcodec.encode() refuses.
+$E0

@@ -81,7 +81,12 @@ def main() -> int:
         text = decode(path.read_bytes())
         out = args.out / (path.stem.lower() + ".pds")
         if args.check:
-            have = out.read_text() if out.exists() else ""
+            # Read the bytes, not the text. `Path.read_text()` opens in universal
+            # newline mode, which turns each of the 742 lone CRs the editor's soft
+            # wrap leaves in every file into an LF -- so the comparison below was
+            # against a string the decoder could never produce and `--check` was
+            # permanently red for a reason that had nothing to do with the files.
+            have = out.read_bytes().decode("latin-1") if out.exists() else ""
             if have != text:
                 print(f"STALE {out}", file=sys.stderr)
                 diff = difflib.unified_diff(
