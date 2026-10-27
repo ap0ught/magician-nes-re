@@ -160,14 +160,54 @@ OUR_MODULES: dict[str, dict] = {
         "slot": 15,
         "origin": 0xFB47,
         # Directly behind WEAK.PDS in the same $FF run ($FAFF-$FB7F, 129
-        # bytes): 72 used through obweak, plus this rts, is 73. $FB48-$FB7F
-        # remains. The byte is $60.
-        "expect_bytes": "60",
+        # bytes). obinspect sets the latch; inspdraw is what the per-frame
+        # hook calls. 34 bytes, $FB47-$FB68. $FB69-$FB7F remains before
+        # SAM.SAM at $FB80.
+        "expect_bytes": "A9 5A 8D 43 07 60 20 C5 F2 AD 43 07 C9 5A D0 11 "
+                        "A9 B9 A2 2D 86 27 A2 00 86 29 A0 01 84 2A 20 78 F8 60",
         "entry": "obinspect",
         "expect_cpu": 0xFB47,
-        "note": "issue #3 spell slot 27 cast entry. The old init was the "
-                "rts at $9112; $9113 is live, so the vector is retargeted "
-                "here and the behavior stays 'return'",
+        "note": "issue #3 spell slot 27 cast entry. A cast sets insplatch "
+                "($0743, the slack under x0.pds's RAM-overflow guard) and "
+                "returns. inspdraw, called after the sprite wipe, draws "
+                "the mark while the latch is set",
+    },
+    "INSPHOOK.PDS": {
+        # The jsr tickmana at $DFF0 stays; these two bytes retarget it at
+        # inspdraw. $C000 forces slot 14. inspdraw calls tickmana itself,
+        # then the marker.
+        "origin": 0xDFF1,
+        "expect_bytes": "4D FB",
+        "entry": "insphook",
+        "expect_cpu": 0xDFF1,
+        "note": "issue #3 per-frame hook: the address half of "
+                "`jsr tickmana` at $DFF0, now jsr inspdraw. The jmp "
+                "emptypan that follows is not written",
+    },
+    "INSPBODY.PDS": {
+        "slot": 1,
+        "origin": 0xB92D,
+        # Slot 1 is X2's $A000 half. mptrh ends at $B92C; $B92D through
+        # the end of the bank is the $FF pad (PRG $392D, 1746 bytes).
+        # farjsr67 Y=1 maps this slot at $A000, which is where inspdraw
+        # calls the body.
+        "window_slots": {0xA000: 1},
+        "expect_bytes": "A2 00 E0 03 F0 5C BD F4 04 30 57 38 BD 14 05 E5 94 "
+                        "85 13 BD 18 05 E5 95 D0 48 38 BD 1C 05 E5 96 85 14 "
+                        "BD 20 05 E5 97 D0 39 BD 30 05 29 0C F0 32 20 0A FB "
+                        "F0 0A 20 25 FB F0 28 A8 A9 B2 D0 03 4C 95 B9 85 15 "
+                        "A9 02 85 16 A5 14 38 E9 18 90 13 85 14 98 48 20 98 "
+                        "EE 68 A8 A5 13 18 69 08 85 13 88 D0 EF E8 E0 04 D0 "
+                        "9B 60 A9 B2 85 15 A9 02 85 16 A5 14 38 E9 20 90 24 "
+                        "85 14 A0 00 A5 13 48 18 79 CB B9 85 13 A5 14 48 18 "
+                        "79 D0 B9 85 14 20 98 EE 68 85 14 68 85 13 C8 C0 05 "
+                        "D0 E0 4C 8F B9 00 F8 00 08 00 F8 00 00 00 08",
+        "entry": "inspbody",
+        "expect_cpu": 0xB92D,
+        "note": "issue #3 inspect marker. Friendly (control set, obaggro "
+                "clear) gets a plus of five tile-$B2 sprites. Aggressive "
+                "gets obhbar copies of the same tile in a row. Sprite "
+                "palette 2, whose colour 3 is $30",
     },
     "SPNAME.PDS": {
         # Fixed $C000 window, so the org in the file places it. Seven bytes,

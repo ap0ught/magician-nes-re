@@ -1,0 +1,16 @@
+;   Per-frame hook for the inspect mark.
+;
+;   x5.pds, after the unused-sprite wipe:
+;
+;       jsr tickmana
+;       jmp emptypan
+;
+;   That `jsr tickmana` is at $DFF0 (tickmana = $F2C5, emptypan = $F199).
+;   The two bytes here are the address of `inspdraw`, which calls tickmana
+;   and then, once a cast has set the latch, the marker. The `jmp emptypan`
+;   that follows is not written.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $dff1
+insphook dw inspdraw

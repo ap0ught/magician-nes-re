@@ -11,8 +11,8 @@ Three overlays, each the size of the thing it replaces:
     dispatcher at slot 0 $8F39 does `ldy $8F81,x / sty $13 / ldy $8FAB,x /
     sty $14 / jmp ($13)`. Index $1B used to be $9112, a one-byte rts whose
     following byte is live. The vector now holds `obinspect`.
-  * INSPECT.PDS is that entry: one `rts` at $FB47, which is what $9112 did.
-    The cast still returns. The body has somewhere to land.
+  * INSPECT.PDS is that entry. A cast stores $5A at $0743 and returns.
+    inspdraw, in the same run, is what the per-frame hook calls.
 
 The rune table and `invsp` are not written. A fresh save still does not
 have the spell equipped.
@@ -127,13 +127,29 @@ check("the old rts at $9112 is still an rts, and $9113 is still pha",
       prg[0x1112] == 0x60 and prg[0x1113] == 0x48,
       f"${prg[0x1112]:02X} ${prg[0x1113]:02X}")
 
-placed = prg[0x1FB47:0x1FB48]
-check("the image carries the one-byte cast entry at $FB47",
-      placed == b"\x60", placed.hex(" "))
+placed = prg[0x1FB47:0x1FB4D]
+check("the cast entry sets the latch and returns",
+      placed == bytes.fromhex("A9 5A 8D 43 07 60"), placed.hex(" "))
 got = tuple(dis6502.disasm_block(placed, 0xFB47))
-check("that byte disassembles as rts",
-      got == ((0xFB47, "60        rts"),),
+check("that entry disassembles as lda/sta/rts",
+      got == ((0xFB47, "A9 5A     lda #$5A"),
+              (0xFB49, "8D 43 07  sta $0743"),
+              (0xFB4C, "60        rts")),
       "\n         " + "\n         ".join(f"{a:04X}: {t}" for a, t in got))
+
+hook = prg[0x1DFF0:0x1DFF6]
+check("the sprite-wipe calls inspdraw and still jumps to emptypan",
+      hook == bytes.fromhex("20 4D FB 4C 99 F1"), hook.hex(" "))
+check("inspdraw and inspbody resolved where the hook and the body say",
+      syms.get("inspdraw") == 0xFB4D and syms.get("inspbody") == 0xB92D
+      and syms.get("insphook") == 0xDFF1,
+      f"draw={syms.get('inspdraw')!r} body={syms.get('inspbody')!r} "
+      f"hook={syms.get('insphook')!r}")
+body = prg[0x392D:0x392D + 168]
+check("the marker is 168 bytes at the slot-1 pad and the next byte is pad",
+      len(body) == 168 and body[0] == 0xA2 and 0x60 in body
+      and prg[0x392D + 168] == 0xFF,
+      f"first ${body[0]:02X} after ${prg[0x392D + 168]:02X}")
 
 import nestrace  # noqa: E402
 
@@ -143,12 +159,14 @@ cpu.a, cpu.x, cpu.y = 0x3C, 0x1B, 0x02
 cpu.push(0x7F)
 cpu.push(0xFF)
 cpu.pc = 0xFB47
-for _ in range(4):
+for _ in range(8):
     cpu.step()
     if cpu.pc == 0x8000:
         break
-check("executing obinspect returns without changing A, X or Y",
-      cpu.pc == 0x8000 and (cpu.a, cpu.x, cpu.y) == (0x3C, 0x1B, 0x02),
-      f"pc=${cpu.pc:04X} a=${cpu.a:02X} x=${cpu.x:02X} y=${cpu.y:02X}")
+check("executing obinspect sets the latch, returns, and keeps X and Y",
+      cpu.pc == 0x8000 and (cpu.a, cpu.x, cpu.y) == (0x5A, 0x1B, 0x02)
+      and bus.ram[0x0743] == 0x5A,
+      f"pc=${cpu.pc:04X} a=${cpu.a:02X} x=${cpu.x:02X} y=${cpu.y:02X} "
+      f"latch=${bus.ram[0x0743]:02X}")
 
 print(f"\n{ok} checks passed")

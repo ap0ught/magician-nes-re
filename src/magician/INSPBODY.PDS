@@ -1,0 +1,131 @@
+;   What a cast of Inspect draws, once the latch is set.
+;
+;   The bytes live in the $FF run that follows X2's `mptrh` table. mptrh is
+;   16 high-bytes and the next byte in slot 1 is $FF through the end of the
+;   bank (PRG $392D, 1746 bytes). farjsr67 with Y=1 maps slot 1 at $A000, so
+;   this org is where that call lands. The routine only calls the fixed
+;   window ($C000/$E000), so the bank in the $8000 window does not matter.
+;
+;   Who gets a mark, measured off the same bytes obaggro reads:
+;
+;     * skip the player (slot 3) and anything whose obtyp bit 7 is set
+;     * skip an object whose 16-bit position is not on this screen. The
+;       screen origin is mapx/mapy, and the low byte of (position - origin)
+;       is the sprite coordinate addspr wants
+;     * obchr bits 3-2 are the interact control (x0.pds `c` macro). 0 means
+;       "always no one there" (x4.pds). Those get nothing
+;     * obaggro = 1 means the control is attack and the count has run out.
+;       That object gets obhbar segments of tile $B2. obhel $FF is 7, which
+;       is helind's own /32 scale. A zero result draws nothing
+;     * anyone else with a control — the monk, until one interact drops his
+;       count from 1 to 0 — gets a plus. The spell-fx cross at tile $DE is
+;       one tile and did not read at the size of the bar (17 pixels, on the
+;       head). The plus is five copies of the same solid tile, at
+;       (0,-8),(-8,0),(0,0),(8,0),(0,8), raised a further 8 pixels so it
+;       sits above where the bar sits.
+;
+;   The tile is in the sprite banks `setspr` installs for a level
+;   (x5.pds `ldy #s120-3`, four 1KB banks from CHR bank 69). $B2 is the
+;   solid block in bank 71. The gameplay sprite palette's third palette
+;   has $30 in colour 3 (movepal over spr.pal), so attribute $02 draws
+;   it white.
+;
+;   addspr overwrites Y, and Y is the segment count, so it is saved.
+;
+;   IN:  none. Called by farjsr67, so rts returns to it.
+;   OUT: sprites added above each marked object
+;   USES: A, X, Y, t0..t3
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+bar_tile   equ $b2
+mark_attr  equ $02
+mark_above equ $18
+
+        org $b92d
+inspbody
+        ldx #0
+ib_lp   cpx #pi
+        beq ib_nx
+        lda obtyp,x
+        bmi ib_nx
+        sec
+        lda obxl,x
+        sbc mapx
+        sta t0
+        lda obxh,x
+        sbc mapx+1
+        bne ib_nx
+        sec
+        lda obyl,x
+        sbc mapy
+        sta t1
+        lda obyh,x
+        sbc mapy+1
+        bne ib_nx
+        lda obchr,x
+        and #$0c
+        beq ib_nx
+        jsr obaggro
+        beq ib_hap
+        jsr obhbar
+        beq ib_nx
+        tay
+        lda #bar_tile
+        bne ib_dr
+ib_hap  jmp ib_plus
+ib_dr   sta t2
+        lda #mark_attr
+        sta t3
+        lda t1
+        sec
+        sbc #mark_above
+        bcc ib_nx
+        sta t1
+ib_seg  tya
+        pha
+        jsr addspr
+        pla
+        tay
+        lda t0
+        clc
+        adc #8
+        sta t0
+        dey
+        bne ib_seg
+ib_nx   inx
+        cpx #4
+        bne ib_lp
+        rts
+
+ib_plus lda #bar_tile
+        sta t2
+        lda #mark_attr
+        sta t3
+        lda t1
+        sec
+        sbc #mark_above+8
+        bcc ib_back
+        sta t1
+        ldy #0
+ib_p    lda t0
+        pha
+        clc
+        adc pdx,y
+        sta t0
+        lda t1
+        pha
+        clc
+        adc pdy,y
+        sta t1
+        jsr addspr
+        pla
+        sta t1
+        pla
+        sta t0
+        iny
+        cpy #5
+        bne ib_p
+ib_back jmp ib_nx
+pdx     db 0,$f8,0,8,0
+pdy     db $f8,0,0,0,8

@@ -364,3 +364,41 @@ Remaining for the health-bar feature:
 All gates green after the change: make (262,160-byte .nes), PRG
 130990/131072 against Beta 1 (82 differ bytes, four runs, all ours), make
 check-py 28/28 (925 checks), make guard clean, titletest PASS (6 checks).
+
+## The spell, on the first town's screen — 2026-10-27
+
+Replayed `logs/inputs/m1_beta1.inputs.txt` (636 frames) into the rebuild, which
+lands in the first town at phase 0, curlev `$10`. SELECT opens g09. The names
+for slot `$1B` are the level-1 rune, then EA, NA, RA, OL (`botbuf` `00 04 0C 0E
+0A 00`). START wrote that spell: `bookcur` and `topspell` both `$1B`, and the
+book line is INSPECT. Mana on this one creation went 50 → 41: 4 for the level,
+2 for EA, then 1 for each of the other three. The enemy bar is not in the
+frame; nothing calls `drawfill`.
+
+![INSPECT in the spell book, first town, rebuild](18-inspect-spell.png)
+
+## The monk, friendly then hostile — 2026-10-27
+
+A cast of slot 27 stores `$5A` at `$0743` (the first byte under x0.pds's
+`if z>$0756`; nothing in the source names it, and it comes up `$FF`). The
+`jsr tickmana` at `$DFF0` now enters `inspdraw`, which calls tickmana and,
+while the latch is `$5A`, `inspbody` in slot 1 at `$B92D` (the `$FF` run
+after `mptrh`). `$00` and `$FF` both mean off.
+
+The mark follows the object, so it changes when he does. Control bits 3-2
+clear means nobody is there and nothing is drawn. Otherwise obaggro gates
+it: 0 draws a plus (five copies of tile `$B2`), 1 draws obhbar copies of
+the same tile in a row. Tile `$B2` is the solid block in the sprite banks
+`setspr` installs (`s120-3`), and attribute `$02` is the palette whose
+colour 3 is `$30`.
+
+`src/play/monk_inspect.py` replays the inspect-slot log from power-on, walks
+the town's east door (`pt 0ea8`) onto the map, and confirms into wilderness
+`$20`. The monk is slot 2, x=`$0080`, obchr=`$1D` (attack control, count 1).
+One cast, and the plus is up. One Up, which is the interact in x4.pds, and
+obchr is `$1C`: the count is 0, the control is still attack, and the plus
+is a bar.
+
+![the monk, still friendly, plus above him](18-monk-friendly.png)
+
+![the same monk after one interact, health bar](18-monk-bar.png)

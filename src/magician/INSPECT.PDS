@@ -1,22 +1,51 @@
 ;   Inspect — the cast entry for spell slot 27 (issue #3).
 ;
 ;   The slot's init used to be the one-byte `rts` at $9112. The next byte,
-;   $9113, is `pha` and is called by other spells (`jsr $9113` from the
-;   featherlite path), so the rts cannot be overwritten with a longer
-;   instruction. SPSLOT.PDS retargets the init vector here instead.
+;   $9113, is `pha` and is called by other spells, so that rts stays. SPSLOT
+;   points the init vector here instead. The call is `jmp (t0)` from
+;   castspell's bulreq==0 path (x2.pds), so `rts` returns to firespell, which
+;   then spends the mana.
 ;
-;   The call is `jmp (t0)` (the dispatcher at slot 0 $8F39), so `rts` returns
-;   to the dispatcher's caller, which is what the old rts did. T2 is the
-;   power level 1..4, T3 the spell number, T4 the caster (x2.pds's spell-init
-;   header). This entry does not read them yet: a cast of slot 27 still does
-;   what the cartridge did, which is return. The body lands here once the
-;   drawing layer is actually called from the game.
+;   A cast does not draw. The sprite list is rebuilt every frame and wiped
+;   back to $F8 from `sprind` (x5.pds, the `lda #$f8` after `dobuls`), so a
+;   sprite written only inside the cast is gone on the next frame. The cast
+;   sets `insplatch` and returns. INSPHOOK calls `inspdraw` in place of
+;   `jsr tickmana`, after that wipe, and `inspdraw` asks INSPBODY to mark
+;   whoever is on screen. The latch stays set, so the mark follows the
+;   object: friendly on one frame, the bar on the next, once an interact
+;   has dropped his count to 0.
 ;
-;   IN:  as the spell init the vector calls (jmp indirect, so rts exits it)
-;   OUT: A, X, Y preserved
-;   USES: nothing
+;   `insplatch` is the first byte of the slack under x0.pds's
+;   `if z>$0756`. `z` is $0743 and nothing in the source names $0743-$0756.
+;   BizHawk's RAM comes up $FF there and the game never writes it, so the
+;   "showing" value is $5A rather than any non-zero. $00 and $FF both mean off.
+;
+;   IN:  as the spell init (jmp indirect)
+;   OUT: A = 1, X and Y preserved, insplatch = 1
+;   USES: A
 ;
 ;   Written by us. Eurocom's source is read-only and pinned; see README.md.
 
+insplatch equ $0743
+
         org $fb47
-obinspect rts
+obinspect
+        lda #$5a
+        sta insplatch
+        rts
+
+inspdraw
+        jsr tickmana
+        lda insplatch
+        cmp #$5a
+        bne insp_out
+        lda #>inspbody
+        ldx #<inspbody
+        stx ma
+        ldx #0
+        stx ma+2
+        ldy #1
+        sty ma+3
+        jsr farjsr67
+insp_out
+        rts
