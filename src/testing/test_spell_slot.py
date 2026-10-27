@@ -127,46 +127,54 @@ check("the old rts at $9112 is still an rts, and $9113 is still pha",
       prg[0x1112] == 0x60 and prg[0x1113] == 0x48,
       f"${prg[0x1112]:02X} ${prg[0x1113]:02X}")
 
-placed = prg[0x1FB47:0x1FB4D]
-check("the cast entry sets the latch and returns",
-      placed == bytes.fromhex("A9 5A 8D 43 07 60"), placed.hex(" "))
+placed = prg[0x1FB47:0x1FB52]
+check("the cast entry sets the latch, stores the power, and returns",
+      placed == bytes.fromhex("A9 5A 8D 43 07 A5 15 8D 44 07 60"),
+      placed.hex(" "))
 got = tuple(dis6502.disasm_block(placed, 0xFB47))
-check("that entry disassembles as lda/sta/rts",
+check("that entry disassembles as lda/sta/lda/sta/rts",
       got == ((0xFB47, "A9 5A     lda #$5A"),
               (0xFB49, "8D 43 07  sta $0743"),
-              (0xFB4C, "60        rts")),
+              (0xFB4C, "A5 15     lda $15"),
+              (0xFB4E, "8D 44 07  sta $0744"),
+              (0xFB51, "60        rts")),
       "\n         " + "\n         ".join(f"{a:04X}: {t}" for a, t in got))
 
 hook = prg[0x1DFF0:0x1DFF6]
 check("the sprite-wipe calls inspdraw and still jumps to emptypan",
-      hook == bytes.fromhex("20 4D FB 4C 99 F1"), hook.hex(" "))
+      hook == bytes.fromhex("20 52 FB 4C 99 F1"), hook.hex(" "))
 check("inspdraw and inspbody resolved where the hook and the body say",
-      syms.get("inspdraw") == 0xFB4D and syms.get("inspbody") == 0xB92D
-      and syms.get("insphook") == 0xDFF1,
+      syms.get("inspdraw") == 0xFB52 and syms.get("inspbody") == 0xB92D
+      and syms.get("insphook") == 0xDFF1
+      and syms.get("insplatch") == 0x0743 and syms.get("insppow") == 0x0744,
       f"draw={syms.get('inspdraw')!r} body={syms.get('inspbody')!r} "
-      f"hook={syms.get('insphook')!r}")
-body = prg[0x392D:0x392D + 168]
-check("the marker is 168 bytes at the slot-1 pad and the next byte is pad",
-      len(body) == 168 and body[0] == 0xA2 and 0x60 in body
-      and prg[0x392D + 168] == 0xFF,
-      f"first ${body[0]:02X} after ${prg[0x392D + 168]:02X}")
+      f"hook={syms.get('insphook')!r} latch={syms.get('insplatch')!r} "
+      f"pow={syms.get('insppow')!r}")
+body_expect = bytes.fromhex(B.OUR_MODULES["INSPBODY.PDS"]["expect_bytes"])
+body = prg[0x392D:0x392D + len(body_expect)]
+check("the marker matches its manifest and the next byte is pad",
+      body == body_expect and body[0] == 0xA2 and 0x60 in body
+      and prg[0x392D + len(body_expect)] == 0xFF,
+      f"len {len(body_expect)} first ${body[0]:02X} "
+      f"after ${prg[0x392D + len(body_expect)]:02X}")
 
 import nestrace  # noqa: E402
 
 bus = nestrace.Bus(prg, bytes(0x2000), 4, False)
 cpu = nestrace.CPU(bus)
 cpu.a, cpu.x, cpu.y = 0x3C, 0x1B, 0x02
+bus.ram[0x15] = 0x04
 cpu.push(0x7F)
 cpu.push(0xFF)
 cpu.pc = 0xFB47
-for _ in range(8):
+for _ in range(16):
     cpu.step()
     if cpu.pc == 0x8000:
         break
-check("executing obinspect sets the latch, returns, and keeps X and Y",
-      cpu.pc == 0x8000 and (cpu.a, cpu.x, cpu.y) == (0x5A, 0x1B, 0x02)
-      and bus.ram[0x0743] == 0x5A,
+check("executing obinspect stores the latch and t2, and keeps X and Y",
+      cpu.pc == 0x8000 and (cpu.a, cpu.x, cpu.y) == (0x04, 0x1B, 0x02)
+      and bus.ram[0x0743] == 0x5A and bus.ram[0x0744] == 0x04,
       f"pc=${cpu.pc:04X} a=${cpu.a:02X} x=${cpu.x:02X} y=${cpu.y:02X} "
-      f"latch=${bus.ram[0x0743]:02X}")
+      f"latch=${bus.ram[0x0743]:02X} pow=${bus.ram[0x0744]:02X}")
 
 print(f"\n{ok} checks passed")

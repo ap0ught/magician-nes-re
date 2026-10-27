@@ -13,9 +13,9 @@ Measured, and re-checked here:
     nothing else: bit 7 set means ethereal, bullets cannot hit; bits 5-4
     are the physical-bullet action (0 explode-only, 2 neither, 1 or 3 the
     damage path). That is the `c` macro's @1 and @3 (X0.PDS:163-169).
-  * The four shield counters are written and never read. A shield spell
-    stores $FF on the player; actob clears the four bytes. No absolute
-    read of them exists in the image.
+  * The four shield counters are written by the game and never read by it.
+    A shield spell stores $FF on the player; actob clears the four bytes.
+    The one absolute load in the image is inspect's level-3 pip.
   * speldam (x3.pds) is 42 zero bytes. The cartridge damage path is
     `lda #$E0 / bit harm` at slot 4 $8BEB — one constant, and bit does not
     call harm. Spell type picks an explosion animation (shexp), not a
@@ -281,11 +281,21 @@ for i in range(len(prg) - 2):
     (shield_writes if op in WRITES else shield_reads).append(
         (slot, i, op, addr))
 
-check("the four shield counters are stored and never loaded",
-      shield_reads == [] and len(shield_writes) == 8,
-      f"{len(shield_reads)} read(s), {len(shield_writes)} write(s): "
+# Eurocom writes the four bytes and never loads them. The one load is
+# inspect's `lda obphysh,y` (opcode $B9), inside the slot-1 body.
+body_at = 0x392D
+body_len = len(bytes.fromhex(B.OUR_MODULES["INSPBODY.PDS"]["expect_bytes"]))
+ours = [r for r in shield_reads if body_at <= r[1] < body_at + body_len]
+theirs = [r for r in shield_reads if r not in ours]
+check("Eurocom's code stores the four shields and never loads them",
+      theirs == [] and len(shield_writes) == 8,
+      f"{len(theirs)} other read(s), {len(shield_writes)} write(s): "
       + ", ".join(f"slot {s} ${i:05X} op ${op:02X} ${a:04X}"
-                  for s, i, op, a in shield_reads + shield_writes))
+                  for s, i, op, a in theirs + shield_writes))
+check("the only shield load is inspect's lda obphysh,y",
+      len(ours) == 1 and ours[0][0] == 1 and ours[0][2] == 0xB9
+      and ours[0][3] == 0x0538,
+      str(ours))
 
 # The eight writes are the four player-spell stores and actob's four clears.
 write_addrs = sorted(a for _, _, _, a in shield_writes)

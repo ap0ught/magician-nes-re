@@ -32,15 +32,34 @@
 ;
 ;   addspr overwrites Y, and Y is the segment count, so it is saved.
 ;
+;   insppow (written by obinspect from firespell's t2, which is 1..4)
+;   adds to that mark. The sprite banks setspr installs have no digit
+;   glyphs, so the health number is the segment count itself.
+;
+;     * 1: the mark only
+;     * 2: also one tile $D8 when obven is not zero. That is the harm
+;       path's own test (x4.pds, lda obven,x / beq), not a 0-20 scale
+;     * 3: also one tile $B2 for each of obphysh/obvensh/obfirsh/obpowsh
+;       that is not zero. Those four counters are write-only, so the pip
+;       is the stored byte, not a hit count
+;     * 4: also one tile from obweak. $C8 ethereal, $D8 explode-only,
+;       $D0 neither, $DE the damage path
+;
 ;   IN:  none. Called by farjsr67, so rts returns to it.
 ;   OUT: sprites added above each marked object
-;   USES: A, X, Y, t0..t3
+;   USES: A, X, Y, t0..t7
 ;
 ;   Written by us. Eurocom's source is read-only and pinned; see README.md.
 
 bar_tile   equ $b2
 mark_attr  equ $02
 mark_above equ $18
+ven_tile   equ $d8
+tile_eth   equ $c8
+tile_exp   equ $d8
+tile_none  equ $d0
+tile_dmg   equ $de
+insppow    equ $0744
 
         org $b92d
 inspbody
@@ -82,6 +101,10 @@ ib_dr   sta t2
         sbc #mark_above
         bcc ib_nx
         sta t1
+        lda t0
+        sta t4
+        lda t1
+        sta t5
 ib_seg  tya
         pha
         jsr addspr
@@ -93,6 +116,7 @@ ib_seg  tya
         sta t0
         dey
         bne ib_seg
+        jsr ib_more
 ib_nx   inx
         cpx #4
         bne ib_lp
@@ -105,10 +129,16 @@ ib_plus lda #bar_tile
         lda t1
         sec
         sbc #mark_above+8
-        bcc ib_back
+        bcc ib_skip
         sta t1
+        lda t0
+        sta t4
+        lda t1
+        sta t5
         ldy #0
-ib_p    lda t0
+ib_p    tya
+        pha
+        lda t0
         pha
         clc
         adc pdx,y
@@ -123,9 +153,98 @@ ib_p    lda t0
         sta t1
         pla
         sta t0
+        pla
+        tay
         iny
         cpy #5
         bne ib_p
-ib_back jmp ib_nx
+        jsr ib_more
+ib_skip jmp ib_nx
 pdx     db 0,$f8,0,8,0
 pdy     db $f8,0,0,0,8
+
+ib_more lda insppow
+        cmp #2
+        bcs im_v
+        jmp im_out
+im_v    lda obven,x
+        beq im_lv3
+        lda t5
+        clc
+        adc #8
+        bcs im_lv3
+        sta t1
+        lda t4
+        sta t0
+        lda #ven_tile
+        sta t2
+        lda #mark_attr
+        sta t3
+        jsr addspr
+im_lv3  lda insppow
+        cmp #3
+        bcs im_s
+        jmp im_out
+im_s    lda #0
+        sta t6
+im_sl   lda t6
+        asl
+        asl
+        sta t7
+        txa
+        clc
+        adc t7
+        tay
+        lda obphysh,y
+        beq im_sn
+        lda t5
+        sec
+        sbc #8
+        bcc im_sn
+        sta t1
+        lda t6
+        asl
+        asl
+        asl
+        clc
+        adc t4
+        sta t0
+        lda #bar_tile
+        sta t2
+        lda #mark_attr
+        sta t3
+        jsr addspr
+im_sn   inc t6
+        lda t6
+        cmp #4
+        bne im_sl
+        lda insppow
+        cmp #4
+        bcs im_w
+        jmp im_out
+im_w    jsr obweak
+        cmp #$80
+        bne im_e1
+        lda #tile_eth
+        bne im_put
+im_e1   cmp #$01
+        bne im_e2
+        lda #tile_exp
+        bne im_put
+im_e2   cmp #$02
+        bne im_e3
+        lda #tile_none
+        bne im_put
+im_e3   lda #tile_dmg
+im_put  sta t2
+        lda t5
+        sec
+        sbc #16
+        bcc im_out
+        sta t1
+        lda t4
+        sta t0
+        lda #mark_attr
+        sta t3
+        jsr addspr
+im_out  rts

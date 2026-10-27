@@ -35,7 +35,10 @@ ROM = ROOT / "asm" / "out" / "magician-rebuilt.nes"
 SYM = ROOT / "asm" / "out" / "mag.sym"
 LOG = ROOT / "logs" / "inputs" / "inspect-slot27.inputs.txt"
 STATE = ROOT / "logs" / "saves" / "monk-before-cast.state"
-LATCH = 0x0743
+# Filled from mag.sym in main. The bytes are the slack under x0.pds's
+# RAM-overflow guard; nothing in the vendor source names them.
+LATCH = None
+POWER = None
 LATCH_ON = 0x5A
 MONK = 0x11
 DOOR_X = 0x0EA8
@@ -242,7 +245,7 @@ def reach_monk(emu: BizHawk, obtyp: int, obchr: int, obxl: int, obxh: int):
 
     slot = monk_slot(img, obtyp)
     if slot is None:
-        walk_x(emu, 0x0080)
+        walk_x(emu, 128)
         img = emu.work_ram()
         slot = monk_slot(img, obtyp)
     if slot is None:
@@ -277,14 +280,13 @@ def main() -> int:
     if not ROM.exists():
         say(f"no ROM at {ROM}. Run `make rom` first.")
         return 2
+    global LATCH, POWER
+    LATCH = rom_sym("insplatch")
+    POWER = rom_sym("insppow")
     obtyp = rom_sym("obtyp")
     obchr = rom_sym("obchr")
     obxl = rom_sym("obxl")
     obxh = rom_sym("obxh")
-    if (obtyp, obchr, obxl, obxh) != (0x04F4, 0x0530, 0x0514, 0x0518):
-        say(f"object addresses moved: obtyp=${obtyp:04X} obchr=${obchr:04X} "
-            f"obxl=${obxl:04X} obxh=${obxh:04X}")
-        return 2
 
     ram.load_button_order()
     stale = BizHawk.running_emuhawk()
@@ -324,8 +326,10 @@ def main() -> int:
         if img[obchr + slot] & 0x03 != 0x01:
             fail(emu, "the cast changed his count")
         friendly = emu.screenshot("monk-friendly")
+        if img[POWER] != 1:
+            fail(emu, f"level-1 cast stored power ${img[POWER]:02X}")
         say(f"friendly mark, obchr=${img[obchr + slot]:02X} "
-            f"latch=${img[LATCH]:02X}")
+            f"latch=${img[LATCH]:02X} power=${img[POWER]:02X}")
 
         emu.tap("Up")
         emu.step((), 12)

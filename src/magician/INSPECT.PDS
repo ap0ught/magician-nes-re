@@ -19,19 +19,24 @@
 ;   `if z>$0756`. `z` is $0743 and nothing in the source names $0743-$0756.
 ;   BizHawk's RAM comes up $FF there and the game never writes it, so the
 ;   "showing" value is $5A rather than any non-zero. $00 and $FF both mean off.
+;   The next byte, `insppow`, is the power firespell left in t2: `iny` makes
+;   it 1..4. The drawer reads it every frame.
 ;
-;   IN:  as the spell init (jmp indirect)
-;   OUT: A = 1, X and Y preserved, insplatch = 1
+;   IN:  as the spell init (jmp indirect). t2 = power 1..4.
+;   OUT: A = t2, X and Y preserved, insplatch = $5A, insppow = t2
 ;   USES: A
 ;
 ;   Written by us. Eurocom's source is read-only and pinned; see README.md.
 
 insplatch equ $0743
+insppow   equ $0744
 
         org $fb47
 obinspect
         lda #$5a
         sta insplatch
+        lda t2
+        sta insppow
         rts
 
 inspdraw

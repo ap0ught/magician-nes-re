@@ -22,7 +22,7 @@ source does, and it names the whole first town:
                     `bless2`, `bonus`, `twin`, `fount` in `tmpflag`, and
                     `gotlet`, `sentlet`, `ringana`, `amsheeld`, `ammor` in
                     `perflag`. `ram.QUEST_FLAGS` resolves each name to a bit.
-  * the shops       `PROBDAT.SRC:96-119` -- the first town's seven doors are
+  * the shops       `PROBDAT.SRC:100-123` -- the first town's seven doors are
                     `pt_shop` triggers 00..06 and the map is one, all in a row
                     along the top of the map; `SHOPDAT.SRC:81-131` says what
                     each of those seven shops IS (pub, shop, post office,
@@ -205,7 +205,7 @@ TOWN_SHOPS = {
 
 # WHERE THE SEVEN DOORS ARE, read out of the source at import time.
 #
-# `PROBDAT.SRC:96-119` places them:
+# `PROBDAT.SRC:100-123` places them:
 #     pt 00c8,0070,0018,0040,pt_shop,00
 #     pt 05b8,0070,0018,0040,pt_shop,01
 #     ...
@@ -948,7 +948,7 @@ def town_quests() -> Route:
               "`standing:` reads a talk (x4.pds:305-400). Searched as a SURVEY: "
               "which of the four directions finds somebody is not in the "
               "source, because the town places its objects by SCREEN position "
-              "(PROBDAT.SRC:96-119) and not by map position. The success test "
+              "(PROBDAT.SRC:100-123) and not by map position. The success test "
               "is the NPC being set to 'always ignore', which only the talk "
               "path writes -- the first version asserted that obchr CHANGED and "
               "was scored a success for arriving next to an adventurer, which "
@@ -964,7 +964,7 @@ def town_quests() -> Route:
           shop_pred(1), tries=16, max_frames=1400, first_success=False,
           accept_after=16,
           why="the town's seven shops are seven `pt_shop` triggers in one row "
-              "along the top of the map (PROBDAT.SRC:98-104) and `pr07` is "
+              "along the top of the map (PROBDAT.SRC:102-108) and `pr07` is "
               "`faceu` then `newlev` with the trigger's data byte as the shop "
               "number, so WHICH shop is a question about where you stand. "
               "Asserted as `shopdat == 1`, not merely 'phase 7', because any of "

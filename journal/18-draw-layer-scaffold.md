@@ -402,3 +402,17 @@ is a bar.
 ![the monk, still friendly, plus above him](18-monk-friendly.png)
 
 ![the same monk after one interact, health bar](18-monk-bar.png)
+
+## Levels 2–4, and what they cost — 2026-10-27
+
+A cast stores firespell's t2 at `$0744`. That byte is 1..4, because firespell does `iny` on the power bits before it calls the spell. The drawer reads it every frame.
+
+The sprite banks `setspr` installs have no digit glyphs, so the health number stays the segment count. Above level 1 the same mark gains:
+
+- Level 2: one tile `$D8` when `obven` is not zero. That is the harm path's own `beq`, not a 0–20 scale. The clamp sites named in the issue are zeros in this ROM.
+- Level 3: one tile `$B2` for each of the four shield bytes that is not zero. Those counters are write-only, so the pip is the stored byte, not hits remaining.
+- Level 4: one tile from `obweak`. `$C8` ethereal, `$D8` explode-only, `$D0` neither, `$DE` the damage path.
+
+Creating this spell's row — the level rune, then EA, NA, RA, OL — is g09's own charge. The level rune costs `levmana` (4, 8, 12, 16). The first element costs `level×2`, or `level×3` when `levmul` is 3. Each later element costs `level`. Level 1 was measured, mana 50 to 41. The same arithmetic gives 20, 27 and 40 for levels 2–4; those three were not watched on a second playthrough.
+
+A cast costs `spelmana` times that 1..4 power. Slot 27's base is 1, and `mul8` returns the product in A, which is what `chkmana` subtracts. The four cast costs are 1, 2, 3 and 4.
