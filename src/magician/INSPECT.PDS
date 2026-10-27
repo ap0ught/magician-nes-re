@@ -22,6 +22,13 @@
 ;   The next byte, `insppow`, is the power firespell left in t2: `iny` makes
 ;   it 1..4. The drawer reads it every frame.
 ;
+;   dotitle clears through lastz ($0742) and then jsr initdma. That leaves
+;   the slack, so a cast's $5A would still be set after a return to the
+;   title. The three bytes at $8040 call `inspclr` instead, which zeros
+;   the latch, the power, the pulse byte and the bar-turn byte, then
+;   jumps to initdma. initdma's rts still reaches the jsr initcols that
+;   follows the hook. A stays 0, which is what that jsr already passed.
+;
 ;   IN:  as the spell init (jmp indirect). t2 = power 1..4.
 ;   OUT: A = t2, X and Y preserved, insplatch = $5A, insppow = t2
 ;   USES: A
@@ -30,6 +37,8 @@
 
 insplatch equ $0743
 insppow   equ $0744
+inspph    equ $0745
+inspalt   equ $0746
 
         org $fb47
 obinspect
@@ -54,3 +63,10 @@ inspdraw
         jsr farjsr67
 insp_out
         rts
+
+inspclr lda #$00
+        sta insplatch
+        sta insppow
+        sta inspph
+        sta inspalt
+        jmp initdma

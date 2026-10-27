@@ -18,16 +18,33 @@
 ;       attack control with the count run out
 ;
 ;   The glow is a 2x2 of tile $B2, the solid block in the sprite banks
-;   `setspr` installs (`ldy #s120-3` in x5.pds). Its colour 3 is the
-;   sprite attribute's palette colour 3. Gameplay loads spal00, which is
-;   spr.pal, through movepal with X=$1F. That writes:
+;   `setspr` installs (`ldy #s120-3` in x5.pds). Bank $47 tile $32 is
+;   that block: 55 pixels of colour index 3 and a 9-pixel index-2 stripe.
+;   Gameplay loads spal00, which is spr.pal, through movepal with X=$1F:
 ;
-;     pal 1 ($3F14)  $0F $0F $26 $36   attribute $01, colour 3 is red $36
-;     pal 2 ($3F18)  $0F $0F $10 $30   attribute $02, colour 3 is white $30
-;     pal 3 ($3F1C)  $0F $0F $2A $3A   attribute $03, colour 3 is green $3A
+;     pal 0 ($3F10)  $0F $0F $27 $37   the player ($27 is his tunic)
+;     pal 1 ($3F14)  $0F $0F $26 $36   $36 is (214,159,152), pale salmon
+;     pal 2 ($3F18)  $0F $0F $10 $30   the white bar. Not written here
+;     pal 3 ($3F1C)  $0F $0F $2A $3A   friendly, colour 3 is green $3A
 ;
-;   Friendly uses $03. Aggressive uses $01. The bar stays on $02, so it
-;   stays the white row it was.
+;   Measured on this machine's QuickNES palette (block 7): $36 is
+;   (214,159,152) and $26 is (224,90,72). Pointing the glow at attribute
+;   $01 leaves that pale fill, which is his ordinary robe. $16 is
+;   (150,18,1), a real red; $06 is (82,0,0), the dark stripe. $15 is
+;   (153,0,92), magenta, so the fill is $16.
+;
+;   Friendly keeps attribute $03 and the green bytes. Hostile bright
+;   uses the same attribute and queues $06/$16 into cursprpal palette 3
+;   (the bytes nmi0 copies to $3F00). Nothing here writes $2006/$2007.
+;   The dim half and a friendly frame copy those two bytes back from
+;   orgsprpal. Palette 0 and palette 2 are not touched, so the player
+;   and the white bar stay. Title entry runs initcols, which clears
+;   cursprpal, so a red left over when the latch drops does not survive
+;   the title.
+;
+;   inspph ($0745) counts 1..60: 1..30 draws the glow, 31..60 does not,
+;   so the dim half is his own colours. $FF starts the count at 1.
+;   The latch stays set. insppal ($0747) is $5A while the red is queued.
 ;
 ;   insppow (written by obinspect from firespell's t2, which is 1..4):
 ;
@@ -44,6 +61,15 @@
 ;   addspr overwrites Y. The segment count is saved around the call.
 ;   A column at X+8 that would pass $FF is not drawn. The bar stops on
 ;   that same carry, so a row anchored at $F8 does not continue at $00.
+;   A level-3 pip is eight pixels right of the previous one, and the
+;   add that would pass $FF is not stored either.
+;
+;   The picture shows eight sprites on one scanline. A bar is obhbar
+;   tiles on one y, so two full bars are fourteen sprites and the
+;   second would be clipped down to a single tile. The bar is drawn
+;   only when every segment fits among the sprites already on that y.
+;   inspalt ($0746) flips which object is visited first, so the bar
+;   that did not fit is the complete one on the next frame.
 ;
 ;   IN:  none. Called by farjsr67, so rts returns to it.
 ;   OUT: sprites added above each marked object
@@ -54,7 +80,6 @@
 bar_tile   equ $b2
 mark_attr  equ $02
 grn_attr   equ $03
-red_attr   equ $01
 mark_above equ $18
 glow_above equ $38
 ven_tile   equ $d8
@@ -63,10 +88,22 @@ tile_exp   equ $d8
 tile_none  equ $d0
 tile_dmg   equ $de
 insppow    equ $0744
+insppal    equ $0747
+red_lo     equ $06
+red_hi     equ $16
 
         org $b92d
 inspbody
-        ldx #0
+        inc inspalt
+        jsr ib_tick
+        jsr ib_unred
+        lda inspalt
+        and #1
+        beq ib_st
+        ldx #pi
+        dex
+        jmp ib_lp
+ib_st   ldx #0
 ib_lp   cpx #pi
         beq ib_nx
         lda obtyp,x
@@ -89,28 +126,42 @@ ib_lp   cpx #pi
         and #$0c
         beq ib_nx
         jsr ib_mark
-ib_nx   inx
+ib_nx   lda inspalt
+        and #1
+        beq ib_up
+        dex
+        cpx #$ff
+        bne ib_lp
+        rts
+ib_up   inx
         cpx #4
         bne ib_lp
         rts
 
 ib_mark jsr obaggro
-        beq ib_fr
-        lda #red_attr
-        bne ib_gl
-ib_fr   lda #grn_attr
-ib_gl   sta t3
-        lda #bar_tile
-        sta t2
+        php
         lda t0
         sta t4
         lda t1
         sta t7
         sec
         sbc #glow_above
-        bcc ib_ret
+        bcs ib_gy
+        plp
+        jmp ib_ret
+ib_gy   sta t5
+        lda inspph
+        cmp #31
+        bcs ib_dim
+        plp
+        beq ib_col
+        jsr ib_red
+ib_col  lda #grn_attr
+        sta t3
+        lda #bar_tile
+        sta t2
+        lda t5
         sta t1
-        sta t5
         jsr addspr
         lda t4
         clc
@@ -132,6 +183,8 @@ ib_gl   sta t3
         adc #8
         sta t0
         jsr addspr
+        jmp ib_lv
+ib_dim  plp
         jmp ib_lv
 ib_bl   lda t4
         sta t0
@@ -157,7 +210,10 @@ ib_lv   lda insppow
         sta t2
         jsr obhbar
         beq ib_ex
-        tay
+        sta t6
+        jsr ib_room
+        bcs ib_ex
+        ldy t6
 ib_seg  tya
         pha
         jsr addspr
@@ -218,6 +274,7 @@ im_sl   lda t6
         asl
         clc
         adc t4
+        bcs im_sn
         sta t0
         lda #bar_tile
         sta t2
@@ -258,3 +315,60 @@ im_put  sta t2
         sta t3
         jsr addspr
 im_out  rts
+
+; SEC when t6 more sprites would make nine or more on y = t1.
+; X survives. t7 is free: the anchor y is already in t5.
+ib_room ldy #0
+        lda #0
+        sta t7
+ib_rc   cpy sprind
+        beq ib_rd
+        tya
+        pha
+        asl
+        asl
+        tay
+        lda spr,y
+        cmp t1
+        bne ib_rn
+        inc t7
+ib_rn   pla
+        tay
+        iny
+        bne ib_rc
+ib_rd   lda t7
+        clc
+        adc t6
+        cmp #9
+        rts
+
+; 1..30 bright, 31..60 dim. $FF and 60 both land on 1.
+ib_tick lda inspph
+        cmp #60
+        bcc ib_ti
+        lda #$00
+ib_ti   clc
+        adc #$01
+        sta inspph
+        rts
+
+; Drop the queued red. orgsprpal still holds spr.pal.
+ib_unred lda insppal
+        cmp #$5a
+        bne iu_out
+        lda orgsprpal+$0e
+        sta cursprpal+$0e
+        lda orgsprpal+$0f
+        sta cursprpal+$0f
+        lda #$00
+        sta insppal
+iu_out  rts
+
+; Palette 3, index 2 and 3. nmi0 copies cursprpal on the next vblank.
+ib_red  lda #red_lo
+        sta cursprpal+$0e
+        lda #red_hi
+        sta cursprpal+$0f
+        lda #$5a
+        sta insppal
+        rts

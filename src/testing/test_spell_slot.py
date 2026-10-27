@@ -146,14 +146,21 @@ check("the sprite-wipe calls inspdraw and still jumps to emptypan",
 check("inspdraw and inspbody resolved where the hook and the body say",
       syms.get("inspdraw") == 0xFB52 and syms.get("inspbody") == 0xB92D
       and syms.get("insphook") == 0xDFF1
-      and syms.get("insplatch") == 0x0743 and syms.get("insppow") == 0x0744,
+      and syms.get("insplatch") == 0x0743 and syms.get("insppow") == 0x0744
+      and syms.get("inspclr") == 0xFB6E and syms.get("insptitl") == 0x8040,
       f"draw={syms.get('inspdraw')!r} body={syms.get('inspbody')!r} "
       f"hook={syms.get('insphook')!r} latch={syms.get('insplatch')!r} "
-      f"pow={syms.get('insppow')!r}")
+      f"pow={syms.get('insppow')!r} clr={syms.get('inspclr')!r} "
+      f"title={syms.get('insptitl')!r}")
+title = prg[0x40:0x46]
+check("dotitle calls inspclr and the next instruction is still jsr initcols",
+      title == bytes.fromhex("20 6E FB 20 C7 EE")
+      and prg[0x3D:0x40] == bytes.fromhex("CA D0 FA"),
+      title.hex(" "))
 body_expect = bytes.fromhex(B.OUR_MODULES["INSPBODY.PDS"]["expect_bytes"])
 body = prg[0x392D:0x392D + len(body_expect)]
 check("the marker matches its manifest and the next byte is pad",
-      body == body_expect and body[0] == 0xA2 and 0x60 in body
+      body == body_expect and body[0] == 0xEE and 0x60 in body
       and prg[0x392D + len(body_expect)] == 0xFF,
       f"len {len(body_expect)} first ${body[0]:02X} "
       f"after ${prg[0x392D + len(body_expect)]:02X}")
@@ -176,5 +183,24 @@ check("executing obinspect stores the latch and t2, and keeps X and Y",
       and bus.ram[0x0743] == 0x5A and bus.ram[0x0744] == 0x04,
       f"pc=${cpu.pc:04X} a=${cpu.a:02X} x=${cpu.x:02X} y=${cpu.y:02X} "
       f"latch=${bus.ram[0x0743]:02X} pow=${bus.ram[0x0744]:02X}")
+
+for addr in (0x0743, 0x0744, 0x0745, 0x0746):
+    bus.ram[addr] = 0x5A
+cpu.a, cpu.x, cpu.y = 0x11, 0x22, 0x33
+cpu.push(0x7F)
+cpu.push(0xFF)
+cpu.pc = syms["inspclr"]
+for _ in range(16):
+    cpu.step()
+    if cpu.pc == syms["initdma"]:
+        break
+check("inspclr zeros the latch, the power, the pulse and the turn, then "
+      "enters initdma with A still 0",
+      cpu.pc == syms["initdma"] and cpu.a == 0x00
+      and (cpu.x, cpu.y) == (0x22, 0x33)
+      and all(bus.ram[a] == 0x00 for a in (0x0743, 0x0744, 0x0745, 0x0746)),
+      f"pc=${cpu.pc:04X} a=${cpu.a:02X} "
+      f"{bus.ram[0x0743]:02X} {bus.ram[0x0744]:02X} "
+      f"{bus.ram[0x0745]:02X} {bus.ram[0x0746]:02X}")
 
 print(f"\n{ok} checks passed")

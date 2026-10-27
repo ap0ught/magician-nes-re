@@ -12,9 +12,11 @@ local lines = {}
 local fh = io.open(INPUT, "r")
 if not fh then w("FAIL no input file"); f:close(); return end
 local nframes = 0
+local declared = false
 for line in fh:lines() do
   if line:match("^# frames=") then
     nframes = tonumber(line:match("frames=(%d+)"))
+    declared = true
   elseif not line:match("^#") then
     lines[#lines+1] = line
   end
@@ -22,8 +24,16 @@ end
 fh:close()
 w("frames=" .. tostring(nframes) .. " input_lines=" .. #lines)
 
--- pad to nframes
-while #lines < nframes do lines[#lines+1] = "-" end
+-- BizHawk.load_inputs rejects a header whose count is not the number of
+-- input lines. Padding the shortfall, or stopping at nframes and ignoring
+-- the rest, replays a different game than the log recorded.
+if declared and #lines ~= nframes then
+  w("FAIL frame count " .. tostring(nframes) .. " does not match "
+    .. #lines .. " input lines")
+  f:close()
+  pcall(function() client.exit() end)
+  return
+end
 
 -- BizHawk's joypad keys, same list as src/play/bridge.lua. save_inputs writes
 -- simultaneous presses as one line, "Right,A", and "-" for nothing.

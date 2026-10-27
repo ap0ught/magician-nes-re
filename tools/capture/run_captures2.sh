@@ -10,6 +10,13 @@ run_one() {
   local out="$BASE/$name"
   mkdir -p "$out"
   echo "=== $name (frames=$frames presses=$presses) ==="
+  # run.sh treats any nonempty MAGICIAN_EXPECT as success, so a previous
+  # chrfull.bin would pass a capture that never wrote one.
+  if ! rm -f "$out/chrfull.bin"; then
+    echo "FAIL: $name could not remove $out/chrfull.bin" >&2
+    fails=$((fails + 1))
+    return
+  fi
   # capture.lua writes into MAGICIAN_CAPTURE_OUT. run.sh checks MAGICIAN_EXPECT
   # as a literal path, so the expected file has to include $out.
   if ! MAGICIAN_CAPTURE_OUT="$out" MAGICIAN_CAPTURE_FRAMES="$frames" MAGICIAN_CAPTURE_PRESSES="$presses" \

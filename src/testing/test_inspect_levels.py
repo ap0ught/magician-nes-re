@@ -14,11 +14,13 @@ A cast costs spelmana[slot] times the power firespell builds with `iny`
 byte and the high byte, which firespell loads from mul8's Y. For this
 spell that is 1, 2, 3, 4.
 
-The drawer is executed. The sprite banks have no digit glyphs, so the
-health number is the segment count. Level 2 adds a pip when obven is not
-zero (the harm path's beq). Level 3 adds a pip per shield byte that is
-not zero; those counters are write-only, so the pip is the stored byte.
-Level 4 adds one tile from obweak's four exits.
+The drawer is executed. The glow is on for inspph 1..30 and off for
+31..60, so the dim half leaves his own colours. Hostile bright queues
+$06/$16 into cursprpal palette 3 (index 2 and 3); friendly leaves the
+spr.pal green $2A/$3A. The bar stays on palette 2. Level 2 adds a pip
+when obven is not zero (the harm path's beq). Level 3 adds a pip per
+shield byte that is not zero; those counters are write-only, so the
+pip is the stored byte. Level 4 adds one tile from obweak's four exits.
 """
 
 import sys
@@ -133,14 +135,22 @@ for name, addr in (
         ("obhel", 0x0524), ("obven", 0x0528), ("obphysh", 0x0538),
         ("obxl", 0x0514), ("obxh", 0x0518), ("obyl", 0x051C),
         ("obyh", 0x0520), ("mapx", 0x0094), ("mapy", 0x0096),
-        ("spr", 0x0200), ("sprind", 0x00B0), ("insppow", 0x0744)):
+        ("spr", 0x0200), ("sprind", 0x00B0), ("insppow", 0x0744),
+        ("inspph", 0x0745), ("inspalt", 0x0746), ("insppal", 0x0747),
+        ("orgsprpal", 0x04C4), ("cursprpal", 0x04E4)):
     check(f"{name} is at ${addr:04X}", need(name) == addr, f"${need(name):04X}")
 
 BAR = 0xB2
 VEN = 0xD8
 ATTR = 0x02
 GRN = 0x03
-RED = 0x01
+# Hostile uses the same attribute as friendly. The red is cursprpal,
+# not a second attribute: palette 1's $36 is pale salmon, not red.
+RED = 0x03
+ORG = 0x04C4
+CUR = 0x04E4
+# spr.pal through movepal, X=$1F. Palette 3 is the last four bytes.
+SPR = bytes.fromhex("0F0F2737 0F0F2636 0F0F1030 0F0F2A3A")
 # 2x2 glow above the bar. Screen y $80, raised by $38.
 GLOW_Y = (0x48, 0x48, 0x50, 0x50)
 GLOW_X = (0x40, 0x48, 0x40, 0x48)
@@ -148,8 +158,14 @@ GLOW_X = (0x40, 0x48, 0x40, 0x48)
 CLASS = {0x8C: 0xC8, 0x0C: 0xD8, 0x2C: 0xD0, 0x1C: 0xDE}
 
 
+last_phase = 0
+last_flag = 0
+last_pal = bytes(16)
+
+
 def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
-         x=0x40, y=0x80, xh=0):
+         x=0x40, y=0x80, xh=0, x2=None, obhel2=None, turn=0xFF,
+         phase=0, flag=0, cur=None):
     ram = bytearray(0x800)
     ram[need("obtyp")] = 0x11
     ram[need("obchr")] = obchr
@@ -162,13 +178,26 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
     for i, byte in enumerate(shields):
         ram[need("obphysh") + i * 4] = byte
     ram[need("insppow")] = power
+    # $FF is what this slack is at power-on. inc makes the first frame
+    # visit object 0 first. phase 0 ticks to 1, which is the bright half.
+    ram[need("inspalt")] = turn
+    ram[need("inspph")] = phase
+    ram[need("insppal")] = flag
+    ram[ORG:ORG + 16] = SPR
+    ram[CUR:CUR + 16] = SPR if cur is None else cur
+    if x2 is not None:
+        ram[need("obtyp") + 1] = 0x11
+        ram[need("obchr") + 1] = obchr
+        ram[need("obhel") + 1] = obhel if obhel2 is None else obhel2
+        ram[need("obxl") + 1] = x2
+        ram[need("obyl") + 1] = y
     cpu.bus.ram[:] = ram
     cpu.bus.regs[7] = 1
     cpu.a = cpu.x = cpu.y = 0
     cpu.push(0x7F)
     cpu.push(0xFF)
     cpu.pc = need("inspbody")
-    for _ in range(4000):
+    for _ in range(20000):
         cpu.step()
         if cpu.pc == 0x8000:
             break
@@ -179,6 +208,10 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
         o = spr + i * 4
         out.append((cpu.bus.ram[o + 3], cpu.bus.ram[o],
                     cpu.bus.ram[o + 1], cpu.bus.ram[o + 2]))
+    global last_phase, last_flag, last_pal
+    last_phase = cpu.bus.ram[need("inspph")]
+    last_flag = cpu.bus.ram[need("insppal")]
+    last_pal = bytes(cpu.bus.ram[CUR:CUR + 16])
     return out
 
 
@@ -196,10 +229,33 @@ BAR_ROW = [(0x40 + 8 * i, 0x68, BAR, ATTR) for i in range(7)]
 
 angry = draw(0x1C, 1)
 check("level 1 aggressive is the red glow and not the bar",
-      angry == RED_GLOW and all(s[1] != 0x68 for s in angry), str(angry))
+      angry == RED_GLOW and all(s[1] != 0x68 for s in angry)
+      and last_phase == 1 and last_flag == 0x5A
+      and last_pal[0x0E] == 0x06 and last_pal[0x0F] == 0x16
+      and last_pal[0x02:0x04] == bytes((0x27, 0x37))
+      and last_pal[0x0A:0x0C] == bytes((0x10, 0x30)),
+      f"{angry} phase={last_phase:02X} flag={last_flag:02X} pal={last_pal.hex()}")
 friendly = draw(0x1D, 1)
 check("level 1 friendly is the green glow and not a plus",
-      friendly == GRN_GLOW and len(friendly) == 4, str(friendly))
+      friendly == GRN_GLOW and len(friendly) == 4
+      and last_flag == 0 and last_pal[0x0E:0x10] == bytes((0x2A, 0x3A)),
+      f"{friendly} flag={last_flag:02X} pal={last_pal.hex()}")
+dim = draw(0x1C, 1, phase=30, flag=0x5A,
+           cur=bytes.fromhex("0F0F2737 0F0F2636 0F0F1030 0F0F0616"))
+check("level 1 dim drops the glow, restores the green, and advances",
+      dim == [] and last_phase == 31 and last_flag == 0
+      and last_pal[0x0E:0x10] == bytes((0x2A, 0x3A)),
+      f"{dim} phase={last_phase:02X} flag={last_flag:02X} pal={last_pal.hex()}")
+check("a phase of $FF starts the bright half",
+      draw(0x1D, 1, phase=0xFF) == GRN_GLOW and last_phase == 1)
+check("a phase of 60 wraps back to the bright half",
+      draw(0x1C, 1, phase=60) == RED_GLOW and last_phase == 1
+      and last_pal[0x0F] == 0x16)
+dim_bar = draw(0x1C, 2, phase=30)
+check("level 2 dim leaves the white bar and draws no glow",
+      dim_bar == BAR_ROW and last_phase == 31
+      and last_pal[0x0A:0x0C] == bytes((0x10, 0x30)),
+      str(dim_bar))
 check("level 2 adds the white bar under the red glow",
       draw(0x1C, 2, obven=0) == RED_GLOW + BAR_ROW,
       str(draw(0x1C, 2, obven=0)))
@@ -245,5 +301,35 @@ check("x=$F8 keeps the glow's left column and does not wrap the bar",
       edge == [(0xF8, 0x48, BAR, RED), (0xF8, 0x50, BAR, RED),
                (0xF8, 0x68, BAR, ATTR)],
       str(edge))
+edge3 = draw(0x1C, 3, x=0xF8, shields=(0xFF, 0xFF, 0xFF, 0xFF))
+check("power 3 at x=$F8 draws the first shield pip and does not wrap",
+      edge3 == [(0xF8, 0x48, BAR, RED), (0xF8, 0x50, BAR, RED),
+                (0xF8, 0x68, BAR, ATTR), (0xF8, 0x60, BAR, ATTR)]
+      and all(s[0] != 0x00 for s in edge3),
+      str(edge3))
+edge4 = draw(0x1C, 4, x=0xF8, shields=(0xFF, 0xFF, 0xFF, 0xFF))
+check("power 4 at x=$F8 keeps the class tile on the anchor",
+      edge4 == edge3 + [(0xF8, 0x58, 0xDE, ATTR)]
+      and all(s[0] != 0x00 for s in edge4),
+      str(edge4))
+
+
+def bars_at(sprites, y=0x68):
+    return [s for s in sprites if s[1] == y]
+
+
+shared = draw(0x1C, 2, x2=0x80)
+check("two full bars on one y draw seven tiles and not a clipped eighth",
+      bars_at(shared) == BAR_ROW
+      and sum(1 for s in shared if s[1] == 0x48) == 4,
+      str(bars_at(shared)))
+other = draw(0x1C, 2, x2=0x80, turn=0x00)
+check("the next frame draws the other object's complete bar",
+      bars_at(other) == [(0x80 + 8 * i, 0x68, BAR, ATTR) for i in range(7)],
+      str(bars_at(other)))
+both = draw(0x1C, 2, x2=0x80, obhel2=0x20)
+check("a one-segment bar still fits beside a full one",
+      bars_at(both) == BAR_ROW + [(0x80, 0x68, BAR, ATTR)],
+      str(bars_at(both)))
 
 print(f"\n{ok} checks passed")

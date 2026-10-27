@@ -223,10 +223,12 @@ import hashlib  # noqa: E402
 # therefore against the sha of THAT build, a derived constant, not a dump in
 # the registry:
 #
-# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-27 glow
-# (level 1 is a green or red tile-$B2 block, level 2 adds the white bar,
-# and a column that would pass $FF is not drawn)
-#   = 680fca0e... (the constant below); it must be re-measured and
+# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-27 review fixes
+# (a bar is drawn only when the whole count fits on its scanline, a
+# shield pip that would pass $FF is not stored, and dotitle's jsr
+# initdma now clears the inspect slack) and the hostile glow queues
+# palette bytes $06/$16 instead of attribute $01.
+#   = 77178d44... (the constant below); it must be re-measured and
 #   updated together with OUR_MODULES whenever a placement changes on purpose.
 #
 # The guard against drift stays: the rebuild must never equal the sha of a
@@ -244,9 +246,9 @@ for f in rebuilt:
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
 # Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
-REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "680fca0e465e7f586cb8a1593bfd38150f7a486e"
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "77178d4410324c2d389a11ae8600650ffa726575"
 check("the generated rebuild matches Beta 1 except the placed bytes recorded "
-      "in OUR_MODULES (derived sha, journal 18 inspect glow)",
+      "in OUR_MODULES (derived sha, journal 18 inspect review fixes)",
       any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
           == REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 for f in rebuilt),
       "rebuilt .nes does not match the derived Beta-1-except-placements sha")

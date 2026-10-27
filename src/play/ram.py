@@ -657,6 +657,13 @@ field("insplatch", 1, "inspect cast latch. obinspect stores $5A and inspdraw "
 field("insppow", 1, "inspect power, firespell's t2, 1..4. obinspect stores it "
       "in the byte after the latch and inspbody reads it "
       "(src/magician/INSPECT.PDS)", "insppow")
+field("inspph", 1, "inspect pulse byte, the slack after insppow. inspclr "
+      "zeros it with the latch when dotitle runs, because that clear "
+      "stops at lastz (src/magician/INSPECT.PDS)", "inspph")
+field("inspalt", 1, "inspect bar turn. inspbody increments it each frame "
+      "and visits objects in the other order when bit 0 is set, so a "
+      "bar that would not fit on the scanline is the complete bar next "
+      "frame (src/magician/INSPBODY.PDS)", "inspalt")
 field("cursp", 1, "the spell currently being CAST. Cleared to $FF every frame "
       "the player is not casting (x1.pds:711-712). NOT the spell screen's "
       "`currune` at $00CC -- two different bytes with confusingly similar names, "

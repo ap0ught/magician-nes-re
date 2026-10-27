@@ -161,17 +161,31 @@ OUR_MODULES: dict[str, dict] = {
         "origin": 0xFB47,
         # Directly behind WEAK.PDS in the same $FF run ($FAFF-$FB7F, 129
         # bytes). obinspect sets the latch and the power; inspdraw is what
-        # the per-frame hook calls. 39 bytes, $FB47-$FB6D. $FB6E-$FB7F
-        # remains before SAM.SAM at $FB80.
+        # the per-frame hook calls; inspclr is what the title hook calls.
+        # The run ends before SAM.SAM at $FB80.
         "expect_bytes": "A9 5A 8D 43 07 A5 15 8D 44 07 60 20 C5 F2 AD 43 07 "
                         "C9 5A D0 11 A9 B9 A2 2D 86 27 A2 00 86 29 A0 01 84 "
-                        "2A 20 78 F8 60",
+                        "2A 20 78 F8 60 A9 00 8D 43 07 8D 44 07 8D 45 07 8D "
+                        "46 07 4C BD F8",
         "entry": "obinspect",
         "expect_cpu": 0xFB47,
         "note": "issue #3 spell slot 27 cast entry. A cast sets insplatch "
                 "($0743) and insppow ($0744, firespell's t2, 1..4) and "
                 "returns. inspdraw, called after the sprite wipe, draws "
-                "the mark while the latch is set",
+                "the mark while the latch is set. inspclr zeros the latch, "
+                "the power, the pulse byte and the bar turn on title entry",
+    },
+    "INSPTITL.PDS": {
+        # dotitle's jsr initdma. Slot 0 is at $8000 when that runs.
+        # Three bytes, and the jsr initcols at $8043 is not written.
+        "origin": 0x8040,
+        "window_slots": {0x8000: 0},
+        "expect_bytes": "20 6E FB",
+        "entry": "insptitl",
+        "expect_cpu": 0x8040,
+        "note": "issue #3 title hook: dotitle's jsr initdma at $8040 now "
+                "jsr inspclr, which zeros the inspect slack and jumps to "
+                "initdma. The jsr initcols that follows is not written",
     },
     "INSPHOOK.PDS": {
         # The jsr tickmana at $DFF0 stays; these two bytes retarget it at
@@ -193,38 +207,53 @@ OUR_MODULES: dict[str, dict] = {
         # farjsr67 Y=1 maps this slot at $A000, which is where inspdraw
         # calls the body.
         "window_slots": {0xA000: 1},
-        "expect_bytes": "A2 00 E0 03 F0 2D BD F4 04 30 28 38 BD 14 05 E5 "
-                        "94 85 13 BD 18 05 E5 95 D0 19 38 BD 1C 05 E5 96 "
-                        "85 14 BD 20 05 E5 97 D0 0A BD 30 05 29 0C F0 03 "
-                        "20 66 B9 E8 E0 04 D0 CA 60 20 0A FB F0 04 A9 01 "
-                        "D0 02 A9 03 85 16 A9 B2 85 15 A5 13 85 17 A5 14 "
-                        "85 1A 38 E9 38 90 7A 85 14 85 18 20 98 EE A5 17 "
-                        "18 69 08 B0 24 85 13 A5 18 85 14 20 98 EE A5 17 "
-                        "85 13 A5 18 18 69 08 85 14 20 98 EE A5 17 18 69 "
-                        "08 85 13 20 98 EE 4C C4 B9 A5 17 85 13 A5 18 18 "
-                        "69 08 85 14 20 98 EE AD 44 07 C9 02 90 33 A5 1A "
-                        "38 E9 18 90 29 85 18 85 14 A5 17 85 13 A9 02 85 "
-                        "16 A9 B2 85 15 20 25 FB F0 14 A8 98 48 20 98 EE "
-                        "68 A8 A5 13 18 69 08 B0 05 85 13 88 D0 ED 20 FF "
-                        "B9 60 AD 44 07 C9 02 B0 03 4C A7 BA BD 28 05 F0 "
-                        "18 A5 18 18 69 08 B0 11 85 14 A5 17 85 13 A9 D8 "
-                        "85 15 A9 02 85 16 20 98 EE AD 44 07 C9 03 B0 03 "
-                        "4C A7 BA A9 00 85 19 A5 19 0A 0A 85 1A 8A 18 65 "
-                        "1A A8 B9 38 05 F0 1E A5 18 38 E9 08 90 17 85 14 "
-                        "A5 19 0A 0A 0A 18 65 17 85 13 A9 B2 85 15 A9 02 "
-                        "85 16 20 98 EE E6 19 A5 19 C9 04 D0 CA AD 44 07 "
-                        "C9 04 B0 03 4C A7 BA 20 2E FB C9 80 D0 04 A9 C8 "
-                        "D0 12 C9 01 D0 04 A9 D8 D0 0A C9 02 D0 04 A9 D0 "
-                        "D0 02 A9 DE 85 15 A5 18 38 E9 10 90 0D 85 14 A5 "
-                        "17 85 13 A9 02 85 16 20 98 EE 60",
+        "expect_bytes": "EE 46 07 20 0C BB 20 1C BB AD 46 07 29 01 F0 06 "
+                        "A2 03 CA 4C 45 B9 A2 00 E0 03 F0 2D BD F4 04 30 "
+                        "28 38 BD 14 05 E5 94 85 13 BD 18 05 E5 95 D0 19 "
+                        "38 BD 1C 05 E5 96 85 14 BD 20 05 E5 97 D0 0A BD "
+                        "30 05 29 0C F0 03 20 89 B9 AD 46 07 29 01 F0 06 "
+                        "CA E0 FF D0 C3 60 E8 E0 04 D0 BD 60 20 0A FB 08 "
+                        "A5 13 85 17 A5 14 85 1A 38 E9 38 B0 04 28 4C 3B "
+                        "BA 85 18 AD 45 07 C9 1F B0 40 28 F0 03 20 35 BB "
+                        "A9 03 85 16 A9 B2 85 15 A5 18 85 14 20 98 EE A5 "
+                        "17 18 69 08 B0 28 85 13 A5 18 85 14 20 98 EE A5 "
+                        "17 85 13 A5 18 18 69 08 85 14 20 98 EE A5 17 18 "
+                        "69 08 85 13 20 98 EE 4C F9 B9 28 4C F9 B9 A5 17 "
+                        "85 13 A5 18 18 69 08 85 14 20 98 EE AD 44 07 C9 "
+                        "02 90 3B A5 1A 38 E9 18 90 31 85 18 85 14 A5 17 "
+                        "85 13 A9 02 85 16 A9 B2 85 15 20 25 FB F0 1C 85 "
+                        "19 20 E7 BA B0 15 A4 19 98 48 20 98 EE 68 A8 A5 "
+                        "13 18 69 08 B0 05 85 13 88 D0 ED 20 3C BA 60 AD "
+                        "44 07 C9 02 B0 03 4C E6 BA BD 28 05 F0 18 A5 18 "
+                        "18 69 08 B0 11 85 14 A5 17 85 13 A9 D8 85 15 A9 "
+                        "02 85 16 20 98 EE AD 44 07 C9 03 B0 03 4C E6 BA "
+                        "A9 00 85 19 A5 19 0A 0A 85 1A 8A 18 65 1A A8 B9 "
+                        "38 05 F0 20 A5 18 38 E9 08 90 19 85 14 A5 19 0A "
+                        "0A 0A 18 65 17 B0 0D 85 13 A9 B2 85 15 A9 02 85 "
+                        "16 20 98 EE E6 19 A5 19 C9 04 D0 C8 AD 44 07 C9 "
+                        "04 B0 03 4C E6 BA 20 2E FB C9 80 D0 04 A9 C8 D0 "
+                        "12 C9 01 D0 04 A9 D8 D0 0A C9 02 D0 04 A9 D0 D0 "
+                        "02 A9 DE 85 15 A5 18 38 E9 10 90 0D 85 14 A5 17 "
+                        "85 13 A9 02 85 16 20 98 EE 60 A0 00 A9 00 85 1A "
+                        "C4 B0 F0 13 98 48 0A 0A A8 B9 00 02 C5 14 D0 02 "
+                        "E6 1A 68 A8 C8 D0 E9 A5 1A 18 65 19 C9 09 60 AD "
+                        "45 07 C9 3C 90 02 A9 00 18 69 01 8D 45 07 60 AD "
+                        "47 07 C9 5A D0 11 AD D2 04 8D F2 04 AD D3 04 8D "
+                        "F3 04 A9 00 8D 47 07 60 A9 06 8D F2 04 A9 16 8D "
+                        "F3 04 A9 5A 8D 47 07 60",
         "entry": "inspbody",
         "expect_cpu": 0xB92D,
-        "note": "issue #3 inspect marker. Level 1: a green glow "
-                "(attribute $03, palette colour 3 is $3A) when friendly, "
-                "a red glow (attribute $01, colour 3 is $36) when "
-                "aggressive, both tile $B2. Level 2 adds the white "
-                "obhbar bar. Level 3 a pip per stored shield byte, "
-                "level 4 one obweak tile",
+        "note": "issue #3 inspect marker. Level 1 pulses a 2x2 of tile "
+                "$B2, attribute $03, for inspph 1..30 and leaves it off "
+                "for 31..60. Friendly keeps palette 3's green $2A/$3A. "
+                "Hostile bright queues $06 and $16 into cursprpal palette "
+                "3 (index 2 and 3); the dim half and a friendly frame copy "
+                "those two bytes back from orgsprpal. Palette 0 and "
+                "palette 2 are not written. Level 2 adds the white obhbar "
+                "bar, and only when all of those tiles fit on that "
+                "scanline. Level 3 a pip per stored shield byte, stopped "
+                "before the pip would wrap past $FF. Level 4 one obweak "
+                "tile",
     },
     "SPNAME.PDS": {
         # Fixed $C000 window, so the org in the file places it. Seven bytes,
