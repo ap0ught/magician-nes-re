@@ -307,3 +307,60 @@ have one.
 All gates green after the change: make (262,160-byte .nes), PRG
 131000/131072 against Beta 1 (72 differ bytes, one run, all ours), make
 check-py 27/27 (903 checks), make guard clean, titletest PASS (6 checks).
+
+## Iteration 6 — 2026-10-26: slot 27 is a named spell, and its cast is ours
+
+The cast cannot be patched in place. Index $1B of the init tables ($8F81
+low, $8FAB high; the dispatcher at slot 0 $8F39 is `ldy` / `sty $13` /
+`ldy` / `sty $14` / `jmp ($0013)`) points at $9112, and that byte is `rts`.
+$9113 is `pha`, reached by `jsr $9113` from the featherlite path. A `jsr`
+written over the rts would swallow that `pha`.
+
+The name is the other constraint. sptxt at $C9F2 is high-bit terminated.
+Slot 27 is the seven bytes at $CAC2, " UNUSED". The byte before is
+SLOWMO's terminating $CF and the byte after is FEATHERLITE's $46. A longer
+name would slide every later spell.
+
+Wired as three overlays, each the size of what it replaces:
+
+- `src/magician/SPNAME.PDS` — seven bytes at **$CAC2**: "INSPECT" with bit 7
+  set on the T ($49 $4E $53 $50 $45 $43 $D4). Same length, so the
+  neighbours stay put. The rune nybbles and `invsp` are not written; a
+  fresh save still does not have the spell equipped.
+- `src/magician/SPSLOT.PDS` — the two vector halves, slot 0, $8F9C = $47
+  and $8FC6 = $FB. Index $1A stays $9111 and index $1C stays $912E.
+- `src/magician/INSPECT.PDS` — `obinspect` at **$FB47**, one `rts`. The
+  dispatcher `jmp`s there, and `rts` returns to the dispatcher's caller,
+  which is what $9112 did. T2 (power level), T3 and T4 are the init
+  contract and are not read yet. $9112 itself is still `rts`.
+- `src/testing/test_spell_slot.py` — 22 checks, including executing the
+  placed `rts` and checking it preserves A/X/Y.
+
+Match accounting:
+
+|                 | after iter 5        | after iter 6                         |
+|-----------------|--------------------:|-------------------------------------:|
+| PRG vs Beta 1   | 131000/131072       | 130990/131072                        |
+| differ          | 72 bytes, one run   | 82 bytes, four runs                  |
+
+The four runs, and nothing else: $00F9C (vector low), $00FC6 (vector
+high), $1CAC2-$1CAC8 (the name), $1FAFF-$1FB47 (the pad, now 73 bytes
+because the rts sits directly behind obweak). Pad left: 129 - 73 = **56
+bytes**, next free $FB48.
+
+- `src/testing/test_repo_hygiene.py`: derived sha 9bdbae14... →
+  99e7cc98....
+
+The four tiers are still not priced. The spell-creation MP cost has not
+been measured, and this cast does not pretend to know it. What a cast does
+beyond returning waits on the drawing layer being called from the game.
+
+Remaining for the health-bar feature:
+- Four power levels on this one spell, priced from a measured MP cost.
+- HUD: draw the bar from obhbar, gated by obaggro, and at level 4 icon
+  obweak's four exits. No fire/venom/power icons; that source does not
+  exist.
+
+All gates green after the change: make (262,160-byte .nes), PRG
+130990/131072 against Beta 1 (82 differ bytes, four runs, all ours), make
+check-py 28/28 (925 checks), make guard clean, titletest PASS (6 checks).

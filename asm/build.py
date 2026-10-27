@@ -156,6 +156,41 @@ OUR_MODULES: dict[str, dict] = {
                 "neither, or the damage path. Shields and spell type are "
                 "not consulted; nothing in the image reads them for this",
     },
+    "INSPECT.PDS": {
+        "slot": 15,
+        "origin": 0xFB47,
+        # Directly behind WEAK.PDS in the same $FF run ($FAFF-$FB7F, 129
+        # bytes): 72 used through obweak, plus this rts, is 73. $FB48-$FB7F
+        # remains. The byte is $60.
+        "expect_bytes": "60",
+        "entry": "obinspect",
+        "expect_cpu": 0xFB47,
+        "note": "issue #3 spell slot 27 cast entry. The old init was the "
+                "rts at $9112; $9113 is live, so the vector is retargeted "
+                "here and the behavior stays 'return'",
+    },
+    "SPNAME.PDS": {
+        # Fixed $C000 window, so the org in the file places it. Seven bytes,
+        # the same length as the " UNUSED" they replace, so FEATHERLITE does
+        # not move. $49 $4E $53 $50 $45 $43 $D4 is "INSPECT" with bit 7 on T.
+        "expect_bytes": "49 4E 53 50 45 43 D4",
+        "entry": "sp27nm",
+        "expect_cpu": 0xCAC2,
+        "note": "issue #3 slot 27 name, same length as the cartridge's "
+                "' UNUSED' at $CAC2, so the following spell names stay put",
+    },
+    "SPSLOT.PDS": {
+        "slot": 0,
+        # Two bytes, not contiguous: the low and high halves of init vector
+        # index $1B. `expect` (not expect_bytes) because the readback for a
+        # code module demands one contiguous run, and these are $2A apart.
+        # Listed in address order, which is the order the readback pairs
+        # with the sorted write offsets.
+        "expect": {"sp27lo": "47", "sp27hi": "FB"},
+        "note": "issue #3 slot 27 init vector, was $9112 (rts). Now the "
+                "address of obinspect. Neighbour entries $1A and $1C are "
+                "not written",
+    },
     "DRAW.PDS": {
         "slot": 15,
         "origin": 0xFAFF,

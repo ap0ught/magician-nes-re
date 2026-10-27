@@ -1,0 +1,22 @@
+;   Inspect — the cast entry for spell slot 27 (issue #3).
+;
+;   The slot's init used to be the one-byte `rts` at $9112. The next byte,
+;   $9113, is `pha` and is called by other spells (`jsr $9113` from the
+;   featherlite path), so the rts cannot be overwritten with a longer
+;   instruction. SPSLOT.PDS retargets the init vector here instead.
+;
+;   The call is `jmp (t0)` (the dispatcher at slot 0 $8F39), so `rts` returns
+;   to the dispatcher's caller, which is what the old rts did. T2 is the
+;   power level 1..4, T3 the spell number, T4 the caster (x2.pds's spell-init
+;   header). This entry does not read them yet: a cast of slot 27 still does
+;   what the cartridge did, which is return. The body lands here once the
+;   drawing layer is actually called from the game.
+;
+;   IN:  as the spell init the vector calls (jmp indirect, so rts exits it)
+;   OUT: A, X, Y preserved
+;   USES: nothing
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $fb47
+obinspect rts
