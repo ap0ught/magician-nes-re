@@ -226,5 +226,84 @@ All gates green after the change: make (262,160-byte .nes), cmpbank bank
 or more), make guard clean, titletest PASS (6 checks).
 
 Remaining for health-bar feature:
-- Weakness icon source (obchr or per-type table).
+- ~~Weakness icon source (obchr or per-type table).~~ — answered in
+  iteration 5: obchr bit 7 and bits 5-4, the bullet hit test's own exits.
+  There is no per-type spell-weakness table. `obweak` is at $FB2E.
 - Spell slot 27 wiring, four tiers, HUD integration.
+
+## Iteration 5 — 2026-10-26: where weakness actually lives
+
+The question left open ("obchr, or a per-type table looked up by obtyp") was
+answered from the cartridge before any icon byte was chosen. A guessed
+fire/venom/power bit would have been wrong, and the shields looked like the
+obvious place for it.
+
+What the hit test reads. The collision routine entered at slot 4 $8B0D tests
+characteristics at $8B94, and that is the whole decision:
+
+```
+lda obchr,x
+bmi miss            ; bit 7 set: ethereal, the bullet cannot hit
+and #$30
+beq explode_only    ; bits 5-4 = 0: explode, do not damage
+cmp #$20
+bne damage          ; bits 5-4 = 1 or 3: the damage path
+                    ; bits 5-4 = 2: neither explode nor damage
+```
+
+Those are the `c` macro's @1 and @3 (X0.PDS:163-169): "physical/ethereal
+vulnerability" and "physical bullet action when hit". obchars (MISC.SRC:1425,
+44 rows) is copied into obchr at activation. Ethereal wins over the bullet
+action, which is why a spectre (oc_phyn and oc_bendn) is "cannot be hit" and
+not "neither". No second per-type table is indexed on the way there.
+
+What is not a weakness, measured so it cannot be drawn later by accident:
+
+- The four shield counters are write-only. Eight stores in the whole image:
+  the player spells at slot 0 $9007/$900D/$9013/$9019 (`sta` of
+  obphysh+pi through obpowsh+pi) and actob's four clears at slot 15 $EBD4.
+  No lda, cmp, dec or adc of $0538-$0547 exists. `$FF` on a shield is a byte
+  nothing tests.
+- Spell type does not select damage. Source `speldam` (x3.pds) is 42 zero
+  bytes. The cartridge path at slot 4 $8BEB is `lda #$E0 / bit $C303`. The
+  earlier note that this was `jsr harm` was the source's label written next
+  to a `bit`: `bit harm` tests the first byte of harm and does not call it.
+  `shexp`, the table indexed by the spell, chooses an explosion animation.
+
+Encoded as the smallest routine that cannot get the priority wrong:
+
+- `src/magician/WEAK.PDS` — `obweak` — at **$FB2E**, 25 bytes, directly
+  behind `obhbar`. X = object index in, A out: `$80` ethereal, `$01`
+  explode-only, `$02` neither, `$03` the damage path. X and Y preserved.
+- `asm/build.py`: manifest entry, `expect_bytes` /
+  `expect_cpu` $FB2E / entry `obweak`.
+- `src/testing/test_weakness.py` — 22 checks. Manifest and disassembly; the
+  `c` macro and the six named types (spectre, talking snake, talking tree,
+  troll, victory machine, mushroom); speldam's 42 zeros; the image's hit-test
+  bytes and the `lda #$E0 / bit harm` sequence; the shield census (8 writes,
+  0 reads); obchars in the image equal to the vendor expansion; and the
+  placed code EXECUTED in tools/nestrace.py — all 44 rows, plus eight obchr
+  values no row stores (ethereal overriding a damaging action, and bullet
+  action 3, which the `bne` sends down the damage path).
+
+Match accounting, WITH DRAW + AGGRO + HEALTH + WEAK in the build:
+
+|                 | after iter 4          | after iter 5            |
+|-----------------|----------------------:|------------------------:|
+| cmpbank bank    | 131025/131072         | 131000/131072           |
+| differ vs Beta1 | 47 bytes $1FAFF-$1FB2D | 72 bytes $1FAFF-$1FB46 |
+| distinguishes   | + obhbar              | + obweak                |
+
+One contiguous run. Nothing outside $1FAFF-$1FB46 differs from Beta 1.
+Ledger 47 → 72; the $FF pad has 129 - 72 = **57 bytes** left, ending $FB47.
+
+- `src/testing/test_repo_hygiene.py`: derived sha 65d86b4b... →
+  9bdbae14..., as the ledger requires.
+
+Tier 4 can icon these four exits. It cannot icon "weak to fire" until a
+source for that is found; this measurement says the shipped game does not
+have one.
+
+All gates green after the change: make (262,160-byte .nes), PRG
+131000/131072 against Beta 1 (72 differ bytes, one run, all ours), make
+check-py 27/27 (903 checks), make guard clean, titletest PASS (6 checks).

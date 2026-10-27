@@ -221,9 +221,9 @@ import hashlib  # noqa: E402
 # therefore against the sha of THAT build, a derived constant, not a dump in
 # the registry:
 #
-# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-26 health scale
-# rasterizer
-#   = 65d86b4b... (the constant below); it must be re-measured and
+# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-26 vulnerability
+# class (obweak, 25 bytes at $FB2E)
+#   = 9bdbae14... (the constant below); it must be re-measured and
 #   updated together with OUR_MODULES whenever a placement changes on purpose.
 #
 # The guard against drift stays: the rebuild must never equal the sha of a
@@ -241,9 +241,9 @@ for f in rebuilt:
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
 # Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
-REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "65d86b4bfab049149030f30ce090c64bc03c73b7"
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "9bdbae14de8f5f809037b5cbc918e2ee8bf907ba"
 check("the generated rebuild matches Beta 1 except the placed bytes recorded "
-      "in OUR_MODULES (derived sha, journal 18 iteration 4)",
+      "in OUR_MODULES (derived sha, journal 18 iteration 5)",
       any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
           == REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 for f in rebuilt),
       "rebuilt .nes does not match the derived Beta-1-except-placements sha")

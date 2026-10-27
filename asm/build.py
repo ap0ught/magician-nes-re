@@ -130,15 +130,31 @@ OUR_MODULES: dict[str, dict] = {
         # The same expect readback as AGGRO.PDS: the placed 9 bytes must be in
         # the final image. Placed directly behind AGGRO.PDS inside the same
         # measured Beta 1 $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 +
-        # 9 = 47 used, $FB2E-$FB7F pad left between ours and SAM.SAM's first
-        # byte at $FB80. (`lda obhel,x` is BD 24 05: obhel = $0524, per
-        # X0.PDS:550 and asm/out/mag.sym.)
+        # 9 = 47 used through obhbar, and WEAK.PDS continues at $FB2E.
+        # (`lda obhel,x` is BD 24 05: obhel = $0524, per X0.PDS:550 and
+        # asm/out/mag.sym.)
         "expect_bytes": "BD 24 05 4A 4A 4A 4A 4A 60",
         "entry": "obhbar",
         "expect_cpu": 0xFB25,
         "note": "issue #3 health scale rasterizer: obhel/32 by five lsrs, "
                 "the game's own helind divisor (X6.PDS:33-39), so a health "
                 "bar is drawn in the game's own units (obhel $FF = 7 of 8)",
+    },
+    "WEAK.PDS": {
+        "slot": 15,
+        "origin": 0xFB2E,
+        # Placed directly behind HEALTH.PDS inside the same measured Beta 1
+        # $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 + 9 + 25 = 72
+        # used, $FB47-$FB7F pad left before SAM.SAM's first byte at $FB80.
+        # (`lda obchr,x` is BD 30 05: obchr = $0530.)
+        "expect_bytes": "BD 30 05 30 0B 29 30 F0 0A C9 20 F0 09 A9 03 60 "
+                        "A9 80 60 A9 01 60 A9 02 60",
+        "entry": "obweak",
+        "expect_cpu": 0xFB2E,
+        "note": "issue #3 vulnerability class: the bullet hit test's own "
+                "four exits (slot 4 $8B94) — ethereal, explode-only, "
+                "neither, or the damage path. Shields and spell type are "
+                "not consulted; nothing in the image reads them for this",
     },
     "DRAW.PDS": {
         "slot": 15,
