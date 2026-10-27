@@ -387,29 +387,32 @@ after `mptrh`). `$00` and `$FF` both mean off.
 
 The mark follows the object, so it changes when he does. Control bits 3-2
 clear means nobody is there and nothing is drawn. Otherwise obaggro gates
-it: 0 draws a plus (five copies of tile `$B2`), 1 draws obhbar copies of
-the same tile in a row. Tile `$B2` is the solid block in the sprite banks
-`setspr` installs (`s120-3`), and attribute `$02` is the palette whose
-colour 3 is `$30`.
+the colour. Level 1 is a 2×2 of tile `$B2`: green when he is friendly,
+red once he is aggressive. The segmented bar is level 2. Tile `$B2` is the
+solid block in the sprite banks `setspr` installs (`s120-3`). Gameplay
+loads `spr.pal`. Palette 3 colour 3 is green `$3A` (attribute `$03`) and
+palette 1 colour 3 is red `$36` (attribute `$01`). Palette 2 colour 3 is
+still white `$30`, and that is the bar. A column whose X+8 would
+pass `$FF` is not drawn, so a bar anchored at `$F8` is one segment and
+the glow keeps its left column.
 
-`src/play/monk_inspect.py` replays the inspect-slot log from power-on, walks
-the town's east door (`pt 0ea8`) onto the map, and confirms into wilderness
-`$20`. The monk is slot 2, x=`$0080`, obchr=`$1D` (attack control, count 1).
-One cast, and the plus is up. One Up, which is the interact in x4.pds, and
-obchr is `$1C`: the count is 0, the control is still attack, and the plus
-is a bar.
+`src/play/monk_inspect.py` loads `logs/saves/monk-before-cast.state` when
+it is there. The monk is slot 2, x=`$0080`, obchr=`$1D` (attack control,
+count 1). One cast at power 1, and the green glow is up. One Up, which is
+the interact in x4.pds, and obchr is `$1C`: the count is 0, the control is
+still attack, and the glow is red. There is no bar at this power.
 
-![the monk, still friendly, plus above him](18-monk-friendly.png)
+![the monk, still friendly, green glow above him](18-monk-friendly.png)
 
-![the same monk after one interact, health bar](18-monk-bar.png)
+![the same monk after one interact, red glow](18-monk-bar.png)
 
 ## Levels 2–4, and what they cost — 2026-10-27
 
 A cast stores firespell's t2 at `$0744`. That byte is 1..4, because firespell does `iny` on the power bits before it calls the spell. The drawer reads it every frame.
 
-The sprite banks `setspr` installs have no digit glyphs, so the health number stays the segment count. Above level 1 the same mark gains:
+The sprite banks `setspr` installs have no digit glyphs, so the health number stays the segment count. Level 1 is the glow. Above that the same mark gains:
 
-- Level 2: one tile `$D8` when `obven` is not zero. That is the harm path's own `beq`, not a 0–20 scale. The clamp sites named in the issue are zeros in this ROM.
+- Level 2: the white `obhbar` bar, then one tile `$D8` when `obven` is not zero. That is the harm path's own `beq`, not a 0–20 scale. The clamp sites named in the issue are zeros in this ROM. A zero `obhbar` leaves the bar out and keeps the glow.
 - Level 3: one tile `$B2` for each of the four shield bytes that is not zero. Those counters are write-only, so the pip is the stored byte, not hits remaining.
 - Level 4: one tile from `obweak`. `$C8` ethereal, `$D8` explode-only, `$D0` neither, `$DE` the damage path.
 

@@ -139,6 +139,11 @@ for name, addr in (
 BAR = 0xB2
 VEN = 0xD8
 ATTR = 0x02
+GRN = 0x03
+RED = 0x01
+# 2x2 glow above the bar. Screen y $80, raised by $38.
+GLOW_Y = (0x48, 0x48, 0x50, 0x50)
+GLOW_X = (0x40, 0x48, 0x40, 0x48)
 # obweak exits: ethereal, explode-only, neither, damage.
 CLASS = {0x8C: 0xC8, 0x0C: 0xD8, 0x2C: 0xD0, 0x1C: 0xDE}
 
@@ -181,27 +186,39 @@ def tiles(sprites):
     return [s[2] for s in sprites]
 
 
-bar = draw(0x1C, 1)
-check("level 1 draws seven health segments and nothing else",
-      len(bar) == 7 and set(tiles(bar)) == {BAR}
-      and all(s[1] == 0x68 and s[3] == ATTR for s in bar)
-      and [s[0] for s in bar] == [0x40 + 8 * i for i in range(7)],
-      str(bar))
-check("level 2 with no venom is the same bar",
-      draw(0x1C, 2, obven=0) == bar, str(draw(0x1C, 2, obven=0)))
+def glow(attr):
+    return [(GLOW_X[i], GLOW_Y[i], BAR, attr) for i in range(4)]
+
+
+RED_GLOW = glow(RED)
+GRN_GLOW = glow(GRN)
+BAR_ROW = [(0x40 + 8 * i, 0x68, BAR, ATTR) for i in range(7)]
+
+angry = draw(0x1C, 1)
+check("level 1 aggressive is the red glow and not the bar",
+      angry == RED_GLOW and all(s[1] != 0x68 for s in angry), str(angry))
+friendly = draw(0x1D, 1)
+check("level 1 friendly is the green glow and not a plus",
+      friendly == GRN_GLOW and len(friendly) == 4, str(friendly))
+check("level 2 adds the white bar under the red glow",
+      draw(0x1C, 2, obven=0) == RED_GLOW + BAR_ROW,
+      str(draw(0x1C, 2, obven=0)))
+check("level 2 adds the white bar under the green glow too",
+      draw(0x1D, 2) == GRN_GLOW + BAR_ROW, str(draw(0x1D, 2)))
 ven = draw(0x1C, 2, obven=1)
 check("level 2 adds one venom pip under the bar when obven is set",
-      ven[:7] == bar and ven[7] == (0x40, 0x70, VEN, ATTR), str(ven))
+      ven == RED_GLOW + BAR_ROW + [(0x40, 0x70, VEN, ATTR)], str(ven))
 
 one = draw(0x1C, 3, shields=(0xFF, 0, 0, 0))
 check("level 3 adds one pip for a non-zero shield byte",
-      one[:7] == bar and one[7:] == [(0x40, 0x60, BAR, ATTR)], str(one))
+      one == RED_GLOW + BAR_ROW + [(0x40, 0x60, BAR, ATTR)], str(one))
 four = draw(0x1C, 3, shields=(0xFF, 1, 2, 0xFF))
 check("level 3 adds one pip per non-zero shield, in order",
-      four[7:] == [(0x40 + 8 * i, 0x60, BAR, ATTR) for i in range(4)],
-      str(four[7:]))
-check("level 3 with every shield clear adds nothing",
-      draw(0x1C, 3) == bar, str(draw(0x1C, 3)))
+      four[len(RED_GLOW) + 7:] == [(0x40 + 8 * i, 0x60, BAR, ATTR)
+                                   for i in range(4)],
+      str(four[len(RED_GLOW) + 7:]))
+check("level 3 with every shield clear adds only the glow and the bar",
+      draw(0x1C, 3) == RED_GLOW + BAR_ROW, str(draw(0x1C, 3)))
 
 for obchr, tile in CLASS.items():
     got = draw(obchr, 4)
@@ -209,16 +226,24 @@ for obchr, tile in CLASS.items():
     check(f"level 4 obchr ${obchr:02X} adds tile ${tile:02X}",
           mark == [(0x40, 0x58, tile, ATTR)], str(got))
 
-friendly = draw(0x1D, 1)
-check("a friendly object at level 1 gets the plus and not the bar",
-      len(friendly) == 5 and set(tiles(friendly)) == {BAR}
-      and (0x40, 0x60, BAR, ATTR) in friendly, str(friendly))
-check("a zero obhbar draws nothing, at any asked level",
-      draw(0x1C, 4, obhel=0x1F, obven=9, shields=(0xFF,) * 4) == [],
+check("a zero obhbar keeps the glow and draws no bar",
+      draw(0x1C, 2, obhel=0x1F) == RED_GLOW,
+      str(draw(0x1C, 2, obhel=0x1F)))
+check("a zero obhbar at level 4 still adds venom, shields and the class",
+      draw(0x1C, 4, obhel=0x1F, obven=9, shields=(0xFF,) * 4) ==
+      RED_GLOW
+      + [(0x40, 0x70, VEN, ATTR)]
+      + [(0x40 + 8 * i, 0x60, BAR, ATTR) for i in range(4)]
+      + [(0x40, 0x58, 0xDE, ATTR)],
       str(draw(0x1C, 4, obhel=0x1F, obven=9, shields=(0xFF,) * 4)))
 check("an object with no interact control is not marked",
       draw(0x00, 4) == [], str(draw(0x00, 4)))
 check("an object on the next screen is not marked",
       draw(0x1C, 4, xh=1) == [], str(draw(0x1C, 4, xh=1)))
+edge = draw(0x1C, 2, x=0xF8)
+check("x=$F8 keeps the glow's left column and does not wrap the bar",
+      edge == [(0xF8, 0x48, BAR, RED), (0xF8, 0x50, BAR, RED),
+               (0xF8, 0x68, BAR, ATTR)],
+      str(edge))
 
 print(f"\n{ok} checks passed")

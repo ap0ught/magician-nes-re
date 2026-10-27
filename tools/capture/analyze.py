@@ -1,6 +1,7 @@
 import pathlib, hashlib
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 CAP=pathlib.Path('/tmp/opencode/captures')
-DAT=pathlib.Path('/home/cmayfield/code/games/magician-nes/vendor/Magician-NES/DAT')
+DAT=ROOT / 'vendor' / 'Magician-NES' / 'DAT'
 
 # load all DAT chr hashes
 dat_chrs={}

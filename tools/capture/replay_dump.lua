@@ -25,12 +25,39 @@ w("frames=" .. tostring(nframes) .. " input_lines=" .. #lines)
 -- pad to nframes
 while #lines < nframes do lines[#lines+1] = "-" end
 
+-- BizHawk's joypad keys, same list as src/play/bridge.lua. save_inputs writes
+-- simultaneous presses as one line, "Right,A", and "-" for nothing.
+local CANON = {
+  power="Power", up="Up", down="Down", left="Left", right="Right",
+  a="A", b="B", select="Select", start="Start", eject="Eject",
+  stretch="Stretch", l="L", r="R",
+}
+local function canon(name)
+  return CANON[(name or ""):lower()]
+end
+local function buttons_from(line)
+  local t = {}
+  local any = false
+  for raw in line:gmatch("[^,]+") do
+    local name = canon((raw:match("^%s*(.-)%s*$")))
+    if name then
+      t[name] = true
+      any = true
+    else
+      w("FAIL unknown button " .. raw)
+    end
+  end
+  if any then return t end
+  return nil
+end
+
 local guard = 0
 local idx = 1
 while emu.framecount() < nframes and guard < nframes*20 + 5000 do
-  local btn = lines[idx] or "-"
-  if btn ~= "-" and btn ~= "" then
-    joypad.set({ [btn] = true }, 1)
+  local line = lines[idx] or "-"
+  if line ~= "-" and line ~= "" then
+    local buttons = buttons_from(line)
+    if buttons then joypad.set(buttons, 1) end
   end
   emu.frameadvance()
   idx = idx + 1
@@ -56,7 +83,7 @@ end
 local ciram = grab("CIRAM (nametables)", 0, 4096)
 wr("ciram.bin", ciram)
 wr("nt0.bin", ciram and ciram:sub(1,1024))
-wr("nt0attr.bin", ciram and ciram:sub(1025,1088))
+wr("nt0attr.bin", ciram and ciram:sub(961,1024))
 wr("pal.bin", grab("PALRAM", 0, 32))
 wr("chrfull.bin", grab("CHR", 0, 0x10000))
 wr("oam.bin", grab("OAM", 0, 256))

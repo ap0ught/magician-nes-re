@@ -193,29 +193,38 @@ OUR_MODULES: dict[str, dict] = {
         # farjsr67 Y=1 maps this slot at $A000, which is where inspdraw
         # calls the body.
         "window_slots": {0xA000: 1},
-        "expect_bytes": "A2 00 E0 03 F0 67 BD F4 04 30 62 38 BD 14 05 E5 94 85 13 BD 18 "
-                        "05 E5 95 D0 53 38 BD 1C 05 E5 96 85 14 BD 20 05 E5 97 D0 44 BD "
-                        "30 05 29 0C F0 3D 20 0A FB F0 0A 20 25 FB F0 33 A8 A9 B2 D0 03 "
-                        "4C A0 B9 85 15 A9 02 85 16 A5 14 38 E9 18 90 1E 85 14 A5 13 85 "
-                        "17 A5 14 85 18 98 48 20 98 EE 68 A8 A5 13 18 69 08 85 13 88 D0 "
-                        "EF 20 EF B9 E8 E0 04 D0 90 60 A9 B2 85 15 A9 02 85 16 A5 14 38 "
-                        "E9 20 90 33 85 14 A5 13 85 17 A5 14 85 18 A0 00 98 48 A5 13 48 "
-                        "18 79 E5 B9 85 13 A5 14 48 18 79 EA B9 85 14 20 98 EE 68 85 14 "
-                        "68 85 13 68 A8 C8 C0 05 D0 DC 20 EF B9 4C 9A B9 00 F8 00 08 00 "
-                        "F8 00 00 00 08 AD 44 07 C9 02 B0 03 4C 97 BA BD 28 05 F0 18 A5 "
-                        "18 18 69 08 B0 11 85 14 A5 17 85 13 A9 D8 85 15 A9 02 85 16 20 "
-                        "98 EE AD 44 07 C9 03 B0 03 4C 97 BA A9 00 85 19 A5 19 0A 0A 85 "
-                        "1A 8A 18 65 1A A8 B9 38 05 F0 1E A5 18 38 E9 08 90 17 85 14 A5 "
-                        "19 0A 0A 0A 18 65 17 85 13 A9 B2 85 15 A9 02 85 16 20 98 EE E6 "
-                        "19 A5 19 C9 04 D0 CA AD 44 07 C9 04 B0 03 4C 97 BA 20 2E FB C9 "
-                        "80 D0 04 A9 C8 D0 12 C9 01 D0 04 A9 D8 D0 0A C9 02 D0 04 A9 D0 "
-                        "D0 02 A9 DE 85 15 A5 18 38 E9 10 90 0D 85 14 A5 17 85 13 A9 02 "
-                        "85 16 20 98 EE 60",
+        "expect_bytes": "A2 00 E0 03 F0 2D BD F4 04 30 28 38 BD 14 05 E5 "
+                        "94 85 13 BD 18 05 E5 95 D0 19 38 BD 1C 05 E5 96 "
+                        "85 14 BD 20 05 E5 97 D0 0A BD 30 05 29 0C F0 03 "
+                        "20 66 B9 E8 E0 04 D0 CA 60 20 0A FB F0 04 A9 01 "
+                        "D0 02 A9 03 85 16 A9 B2 85 15 A5 13 85 17 A5 14 "
+                        "85 1A 38 E9 38 90 7A 85 14 85 18 20 98 EE A5 17 "
+                        "18 69 08 B0 24 85 13 A5 18 85 14 20 98 EE A5 17 "
+                        "85 13 A5 18 18 69 08 85 14 20 98 EE A5 17 18 69 "
+                        "08 85 13 20 98 EE 4C C4 B9 A5 17 85 13 A5 18 18 "
+                        "69 08 85 14 20 98 EE AD 44 07 C9 02 90 33 A5 1A "
+                        "38 E9 18 90 29 85 18 85 14 A5 17 85 13 A9 02 85 "
+                        "16 A9 B2 85 15 20 25 FB F0 14 A8 98 48 20 98 EE "
+                        "68 A8 A5 13 18 69 08 B0 05 85 13 88 D0 ED 20 FF "
+                        "B9 60 AD 44 07 C9 02 B0 03 4C A7 BA BD 28 05 F0 "
+                        "18 A5 18 18 69 08 B0 11 85 14 A5 17 85 13 A9 D8 "
+                        "85 15 A9 02 85 16 20 98 EE AD 44 07 C9 03 B0 03 "
+                        "4C A7 BA A9 00 85 19 A5 19 0A 0A 85 1A 8A 18 65 "
+                        "1A A8 B9 38 05 F0 1E A5 18 38 E9 08 90 17 85 14 "
+                        "A5 19 0A 0A 0A 18 65 17 85 13 A9 B2 85 15 A9 02 "
+                        "85 16 20 98 EE E6 19 A5 19 C9 04 D0 CA AD 44 07 "
+                        "C9 04 B0 03 4C A7 BA 20 2E FB C9 80 D0 04 A9 C8 "
+                        "D0 12 C9 01 D0 04 A9 D8 D0 0A C9 02 D0 04 A9 D0 "
+                        "D0 02 A9 DE 85 15 A5 18 38 E9 10 90 0D 85 14 A5 "
+                        "17 85 13 A9 02 85 16 20 98 EE 60",
         "entry": "inspbody",
         "expect_cpu": 0xB92D,
-        "note": "issue #3 inspect marker. Level 1: a plus, or obhbar "
-                "segments of tile $B2. Level 2 adds a venom pip, level 3 "
-                "a pip per stored shield byte, level 4 one obweak tile",
+        "note": "issue #3 inspect marker. Level 1: a green glow "
+                "(attribute $03, palette colour 3 is $3A) when friendly, "
+                "a red glow (attribute $01, colour 3 is $36) when "
+                "aggressive, both tile $B2. Level 2 adds the white "
+                "obhbar bar. Level 3 a pip per stored shield byte, "
+                "level 4 one obweak tile",
     },
     "SPNAME.PDS": {
         # Fixed $C000 window, so the org in the file places it. Seven bytes,

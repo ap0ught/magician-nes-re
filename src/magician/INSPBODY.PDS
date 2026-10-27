@@ -14,36 +14,36 @@
 ;       is the sprite coordinate addspr wants
 ;     * obchr bits 3-2 are the interact control (x0.pds `c` macro). 0 means
 ;       "always no one there" (x4.pds). Those get nothing
-;     * obaggro = 1 means the control is attack and the count has run out.
-;       That object gets obhbar segments of tile $B2. obhel $FF is 7, which
-;       is helind's own /32 scale. A zero result draws nothing
-;     * anyone else with a control — the monk, until one interact drops his
-;       count from 1 to 0 — gets a plus. The spell-fx cross at tile $DE is
-;       one tile and did not read at the size of the bar (17 pixels, on the
-;       head). The plus is five copies of the same solid tile, at
-;       (0,-8),(-8,0),(0,0),(8,0),(0,8), raised a further 8 pixels so it
-;       sits above where the bar sits.
+;     * obaggro = 0 with a control set is friendly. obaggro = 1 is the
+;       attack control with the count run out
 ;
-;   The tile is in the sprite banks `setspr` installs for a level
-;   (x5.pds `ldy #s120-3`, four 1KB banks from CHR bank 69). $B2 is the
-;   solid block in bank 71. The gameplay sprite palette's third palette
-;   has $30 in colour 3 (movepal over spr.pal), so attribute $02 draws
-;   it white.
+;   The glow is a 2x2 of tile $B2, the solid block in the sprite banks
+;   `setspr` installs (`ldy #s120-3` in x5.pds). Its colour 3 is the
+;   sprite attribute's palette colour 3. Gameplay loads spal00, which is
+;   spr.pal, through movepal with X=$1F. That writes:
 ;
-;   addspr overwrites Y, and Y is the segment count, so it is saved.
+;     pal 1 ($3F14)  $0F $0F $26 $36   attribute $01, colour 3 is red $36
+;     pal 2 ($3F18)  $0F $0F $10 $30   attribute $02, colour 3 is white $30
+;     pal 3 ($3F1C)  $0F $0F $2A $3A   attribute $03, colour 3 is green $3A
 ;
-;   insppow (written by obinspect from firespell's t2, which is 1..4)
-;   adds to that mark. The sprite banks setspr installs have no digit
-;   glyphs, so the health number is the segment count itself.
+;   Friendly uses $03. Aggressive uses $01. The bar stays on $02, so it
+;   stays the white row it was.
 ;
-;     * 1: the mark only
-;     * 2: also one tile $D8 when obven is not zero. That is the harm
-;       path's own test (x4.pds, lda obven,x / beq), not a 0-20 scale
+;   insppow (written by obinspect from firespell's t2, which is 1..4):
+;
+;     * 1: the glow only. A zero obhbar draws no bar, and the glow stays
+;     * 2: the glow, then obhbar copies of tile $B2 when that count is
+;       not zero, then one tile $D8 when obven is not zero. That is the
+;       harm path's own test (x4.pds, lda obven,x / beq), not a 0-20 scale
 ;     * 3: also one tile $B2 for each of obphysh/obvensh/obfirsh/obpowsh
 ;       that is not zero. Those four counters are write-only, so the pip
 ;       is the stored byte, not a hit count
 ;     * 4: also one tile from obweak. $C8 ethereal, $D8 explode-only,
 ;       $D0 neither, $DE the damage path
+;
+;   addspr overwrites Y. The segment count is saved around the call.
+;   A column at X+8 that would pass $FF is not drawn. The bar stops on
+;   that same carry, so a row anchored at $F8 does not continue at $00.
 ;
 ;   IN:  none. Called by farjsr67, so rts returns to it.
 ;   OUT: sprites added above each marked object
@@ -53,7 +53,10 @@
 
 bar_tile   equ $b2
 mark_attr  equ $02
+grn_attr   equ $03
+red_attr   equ $01
 mark_above equ $18
+glow_above equ $38
 ven_tile   equ $d8
 tile_eth   equ $c8
 tile_exp   equ $d8
@@ -85,26 +88,76 @@ ib_lp   cpx #pi
         lda obchr,x
         and #$0c
         beq ib_nx
-        jsr obaggro
-        beq ib_hap
-        jsr obhbar
-        beq ib_nx
-        tay
+        jsr ib_mark
+ib_nx   inx
+        cpx #4
+        bne ib_lp
+        rts
+
+ib_mark jsr obaggro
+        beq ib_fr
+        lda #red_attr
+        bne ib_gl
+ib_fr   lda #grn_attr
+ib_gl   sta t3
         lda #bar_tile
-        bne ib_dr
-ib_hap  jmp ib_plus
-ib_dr   sta t2
-        lda #mark_attr
-        sta t3
-        lda t1
-        sec
-        sbc #mark_above
-        bcc ib_nx
-        sta t1
+        sta t2
         lda t0
         sta t4
         lda t1
+        sta t7
+        sec
+        sbc #glow_above
+        bcc ib_ret
+        sta t1
         sta t5
+        jsr addspr
+        lda t4
+        clc
+        adc #8
+        bcs ib_bl
+        sta t0
+        lda t5
+        sta t1
+        jsr addspr
+        lda t4
+        sta t0
+        lda t5
+        clc
+        adc #8
+        sta t1
+        jsr addspr
+        lda t4
+        clc
+        adc #8
+        sta t0
+        jsr addspr
+        jmp ib_lv
+ib_bl   lda t4
+        sta t0
+        lda t5
+        clc
+        adc #8
+        sta t1
+        jsr addspr
+ib_lv   lda insppow
+        cmp #2
+        bcc ib_ret
+        lda t7
+        sec
+        sbc #mark_above
+        bcc ib_ex
+        sta t5
+        sta t1
+        lda t4
+        sta t0
+        lda #mark_attr
+        sta t3
+        lda #bar_tile
+        sta t2
+        jsr obhbar
+        beq ib_ex
+        tay
 ib_seg  tya
         pha
         jsr addspr
@@ -113,55 +166,12 @@ ib_seg  tya
         lda t0
         clc
         adc #8
+        bcs ib_ex
         sta t0
         dey
         bne ib_seg
-        jsr ib_more
-ib_nx   inx
-        cpx #4
-        bne ib_lp
-        rts
-
-ib_plus lda #bar_tile
-        sta t2
-        lda #mark_attr
-        sta t3
-        lda t1
-        sec
-        sbc #mark_above+8
-        bcc ib_skip
-        sta t1
-        lda t0
-        sta t4
-        lda t1
-        sta t5
-        ldy #0
-ib_p    tya
-        pha
-        lda t0
-        pha
-        clc
-        adc pdx,y
-        sta t0
-        lda t1
-        pha
-        clc
-        adc pdy,y
-        sta t1
-        jsr addspr
-        pla
-        sta t1
-        pla
-        sta t0
-        pla
-        tay
-        iny
-        cpy #5
-        bne ib_p
-        jsr ib_more
-ib_skip jmp ib_nx
-pdx     db 0,$f8,0,8,0
-pdy     db $f8,0,0,0,8
+ib_ex   jsr ib_more
+ib_ret  rts
 
 ib_more lda insppow
         cmp #2

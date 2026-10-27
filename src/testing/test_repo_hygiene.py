@@ -223,10 +223,10 @@ import hashlib  # noqa: E402
 # therefore against the sha of THAT build, a derived constant, not a dump in
 # the registry:
 #
-# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-27 inspect levels
-# (the level-1 marker, plus insppow at $0744 and the level 2-4 sprites
-# in inspbody)
-#   = d358f034... (the constant below); it must be re-measured and
+# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-27 glow
+# (level 1 is a green or red tile-$B2 block, level 2 adds the white bar,
+# and a column that would pass $FF is not drawn)
+#   = 680fca0e... (the constant below); it must be re-measured and
 #   updated together with OUR_MODULES whenever a placement changes on purpose.
 #
 # The guard against drift stays: the rebuild must never equal the sha of a
@@ -244,9 +244,9 @@ for f in rebuilt:
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
 # Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
-REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "d358f0349a7c1cf3a0352f31af6443ef5406d080"
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "680fca0e465e7f586cb8a1593bfd38150f7a486e"
 check("the generated rebuild matches Beta 1 except the placed bytes recorded "
-      "in OUR_MODULES (derived sha, journal 18 inspect levels)",
+      "in OUR_MODULES (derived sha, journal 18 inspect glow)",
       any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
           == REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 for f in rebuilt),
       "rebuilt .nes does not match the derived Beta-1-except-placements sha")
@@ -301,14 +301,38 @@ check("the guard exits 0 on a clean index, so it can be wired into a hook and "
 # The real index, right now. If something is staged that the guard would refuse,
 # this fails -- which is the "fails if the .fm2 is ever staged" requirement, on the
 # index a commit would actually use.
+#
+# vendor/* is in NEVER_STAGED, and the guard's one exception is a `;` comment
+# in a plain-text .SRC. This check has to use that same exception. Applying
+# the glob alone fails the suite for a change guard_staged.sh accepts.
+sys.path.insert(0, str(ROOT / "tools"))
+import vendor_comments as vc  # noqa: E402
+
+
+def staged_would_fail(path: str) -> bool:
+    if any(fnmatch_name(path, pat) for pat in NEVER_IN_TREE):
+        return True
+    if any(fnmatch_name(path, pat) for pat in NEVER_STAGED):
+        if path.endswith(".SRC") and vc.staged_is_comment_only(path):
+            return False
+        return True
+    return False
+
+
 STAGED = [f for f in git("diff", "--cached", "--name-only",
                          "--diff-filter=ACDMRTUXB").stdout.splitlines() if f]
-bad_s = [f for f in STAGED if any(fnmatch_name(f, pat)
-                                       for pat in NEVER_IN_TREE + NEVER_STAGED)]
+bad_s = [f for f in STAGED if staged_would_fail(f)]
 check("nothing staged RIGHT NOW would be refused by the guard",
       not bad_s,
       f"staged and offending: {bad_s}\n         The index a commit would use "
       f"currently holds: {STAGED}")
+check("a comment-only vendor .SRC is not a staged failure, and anything else "
+      "under vendor/ still is",
+      vc.staged_is_comment_only("vendor/Magician-NES/MISC.SRC")
+      and not staged_would_fail("vendor/Magician-NES/MISC.SRC")
+      and staged_would_fail("vendor/Magician-NES/DAT/TILE.CHR")
+      and staged_would_fail("vendor/no-such.SRC"),
+      "the staged-path check has to call staged_is_comment_only")
 
 # =====================================================================================
 # E. vendor/ code and data are unmodified. A `;` comment in a .SRC file may

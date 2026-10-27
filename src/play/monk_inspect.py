@@ -8,8 +8,9 @@ Not part of src/testing/run_all.py. That suite does not launch an emulator.
 The monk in wilderness 2.0 (PROBDAT, x=$0080 y=$A1, type $11) is attack
 control with count 1, so he ignores you until one interact. The interact
 handler's !i5 path decrements that count (x4.pds). obaggro is 0 before and
-1 after. A cast of slot 27 sets the latch at $0743, and the per-frame hook
-draws one cross while he is friendly and a health bar once he is not.
+1 after. A cast of slot 27 sets insplatch. At power 1 the mark is a green
+glow while he is friendly and a red glow once he is aggressive. The bar
+is level 2.
 
 The first run replays logs/inputs/inspect-slot27.inputs.txt from power-on,
 walks the town's east door (pt 0ea8,0000,0020,00b0, pt_dmap) onto the map,
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-import re
 import shutil
 import sys
 
@@ -32,13 +32,12 @@ from play.emu import BizHawk  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ROM = ROOT / "asm" / "out" / "magician-rebuilt.nes"
-SYM = ROOT / "asm" / "out" / "mag.sym"
 LOG = ROOT / "logs" / "inputs" / "inspect-slot27.inputs.txt"
 STATE = ROOT / "logs" / "saves" / "monk-before-cast.state"
-# Filled from mag.sym in main. The bytes are the slack under x0.pds's
-# RAM-overflow guard; nothing in the vendor source names them.
-LATCH = None
-POWER = None
+# Addresses come from ram.py's fields, which resolve the assembler names.
+# The latch bytes are the slack under x0.pds's RAM-overflow guard.
+LATCH = ram.f("insplatch").addr
+POWER = ram.f("insppow").addr
 LATCH_ON = 0x5A
 MONK = 0x11
 DOOR_X = 0x0EA8
@@ -48,16 +47,6 @@ TOWN = 0x10
 
 def say(text: str) -> None:
     print(text, flush=True)
-
-
-def rom_sym(name: str) -> int:
-    if not SYM.exists():
-        raise SystemExit(f"no symbol table at {SYM}. Run `make rom` first.")
-    for line in SYM.read_text(encoding="latin-1").splitlines():
-        m = re.match(rf"^{re.escape(name)}\s*=\s*\$([0-9A-Fa-f]+)\s*$", line)
-        if m:
-            return int(m.group(1), 16)
-    raise SystemExit(f"{name} is not in {SYM.name}")
 
 
 def fail(emu: BizHawk, why: str) -> None:
@@ -280,13 +269,10 @@ def main() -> int:
     if not ROM.exists():
         say(f"no ROM at {ROM}. Run `make rom` first.")
         return 2
-    global LATCH, POWER
-    LATCH = rom_sym("insplatch")
-    POWER = rom_sym("insppow")
-    obtyp = rom_sym("obtyp")
-    obchr = rom_sym("obchr")
-    obxl = rom_sym("obxl")
-    obxh = rom_sym("obxh")
+    obtyp = ram.f("obtyp").addr
+    obchr = ram.f("obchr").addr
+    obxl = ram.f("obxl").addr
+    obxh = ram.f("obxh").addr
 
     ram.load_button_order()
     stale = BizHawk.running_emuhawk()

@@ -4,23 +4,40 @@
 -- Env:
 --   MAGICIAN_CAPTURE_OUT   output dir
 --   MAGICIAN_CAPTURE_FRAMES target frame count (default 60)
---   MAGICIAN_CAPTURE_PRESSES  comma-separated "frame:button" e.g. "30:START,90:A"
+--   MAGICIAN_CAPTURE_PRESSES  comma-separated "frame:button" e.g. "30:Start,90:A"
 --                            button pressed for 6 frames starting at frame
 local OUT = os.getenv("MAGICIAN_CAPTURE_OUT") or "/tmp/opencode/capture"
 local TARGET = tonumber(os.getenv("MAGICIAN_CAPTURE_FRAMES") or "60")
 local PRESSES = os.getenv("MAGICIAN_CAPTURE_PRESSES") or ""
+
+local f = io.open(OUT .. "/capture.txt", "w")
+local function w(s) f:write(s .. "\n"); f:flush() end
+
+-- BizHawk's joypad keys. Same names as src/play/bridge.lua. "START" is not one
+-- of them; the key is "Start", and a scheduled press of the wrong case never
+-- lands.
+local CANON = {
+  power="Power", up="Up", down="Down", left="Left", right="Right",
+  a="A", b="B", select="Select", start="Start", eject="Eject",
+  stretch="Stretch", l="L", r="R",
+}
+local function canon(name)
+  return CANON[(name or ""):lower()]
+end
 
 -- parse presses
 local presses = {}  -- frame -> {btn, dur}
 for entry in PRESSES:gmatch("[^,]+") do
   local fr, btn, dur = entry:match("(%d+):(%w+):?(%d*)")
   if fr and btn then
-    presses[tonumber(fr)] = { btn=btn, dur= (dur=="" and 1 or tonumber(dur)) }
+    local key = canon(btn)
+    if key then
+      presses[tonumber(fr)] = { btn=key, dur= (dur=="" and 1 or tonumber(dur)) }
+    else
+      w("FAIL unknown button " .. btn)
+    end
   end
 end
-
-local f = io.open(OUT .. "/capture.txt", "w")
-local function w(s) f:write(s .. "\n"); f:flush() end
 
 local guard = 0
 local active_btn = nil
@@ -62,7 +79,9 @@ end
 local ciram = grab("CIRAM (nametables)", 0, 4096)
 wr("ciram.bin", ciram)
 local nt = ciram and ciram:sub(1,1024) or nil
-local attr = ciram and ciram:sub(1025,1088) or nil
+-- Nametable 0 is 960 tile bytes then 64 attribute bytes. Lua indexes are
+-- 1-based, so the attributes are 961-1024. 1025-1088 is the next nametable.
+local attr = ciram and ciram:sub(961,1024) or nil
 wr("nt0.bin", nt)
 wr("nt0attr.bin", attr)
 
