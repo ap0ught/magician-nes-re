@@ -188,8 +188,9 @@ The cartridge is the user's own. It is never committed; see `LEGAL.md`.
 
 `vendor/Magician-NES/` is **Eurocom's source, vendored here** as of 2026-10-03, at upstream
 commit `bf653a407cd97e4dfdca665063f25d8b44da130a`. It was a submodule until then; see
-`LEGAL.md` for why, and for the terms. The files are unmodified — the build reads the decoded
-form in `pds-text/`, not these.
+`LEGAL.md` for why, and for the terms. The code and data are unmodified — the build
+reads the decoded form in `pds-text/`, not these. A `;` comment may be added to a
+plain-text `.SRC` file; that is the only edit those files take.
 
 It holds eight `X?.PDS` project files, ten `.SRC` include files, the level data under `DAT/`,
 the message text under `TXT/` and the CHR artwork.
@@ -205,7 +206,7 @@ halves are kept apart on purpose:
 
 | | |
 |---|---|
-| `vendor/Magician-NES/` | **Eurocom's, read-only**, pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a` and byte-identical to it. `git status vendor/` must stay empty. Re-syncable from upstream at any time. |
+| `vendor/Magician-NES/` | **Eurocom's**, pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a`. Code and data stay byte-identical to that pin. A `;` comment may be added to a plain-text `.SRC` file, and nothing else in the tree may change. Re-syncable from upstream; the comments have to be kept or put back. |
 | `src/magician/` | **Ours.** Everything we author. Assembled by the same assembler (`asm/pds6502.py`), in the same PDS dialect, in the same build. |
 | `asm/build.py` → `OUR_MODULES` | The manifest of what we add and where each module goes. A file in `src/magician/` with no entry is a hard error, not a silent no-op. |
 

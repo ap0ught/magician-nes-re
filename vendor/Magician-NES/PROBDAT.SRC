@@ -5,6 +5,10 @@
 	;H : trigger_x = ob_x : ob_y=level y-ob chr height/2
 	;V : trigger_y = ob_y : ob_x=level y-ob chr width/2
 	;
+	; Comments below are ours. The data is Eurocom's. On a horizontal level
+	; the st position is the object's x, and the y is that level's obxyst
+	; ground byte minus the obyr byte for the type.
+	;
 
 
 	;
@@ -128,7 +132,7 @@ pt20	itr
 st20	sti 20
 	st 0000,st_msg,$00
 	st 0008,st_gid,$02
-	st 0080,st_mon,$00,$00,$00	;monk
+	st 0080,st_mon,$00,$00,$00	;monk. wilderness 2.0, x=$0080 y=$A1, type $11. attack control, count 1, so it ignores you until one interact
 	st 0440,st_gid,$00
 	st 04b0,st_msg,$01
 	st 0560,st_gid,$03
@@ -178,7 +182,7 @@ st30	sti 30
 	st 0690,st_msg,$06
 	st 0888,st_gid,$09
 	st 0890,st_msg,$03
-	st 08b8,st_spc,$01,$00,$00	;spectre
+	st 08b8,st_spc,$01,$00,$00	;spectre. lake 3.0, x=$08B8 y=$40, type $0C. attack control, count 0, so aggressive on arrival. first such object in this file
 	st 0930,st_tur,$00	;turtle
 	st 0a70,st_spc,$02,$00,$00	;spectre
 	st 0ad0,st_spc,$01,$00,$00	;spectre

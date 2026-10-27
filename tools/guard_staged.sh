@@ -11,10 +11,11 @@
 #
 # What it refuses, and why each one is separate:
 #
-#   vendor/*              the submodule is read-only, unmodified, pinned at
-#                         bf653a407cd97e4dfdca665063f25d8b44da130a. A staged
-#                         change there is either a mistake or something much
-#                         worse.
+#   vendor/*              pinned at bf653a407cd97e4dfdca665063f25d8b44da130a.
+#                         A staged change to code or data is a mistake. The one
+#                         exception is a `;` comment in a plain-text .SRC file,
+#                         which tools/vendor_comments.py accepts. Anything else
+#                         under vendor/ is refused.
 #   *.nes and friends     the cartridge. Never in the tree, in any form.
 #   *.fm2                 the TAS movie. Third-party and copyrighted, and it is
 #                         the most tempting file in this project to commit by
@@ -61,8 +62,14 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   count=$((count + 1))
   case "$f" in
+    vendor/*/*.SRC)
+      if python3 tools/vendor_comments.py --staged "$f"; then
+        :
+      else
+        echo "FAIL: staged under vendor/ and the change is not a comment:" "$f"; bad=1
+      fi ;;
     vendor/*)
-      echo "FAIL: staged under vendor/ -- that tree is read-only and pinned:" "$f"; bad=1 ;;
+      echo "FAIL: staged under vendor/ -- code and data stay pinned; only a ; comment in a .SRC file may change:" "$f"; bad=1 ;;
     *.nes|*.unf|*.unif|*.unl|*.fds|*.nes2|*.nsf|*.nsf2)
       echo "FAIL: staged a cartridge image: $f"; bad=1 ;;
     *.fm2|*.fm2s|*.bk2|*.bkm|*.gmv|*.vbm|*.inp|*.m64|*.gmw|*.vfr|*.lsmv)

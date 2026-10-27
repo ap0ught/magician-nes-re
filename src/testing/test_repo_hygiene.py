@@ -17,8 +17,9 @@ Twenty checks:
   B. what is in the working tree but not tracked, same list
   C. the guard refuses, for each of the four classes -- exercised, not asserted
   D. the guard exits 0 on a clean index, so it can be wired into a hook
-  E. `vendor/` is byte-identical to what is committed, and the upstream pin in
-     LEGAL.md and README.md is the same 40 characters in both
+  E. `vendor/` code and data match what is committed. A `;` comment in a
+     `.SRC` file may differ, which is the exception LEGAL.md states. The
+     upstream pin in LEGAL.md and README.md is the same 40 characters in both
   F. no CODE in this repository reaches into another project's checkout. Prose,
      docstrings and `journal/` may name it -- that is where the provenance lives
      -- but a default path may not. See `src/testing/nodep.py` for why the
@@ -175,8 +176,9 @@ check(f"no tracked file is over {SIZE_CEILING // 1024} KiB", not big,
 # What must not be tracked is a *change* to it, which is check E.
 check("vendor/ IS tracked, because the build reads Eurocom's files from it",
       any(f.startswith("vendor/") for f in TRACKED),
-      "the rule is not 'never commit vendor/' but 'never modify it'. LEGAL.md "
-      "records the upstream commit these files are byte-identical to.")
+      "the rule is not 'never commit vendor/' but 'never change its code or "
+      "data'. A `;` comment in a .SRC file is the exception LEGAL.md states. "
+      "LEGAL.md records the upstream commit the code and data match.")
 
 # B. What is in the tree but not tracked.
 # `--exclude-standard` is what applies .gitignore; without it `git ls-files
@@ -221,9 +223,10 @@ import hashlib  # noqa: E402
 # therefore against the sha of THAT build, a derived constant, not a dump in
 # the registry:
 #
-# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-26 slot 27 wiring
-# (name at $CAC2, init vector, obinspect rts at $FB47)
-#   = 99e7cc98... (the constant below); it must be re-measured and
+# sha1(asm/out/magician-rebuilt.nes) after the 2026-10-27 inspect marker
+# (the slot 27 wiring, plus obinspect/inspdraw at $FB47, the jsr retarget
+# at $DFF1, and inspbody at $B92D)
+#   = 895f9ded... (the constant below); it must be re-measured and
 #   updated together with OUR_MODULES whenever a placement changes on purpose.
 #
 # The guard against drift stays: the rebuild must never equal the sha of a
@@ -241,9 +244,9 @@ for f in rebuilt:
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
 # Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
-REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "99e7cc98228f2171ec22db9c1aefe8f0c246552d"
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "895f9ded1b866563a648995ce1d40b4a37bc2ca4"
 check("the generated rebuild matches Beta 1 except the placed bytes recorded "
-      "in OUR_MODULES (derived sha, journal 18 iteration 6)",
+      "in OUR_MODULES (derived sha, journal 18 inspect marker)",
       any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
           == REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 for f in rebuilt),
       "rebuilt .nes does not match the derived Beta-1-except-placements sha")
@@ -308,15 +311,33 @@ check("nothing staged RIGHT NOW would be refused by the guard",
       f"currently holds: {STAGED}")
 
 # =====================================================================================
-# E. vendor/ is unmodified, and its pin is the same in both documents.
+# E. vendor/ code and data are unmodified. A `;` comment in a .SRC file may
+# differ, and DAT/ art may differ. The pin is the same in both documents.
 # =====================================================================================
+sys.path.insert(0, str(ROOT / "tools"))
+import vendor_comments as vc  # noqa: E402
+
+check("a ; tail on a code line is a comment",
+      vc.same_code("\tst 0080,st_mon,$00\t;monk",
+                   "\tst 0080,st_mon,$00\t;monk, wilderness"))
+check("a new ; line is a comment",
+      vc.same_code("\tst 0080,st_mon,$00",
+                   "\t; note\n\tst 0080,st_mon,$00"))
+check("changing the data is not a comment",
+      not vc.same_code("\tst 0080,st_mon,$00", "\tst 0081,st_mon,$00"))
+
 vstatus = git("status", "--porcelain", "--", "vendor").stdout.strip()
-# Eurocom's *source* (.PDS/.SRC) must stay unmodified; only the DAT/ art assets
-# may change, per LEGAL.md "Cartridge-derived bytes (exception)" (2026-10-26).
-bad_src = [l for l in vstatus.splitlines()
-           if not l.strip().split()[-1].startswith("vendor/Magician-NES/DAT/")]
-check("Eurocom's source tree is unmodified (only vendor/.../DAT/ art assets may change)",
-      not bad_src, f"source files changed:\n" + "\n".join(bad_src))
+bad_src = []
+for line in vstatus.splitlines():
+    path = line.strip().split()[-1]
+    if path.startswith("vendor/Magician-NES/DAT/"):
+        continue
+    if path.endswith(".SRC") and vc.worktree_is_comment_only(path):
+        continue
+    bad_src.append(line)
+check("Eurocom's code and data are unmodified (a ; comment in a .SRC file may "
+      "differ, and vendor/.../DAT/ art may differ)",
+      not bad_src, "source files changed:\n" + "\n".join(bad_src))
 
 PIN = "bf653a407cd97e4dfdca665063f25d8b44da130a"
 pins = {}
