@@ -1,0 +1,69 @@
+; Magician ROM-native HUD, stage 1: prepare a compact status row.
+; Source-only module until a safe VBlank nametable update hook is verified.
+; This code does NOT touch $2006/$2007, the message box, or OAM.
+; Call hud_sample once per frame (or less) from a fixed-bank trampoline.
+; It creates five 0..7 fill lengths, suitable for an 8-tile HUD row.
+;
+; Inputs from Eurocom source:
+;   obhel+pi ($0527)   player health, 0..255
+;   manacur ($0047)    current mana, 16-bit little-endian
+;   manatop ($0049)    maximum mana, 16-bit little-endian
+;   food ($005A)       game food counter (raw, not display percent)
+;   water ($005B)      game water counter (raw, not display percent)
+;   obven+pi ($052B)   player venom (raw)
+;
+; Outputs: hud_health, hud_mana, hud_food, hud_water, hud_venom
+;          values 0..7. Food/water/venom are *raw /32* previews, not
+;          percentages; display normalization must be verified in game code.
+;
+; A,X,Y preserved. Flags NOT preserved. No PPU access.
+; Uses no scratch zero-page memory.
+;
+; NOTE: hud_mana is the high byte of a 16-bit mana value, saturated
+; to 7; this is NOT yet a ratio to manatop. Until mana scaling is
+; verified, do not present it as a percent or a final HUD meter.
+
+hud_health equ $0748
+hud_mana   equ $0749
+hud_food   equ $074a
+hud_water  equ $074b
+hud_venom  equ $074c
+
+hud_sample
+        pha
+        txa
+        pha
+        tya
+        pha
+        ldx #pi
+        lda obhel,x
+        jsr hud_shift5
+        sta hud_health
+        lda manacur+1
+        cmp #$07
+        bcc hud_mok
+        lda #$07
+hud_mok sta hud_mana
+        lda food
+        jsr hud_shift5
+        sta hud_food
+        lda water
+        jsr hud_shift5
+        sta hud_water
+        lda obven,x
+        jsr hud_shift5
+        sta hud_venom
+        pla
+        tay
+        pla
+        tax
+        pla
+        rts
+
+hud_shift5
+        lsr a
+        lsr a
+        lsr a
+        lsr a
+        lsr a
+        rts

@@ -1,0 +1,117 @@
+name: Build and release Magician NES
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag (leave empty to build/test only)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The build requires the author's locally owned Beta 1 cartridge.
+    # Do not use a GitHub-hosted runner or store the ROM as a GitHub secret.
+    runs-on: [self-hosted, linux, magician-rom-builder]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check cartridge and tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v python3
+          command -v make
+          test -f "$(python3 tools/cartref.py)" || {
+            echo "::error::Beta 1 reference cartridge is missing on the self-hosted runner"
+            exit 1
+          }
+
+      - name: Run Python tests
+        run: make check-py
+
+      - name: Build NES ROM
+        run: make rom
+
+      - name: Validate output
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          rom = Path("asm/out/magician-rebuilt.nes")
+          data = rom.read_bytes()
+          assert len(data) == 262160, f"unexpected ROM size: {len(data)}"
+          assert data[:4] == b"NES\x1a", "invalid iNES header"
+          assert data[4:8] == bytes([8, 16, 0x40, 0]), "unexpected mapper/geometry"
+          print("ROM SHA-256:", hashlib.sha256(data).hexdigest())
+          PY
+
+      - name: Decode and verify retail IPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          base64 --decode ips/retail-modules.ips.b64 > dist/retail-modules.ips
+          python3 tools/verify_retail_ips.py dist/retail-modules.ips
+
+      - name: Upload retail IPS workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: retail-modules-${{ github.sha }}
+          path: dist/retail-modules.ips
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload private workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: magician-rebuilt-${{ github.sha }}
+          path: asm/out/magician-rebuilt.nes
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built ROM
+        uses: actions/download-artifact@v4
+        with:
+          name: magician-rebuilt-${{ github.sha }}
+
+      - name: Download retail IPS
+        uses: actions/download-artifact@v4
+        with:
+          name: retail-modules-${{ github.sha }}
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::Release tag must resemble v1.2.3"
+            exit 1
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "Magician NES $TAG" --notes "Non-commercial source rebuild. Requires rights to use and redistribute the game assets."
+          gh release upload "$TAG" magician-rebuilt.nes retail-modules.ips --clobber
