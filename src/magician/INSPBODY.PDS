@@ -23,28 +23,41 @@
 ;   $EC/$F4/$FC/$04/$0C). frame (slot 2 $9759) plants those at
 ;   (obxl-mapx, obyl-mapy) before this hook runs, and facing right
 ;   subtracts another 8 from the x origin first, so the columns sit at
-;   x-16 and x-8. A bright frame ORs attribute $03 onto those sprites
-;   and leaves the flip bits. Tile $B2 is not drawn for the glow.
+;   x-16 and x-8. A bright frame keeps the flip bits and replaces the
+;   palette bits: $03 when he is friendly, $01 when he is hostile.
+;   Tile $B2 is not drawn for the glow.
 ;
 ;   Gameplay loads spal00, which is spr.pal, through movepal with X=$1F:
 ;
 ;     pal 0 ($3F10)  $0F $0F $27 $37   the player ($27 is his tunic)
 ;     pal 1 ($3F14)  $0F $0F $26 $36   his robe. Attribute $01 is this
 ;     pal 2 ($3F18)  $0F $0F $10 $30   the white bar. Not written here
-;     pal 3 ($3F1C)  $0F $0F $2A $3A   the pulse. Friendly stays green
+;     pal 3 ($3F1C)  $0F $0F $2A $3A   friendly. Stays this green
 ;
-;   Measured on this machine's QuickNES palette (block 7): $36 is
-;   (214,159,152) and $26 is (224,90,72), so attribute $01 does not
-;   change the robe. $16 is (150,18,1) and $06 is (82,0,0). Both pulses
-;   share attribute $03. A hostile bright frame queues $06/$16 into
-;   cursprpal palette 3, which nmi0 copies at vblank; a friendly frame
-;   leaves the green. Nothing here writes $2006/$2007. The dim half, a
-;   friendly frame, and a cleared red flag copy those two bytes back
-;   from orgsprpal. Palette 0 and palette 2 are not touched, so the
-;   player and the white bar stay. Sprites whose tile is outside
-;   $74-$7D are not recolored, which is what keeps the player. Title
-;   entry runs initcols, which clears cursprpal, so a red left over
-;   when the latch drops does not survive the title.
+;   The two pulses do not share an attribute. Friendly forces the
+;   palette bits to $03 and does not write palette 3, so it stays
+;   $2A/$3A. Hostile forces the palette bits to $01 and queues $16
+;   into palette 1 index 3 (cursprpal+$07). nmi0 copies cursprpal at
+;   vblank. Nothing here writes $2006/$2007.
+;
+;   Measured on the pre-cast OAM and the sprite CHR at $0000. Tiles
+;   $74-$7D are 196 pixels of index 3 (the fill) and 70 of index 2
+;   (the shade); the bottom row, $7C/$7D, has no index 3. The player's
+;   tiles $02-$05 are attribute $41: 50 pixels of index 2, and index 3
+;   only on tile $03, five pixels of its bottom row. Palette 0's index
+;   2 and 3 are that tunic (tile $07 is 64 pixels of index 3). Tile
+;   $B2, the bar, is 17 pixels of index 2 and 17 of index 3. On this
+;   machine's framebuffer $16 is (150,18,1), $26 is (224,90,72), $06
+;   is (82,0,0). Index 2 cannot take $06: palette 0 and palette 1
+;   index 2 are the player, palette 2 index 2 is the bar, and palette
+;   3 index 2 is the friendly green. The fill is the byte that can
+;   move. Palette 1 index 3 becomes $16, so the body (those 196
+;   pixels) is red. The shade stays $26, which is already red, rather
+;   than the tan $37. The dim half, a friendly frame, and a cleared
+;   red flag copy that one byte back from orgsprpal. Sprites whose
+;   tile is outside $74-$7D are not recolored. Title entry runs
+;   initcols, which clears cursprpal, so a red left over when the
+;   latch drops does not survive the title.
 ;
 ;   inspph ($0745) counts 1..60: 1..30 recolors the body, 31..60 does
 ;   not, and the sprite list was rebuilt this frame in his own colours.
@@ -90,6 +103,7 @@
 bar_tile   equ $b2
 mark_attr  equ $02
 grn_attr   equ $03
+red_attr   equ $01
 mark_above equ $18
 body_lo    equ $74
 body_hi    equ $7e
@@ -100,7 +114,6 @@ tile_none  equ $d0
 tile_dmg   equ $de
 insppow    equ $0744
 insppal    equ $0747
-red_lo     equ $06
 red_hi     equ $16
 
         org $b92d
@@ -163,7 +176,10 @@ ib_mark jsr obaggro
         plp
         beq ib_hue
         jsr ib_red
-ib_hue  jsr ib_tint
+        lda #red_attr
+        bne ib_tin
+ib_hue  lda #grn_attr
+ib_tin  jsr ib_tint
         jmp ib_lv
 ib_dim  plp
 ib_lv   lda insppow
@@ -289,12 +305,13 @@ im_put  sta t2
         jsr addspr
 im_out  rts
 
-; OR attribute $03 onto this object's standing sprites. X survives.
+; A is the palette attribute, $03 friendly or $01 hostile. X survives.
 ; t4 is the screen x, t7 the screen y. Columns are x-16, x-8 and x
 ; (the two the frame uses, plus the facing-right shift). Rows are
 ; y-20, y-12, y-4, y+4 and y+12. Flip bits stay. Any other tile,
 ; including the player and tile $B2, is left where the game put it.
-ib_tint ldy #0
+ib_tint sta t2
+        ldy #0
 it_n    cpy sprind
         beq it_out
         tya
@@ -330,7 +347,8 @@ it_yy   lda spr,y
         cmp #$0c
         bne it_sk
 it_ok   lda spr+2,y
-        ora #grn_attr
+        and #$fc
+        ora t2
         sta spr+2,y
 it_sk   pla
         tay
@@ -383,23 +401,21 @@ ib_ti   clc
         sta inspph
         rts
 
-; Drop the queued red. orgsprpal still holds spr.pal.
+; Drop the queued red. orgsprpal still holds spr.pal. The one byte
+; ib_red writes is palette 1 index 3.
 ib_unred lda insppal
         cmp #$5a
         bne iu_out
-        lda orgsprpal+$0e
-        sta cursprpal+$0e
-        lda orgsprpal+$0f
-        sta cursprpal+$0f
+        lda orgsprpal+$07
+        sta cursprpal+$07
         lda #$00
         sta insppal
 iu_out  rts
 
-; Palette 3, index 2 and 3. nmi0 copies cursprpal on the next vblank.
-ib_red  lda #red_lo
-        sta cursprpal+$0e
-        lda #red_hi
-        sta cursprpal+$0f
+; Palette 1, index 3. The fill of tiles $74-$7D. nmi0 copies
+; cursprpal on the next vblank. Index 2 stays $26.
+ib_red  lda #red_hi
+        sta cursprpal+$07
         lda #$5a
         sta insppal
         rts

@@ -223,11 +223,12 @@ import hashlib  # noqa: E402
 # therefore against the sha of THAT build, a derived constant, not a dump in
 # the registry:
 #
-# sha1(asm/out/magician-rebuilt.nes) after the hostile pulse recolors
-# the standing sprites (tiles $74-$7D, attribute $03) and queues
-# palette bytes $06/$16, and after the health bar rotates through
-# slots 0, 1 and 2 and is refused when OAM cannot hold every segment.
-#   = d24440d4... (the constant below); it must be re-measured and
+# sha1(asm/out/magician-rebuilt.nes) after hostile and friendly use
+# different sprite attributes. Friendly stays attribute $03 and
+# palette 3's green. Hostile is attribute $01 and queues $16 into
+# palette 1 index 3. The health bar still rotates through slots
+# 0, 1 and 2 and is refused when OAM cannot hold every segment.
+#   = 08a29100... (the constant below); it must be re-measured and
 #   updated together with OUR_MODULES whenever a placement changes on purpose.
 #
 # The guard against drift stays: the rebuild must never equal the sha of a
@@ -245,7 +246,7 @@ for f in rebuilt:
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
 # Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
-REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "d24440d47afc3e37f92fe2c08a8001b3ef795da4"
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "08a29100802b63ef1c9cfd58ba62bf1bc3deef9c"
 check("the generated rebuild matches Beta 1 except the placed bytes recorded "
       "in OUR_MODULES (derived sha, journal 18 inspect review fixes)",
       any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
