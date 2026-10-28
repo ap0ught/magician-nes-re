@@ -143,4 +143,23 @@ if prg_path.is_file():
 else:
     print("  -- no asm/out/prg.bin; skipped the final-image readback (run make)")
 
+# An empty module that still declares expect_bytes used to skip the readback
+# (`if not offs: continue` ran first) and the build reported success. The
+# stub writes nothing for every module, so the first declared placement is
+# the one that has to fail.
+class _NoWrites:
+    writes_by_file = {}
+    sym = {}
+
+
+try:
+    B.verify_our_scenes(_NoWrites(), bytearray(1), b"", [])
+    empty_rejected = False
+    empty_detail = "verify_our_scenes returned"
+except SystemExit as e:
+    empty_detail = str(e)
+    empty_rejected = "wrote no bytes" in empty_detail and "expect_bytes" in empty_detail
+check("an empty module with expect_bytes is rejected",
+      empty_rejected, empty_detail)
+
 print(f"\n{ok} checks passed")

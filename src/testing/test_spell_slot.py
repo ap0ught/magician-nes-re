@@ -160,7 +160,8 @@ check("dotitle calls inspclr and the next instruction is still jsr initcols",
 body_expect = bytes.fromhex(B.OUR_MODULES["INSPBODY.PDS"]["expect_bytes"])
 body = prg[0x392D:0x392D + len(body_expect)]
 check("the marker matches its manifest and the next byte is pad",
-      body == body_expect and body[0] == 0xEE and 0x60 in body
+      body == body_expect and body[:3] == bytes.fromhex("AD4607")
+      and body.endswith(bytes.fromhex("A9068DF204A9168DF304A95A8D470760"))
       and prg[0x392D + len(body_expect)] == 0xFF,
       f"len {len(body_expect)} first ${body[0]:02X} "
       f"after ${prg[0x392D + len(body_expect)]:02X}")

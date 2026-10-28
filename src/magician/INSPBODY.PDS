@@ -73,9 +73,13 @@
 ;   The picture shows eight sprites on one scanline. A bar is obhbar
 ;   tiles on one y, so two full bars are fourteen sprites and the
 ;   second would be clipped down to a single tile. The bar is drawn
-;   only when every segment fits among the sprites already on that y.
-;   inspalt ($0746) flips which object is visited first, so the bar
-;   that did not fit is the complete one on the next frame.
+;   only when every segment fits among the sprites already on that y,
+;   and only when sprind still has a free entry for every segment.
+;   addspr stops at 64, so a seven-segment bar with four entries left
+;   is not started. inspalt ($0746) is the slot visited first. Each
+;   frame adds one and wraps at 3, so that slot rotates through 0, 1
+;   and 2. A bar that did not fit is the complete one on a later frame.
+;   Power-on $FF advances to slot 0.
 ;
 ;   IN:  none. Called by farjsr67, so rts returns to it.
 ;   OUT: marked bodies recolored; bars and pips added for powers 2..4
@@ -101,16 +105,18 @@ red_hi     equ $16
 
         org $b92d
 inspbody
-        inc inspalt
+        lda inspalt
+        clc
+        adc #1
+        cmp #pi
+        bcc ib_sv
+        lda #0
+ib_sv   sta inspalt
         jsr ib_tick
         jsr ib_unred
-        lda inspalt
-        and #1
-        beq ib_st
-        ldx #pi
-        dex
-        jmp ib_lp
-ib_st   ldx #0
+        ldx inspalt
+        lda #pi
+        pha
 ib_lp   cpx #pi
         beq ib_nx
         lda obtyp,x
@@ -133,17 +139,17 @@ ib_lp   cpx #pi
         and #$0c
         beq ib_nx
         jsr ib_mark
-ib_nx   lda inspalt
-        and #1
-        beq ib_up
-        dex
-        cpx #$ff
-        bne ib_lp
-        rts
-ib_up   inx
-        cpx #4
-        bne ib_lp
-        rts
+ib_nx   inx
+        cpx #pi
+        bcc ib_k
+        ldx #0
+ib_k    pla
+        sec
+        sbc #1
+        beq ib_dn
+        pha
+        jmp ib_lp
+ib_dn   rts
 
 ib_mark jsr obaggro
         php
@@ -332,9 +338,18 @@ it_sk   pla
         bne it_n
 it_out  rts
 
-; SEC when t6 more sprites would make nine or more on y = t1.
+; SEC when the bar does not fit. Fewer than t6 entries remain
+; before sprind reaches 64, or t6 more sprites would make nine
+; or more on y = t1. addspr stops at 64 and would drop the tail.
 ; X survives. t7 is free: the anchor y is already in t5.
-ib_room ldy #0
+ib_room lda #64
+        sec
+        sbc sprind
+        cmp t6
+        bcs ib_rs
+        sec
+        rts
+ib_rs   ldy #0
         lda #0
         sta t7
 ib_rc   cpy sprind

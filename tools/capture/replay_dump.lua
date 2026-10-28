@@ -22,14 +22,26 @@ for line in fh:lines() do
   end
 end
 fh:close()
+-- BizHawk.load_inputs replays every input line when the log has no
+-- `# frames=` header. Leaving nframes at 0 in that case advances no
+-- frames and still writes the capture files and "done".
+if not declared then
+  nframes = #lines
+end
 w("frames=" .. tostring(nframes) .. " input_lines=" .. #lines)
 
--- BizHawk.load_inputs rejects a header whose count is not the number of
--- input lines. Padding the shortfall, or stopping at nframes and ignoring
--- the rest, replays a different game than the log recorded.
+-- A header whose count is not the number of input lines is a different
+-- game than the log recorded. Zero frames is not a capture either: do
+-- not write CHR, CIRAM, or "done" for it.
 if declared and #lines ~= nframes then
   w("FAIL frame count " .. tostring(nframes) .. " does not match "
     .. #lines .. " input lines")
+  f:close()
+  pcall(function() client.exit() end)
+  return
+end
+if nframes == 0 then
+  w("FAIL no frames to replay")
   f:close()
   pcall(function() client.exit() end)
   return

@@ -185,11 +185,12 @@ def robed(x=0x40, y=0x80):
 last_phase = 0
 last_flag = 0
 last_pal = bytes(16)
+last_n = 0
 
 
 def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
-         x=0x40, y=0x80, xh=0, x2=None, obhel2=None, turn=0xFF,
-         phase=0, flag=0, cur=None):
+         x=0x40, y=0x80, xh=0, x2=None, obhel2=None, x3=None, obhel3=None,
+         turn=0xFF, phase=0, flag=0, cur=None, n_spr=None):
     ram = bytearray(0x800)
     ram[need("obtyp")] = 0x11
     ram[need("obchr")] = obchr
@@ -202,15 +203,16 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
     for i, byte in enumerate(shields):
         ram[need("obphysh") + i * 4] = byte
     ram[need("insppow")] = power
-    # $FF is what this slack is at power-on. inc makes the first frame
-    # visit object 0 first. phase 0 ticks to 1, which is the bright half.
+    # $FF is what this slack is at power-on. Adding one wraps at 3, so
+    # $FF visits slot 0, $00 visits slot 1, and $01 visits slot 2.
+    # phase 0 ticks to 1, which is the bright half.
     ram[need("inspalt")] = turn
     ram[need("inspph")] = phase
     ram[need("insppal")] = flag
     ram[ORG:ORG + 16] = SPR
     ram[CUR:CUR + 16] = SPR if cur is None else cur
     seed = standing(x, y, ROBE) + DECOY
-    ram[need("sprind")] = len(seed)
+    ram[need("sprind")] = len(seed) if n_spr is None else n_spr
     spr0 = need("spr")
     for i, (sx, sy, tile, attr) in enumerate(seed):
         o = spr0 + i * 4
@@ -224,6 +226,12 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
         ram[need("obhel") + 1] = obhel if obhel2 is None else obhel2
         ram[need("obxl") + 1] = x2
         ram[need("obyl") + 1] = y
+    if x3 is not None:
+        ram[need("obtyp") + 2] = 0x11
+        ram[need("obchr") + 2] = obchr
+        ram[need("obhel") + 2] = obhel if obhel3 is None else obhel3
+        ram[need("obxl") + 2] = x3
+        ram[need("obyl") + 2] = y
     cpu.bus.ram[:] = ram
     cpu.bus.regs[7] = 1
     cpu.a = cpu.x = cpu.y = 0
@@ -241,10 +249,11 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
         o = spr + i * 4
         out.append((cpu.bus.ram[o + 3], cpu.bus.ram[o],
                     cpu.bus.ram[o + 1], cpu.bus.ram[o + 2]))
-    global last_phase, last_flag, last_pal
+    global last_phase, last_flag, last_pal, last_n
     last_phase = cpu.bus.ram[need("inspph")]
     last_flag = cpu.bus.ram[need("insppal")]
     last_pal = bytes(cpu.bus.ram[CUR:CUR + 16])
+    last_n = n
     return out
 
 
@@ -359,5 +368,31 @@ both = draw(0x1C, 2, x2=0x80, obhel2=0x20)
 check("a one-segment bar still fits beside a full one",
       bars_at(both) == BAR_ROW + [(0x80, 0x68, BAR, ATTR)],
       str(bars_at(both)))
+
+# Three full bars on one y. The first slot rotates 0, 1, 2. Slot 1 used
+# to be skipped forever, because reversing the visit only swapped 0 and 2.
+ROW2 = [(0x70 + 8 * i, 0x68, BAR, ATTR) for i in range(7)]
+ROW3 = [(0xA0 + 8 * i, 0x68, BAR, ATTR) for i in range(7)]
+tri0 = draw(0x1C, 2, x2=0x70, x3=0xA0, turn=0xFF)
+check("three full bars give slot 0 the bar on the first turn",
+      bars_at(tri0) == BAR_ROW, str(bars_at(tri0)))
+tri1 = draw(0x1C, 2, x2=0x70, x3=0xA0, turn=0x00)
+check("three full bars give slot 1 the bar on the next turn",
+      bars_at(tri1) == ROW2, str(bars_at(tri1)))
+tri2 = draw(0x1C, 2, x2=0x70, x3=0xA0, turn=0x01)
+check("three full bars give slot 2 the bar on the turn after that",
+      bars_at(tri2) == ROW3, str(bars_at(tri2)))
+tri3 = draw(0x1C, 2, x2=0x70, x3=0xA0, turn=0x02)
+check("the turn after slot 2 wraps back to slot 0",
+      bars_at(tri3) == BAR_ROW, str(bars_at(tri3)))
+
+short = draw(0x1C, 2, n_spr=60)
+check("a seven-segment bar is not started when four OAM entries remain",
+      bars_at(short) == [] and last_n == 60 and short[:SEEDED] == glowed(),
+      f"n={last_n} head={short[:SEEDED]} bars={bars_at(short)}")
+room = draw(0x1C, 2, n_spr=57)
+check("a seven-segment bar still fills the last seven OAM entries",
+      bars_at(room) == BAR_ROW and last_n == 64,
+      f"n={last_n} bars={bars_at(room)}")
 
 print(f"\n{ok} checks passed")

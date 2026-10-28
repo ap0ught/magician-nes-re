@@ -660,9 +660,9 @@ field("insppow", 1, "inspect power, firespell's t2, 1..4. obinspect stores it "
 field("inspph", 1, "inspect pulse byte, the slack after insppow. inspclr "
       "zeros it with the latch when dotitle runs, because that clear "
       "stops at lastz (src/magician/INSPECT.PDS)", "inspph")
-field("inspalt", 1, "inspect bar turn. inspbody increments it each frame "
-      "and visits objects in the other order when bit 0 is set, so a "
-      "bar that would not fit on the scanline is the complete bar next "
+field("inspalt", 1, "inspect bar turn. inspbody adds one each frame and "
+      "wraps at 3, so the first object rotates through slots 0, 1 and 2 "
+      "and a bar that would not fit is the complete bar on a later "
       "frame (src/magician/INSPBODY.PDS)", "inspalt")
 field("cursp", 1, "the spell currently being CAST. Cleared to $FF every frame "
       "the player is not casting (x1.pds:711-712). NOT the spell screen's "
