@@ -51,3 +51,6 @@ tools/bizhawk/out/
 # The input logs are plain button sequences, but they are large and they are
 # evidence for a particular run, so they stay out of history too.
 logs/
+
+# IDE
+.idea/
