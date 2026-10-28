@@ -41,10 +41,17 @@ modifying the source — the assembler, the build and the analysis all read it d
 submodule makes "the source we are editing" and "the source upstream has" two different things
 at the moment anyone runs a build.
 
-The files are **unmodified**. Do not edit them in place: `pds-text/` is the decoded,
-git-ignored form that the build reads, regenerated from the `.PDS` containers by
-`tools/pds_extract.py`. A change that needs to survive a re-sync belongs in the assembler, the
-build or a documented patch, not in a vendored file.
+Do not change code or data in place. `pds-text/` is the decoded, git-ignored form
+that the build reads, regenerated from the `.PDS` containers by `tools/pds_extract.py`.
+A change to the program belongs in `src/magician/`, not in a vendored file.
+
+Comments are allowed in the plain-text `.SRC` files. A comment is a line whose first
+non-whitespace character is `;`, or the `;` tail of a line. The text before that `;`
+stays as vendored. `tools/vendor_comments.py` is the check, and `tools/guard_staged.sh`
+refuses a staged `.SRC` edit that changes anything else. The binary `.PDS` containers
+and the `.TXT` files are not comment files; they stay unmodified. The pin above is
+still the base a re-sync starts from. Comments are ours, and a re-sync has to keep
+them or put them back.
 
 Shrigley's terms, from the vendored package's own `_READ_ME.TXT`:
 

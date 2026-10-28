@@ -376,7 +376,7 @@ SPOT = [
     ("SHOPDAT.SRC", 102, "sentlet"),   # ...and 'the letter is posted'
     ("SHOPDAT.SRC", 121, "asked"),     # the vicar's letter
     ("SHOPDAT.SRC", 123, "mana10"),    # the prayer book's +10
-    ("PROBDAT.SRC", 98, "pt_shop"),    # the first town's door
+    ("PROBDAT.SRC", 102, "pt_shop"),   # the first town's door
 ]
 missed = []
 for name, n, word in SPOT:

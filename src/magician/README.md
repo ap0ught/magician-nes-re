@@ -1,9 +1,11 @@
 # `src/magician/` — our source
 
 Everything in this directory is **ours**. Everything in `vendor/Magician-NES/` is
-**Eurocom's**, is read-only, and is pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a`
-so it can be re-synced from upstream at any time. If you want to change the game,
-change it here. That is the whole point of the split.
+**Eurocom's**, and is pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a` so it
+can be re-synced from upstream at any time. Code and data there stay as vendored.
+A `;` comment may be added to a plain-text `.SRC` file, and that is the only
+edit. If you want to change the game, change it here. That is the whole point of
+the split.
 
 Both trees are assembled by the same assembler (`asm/pds6502.py`) in the same PDS
 dialect, from one `asm/build.py`, so a change we make is a source edit rather
@@ -13,7 +15,7 @@ than a patch applied to someone else's file.
 
 | | |
 |---|---|
-| `vendor/Magician-NES/` | Eurocom's released source. **Do not edit.** `X0.PDS`–`X7.PDS` are PDS containers; the `.SRC` files and `DAT/` (art, palettes, packed scenes) are plain files. Pinned, byte-identical, `git status` must stay clean. |
+| `vendor/Magician-NES/` | Eurocom's released source. **Do not change code or data.** A `;` comment may be added to a plain-text `.SRC` file; `tools/vendor_comments.py` is what decides that an edit is only that. `X0.PDS`–`X7.PDS` are PDS containers and stay unmodified. `DAT/` is art, palettes and packed scenes. Pinned at `bf653a407cd97e4dfdca665063f25d8b44da130a`. |
 | `pds-text/` | The same containers decoded to text, by `tools/pds_extract.py`. Generated, git-ignored. Line numbers in comments refer to these. |
 | `src/magician/` | **Ours.** Assembled after the vendor tree, so every symbol Eurocom defines is already resolved when we run. |
 | `asm/build.py` | The build. `OUR_MODULES` is the manifest of our modules and where each one goes. |
@@ -30,7 +32,7 @@ no entry has no known placement, and a placement is something that has to be arg
 for.
 
 To add a module: write it, add it to `OUR_MODULES` with its slot/origin, and check
-that `git status vendor/` is still empty.
+that a `vendor/` diff, if there is one, is a `;` comment in a `.SRC` file and nothing else.
 
 ## How our modules get placed
 

@@ -107,6 +107,218 @@ OUR_MODULES: dict[str, dict] = {
                 "marked `** tmp`, overlaid with the value the cartridge we "
                 "target actually ships. See STARTLEV.PDS for the measurement",
     },
+    "AGGRO.PDS": {
+        "slot": 15,
+        "origin": 0xFB0A,
+        # The same expect readback as DRAW.PDS: the placed 27 bytes must be in
+        # the final image. Placed directly behind DRAW.PDS inside the same
+        # measured Beta 1 $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 =
+        # 38 used, $FB23-$FB7F pad left between ours and SAM.SAM's first byte
+        # at $FB80.
+        "expect_bytes": "BD F4 04 30 13 BD 30 05 29 0C C9 0C D0 0A BD 30 05 29 03 "
+                        "D0 03 A9 01 60 A9 00 60",
+        "entry": "obaggro",
+        "expect_cpu": 0xFB0A,
+        "note": "issue #3 aggression predicate: obtyp active bit + obchr "
+                "attack-control(=3)/attack-count(=0), the interaction "
+                "handler's own branch, as a callable the drawing layer can "
+                "ask for 'is object X attacking?'",
+    },
+    "HEALTH.PDS": {
+        "slot": 15,
+        "origin": 0xFB25,
+        # The same expect readback as AGGRO.PDS: the placed 9 bytes must be in
+        # the final image. Placed directly behind AGGRO.PDS inside the same
+        # measured Beta 1 $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 +
+        # 9 = 47 used through obhbar, and WEAK.PDS continues at $FB2E.
+        # (`lda obhel,x` is BD 24 05: obhel = $0524, per X0.PDS:550 and
+        # asm/out/mag.sym.)
+        "expect_bytes": "BD 24 05 4A 4A 4A 4A 4A 60",
+        "entry": "obhbar",
+        "expect_cpu": 0xFB25,
+        "note": "issue #3 health scale rasterizer: obhel/32 by five lsrs, "
+                "the game's own helind divisor (X6.PDS:33-39), so a health "
+                "bar is drawn in the game's own units (obhel $FF = 7 of 8)",
+    },
+    "WEAK.PDS": {
+        "slot": 15,
+        "origin": 0xFB2E,
+        # Placed directly behind HEALTH.PDS inside the same measured Beta 1
+        # $FF padding run ($FAFF-$FB7F, 129 bytes): 11 + 27 + 9 + 25 = 72
+        # used, $FB47-$FB7F pad left before SAM.SAM's first byte at $FB80.
+        # (`lda obchr,x` is BD 30 05: obchr = $0530.)
+        "expect_bytes": "BD 30 05 30 0B 29 30 F0 0A C9 20 F0 09 A9 03 60 "
+                        "A9 80 60 A9 01 60 A9 02 60",
+        "entry": "obweak",
+        "expect_cpu": 0xFB2E,
+        "note": "issue #3 vulnerability class: the bullet hit test's own "
+                "four exits (slot 4 $8B94) — ethereal, explode-only, "
+                "neither, or the damage path. Shields and spell type are "
+                "not consulted; nothing in the image reads them for this",
+    },
+    "INSPECT.PDS": {
+        "slot": 15,
+        "origin": 0xFB47,
+        # Directly behind WEAK.PDS in the same $FF run ($FAFF-$FB7F, 129
+        # bytes). obinspect sets the latch and the power; inspdraw is what
+        # the per-frame hook calls; inspclr is what the title hook calls.
+        # The run ends before SAM.SAM at $FB80.
+        "expect_bytes": "A9 5A 8D 43 07 A5 15 8D 44 07 60 20 C5 F2 AD 43 07 "
+                        "C9 5A D0 11 A9 B9 A2 2D 86 27 A2 00 86 29 A0 01 84 "
+                        "2A 20 78 F8 60 A9 00 8D 43 07 8D 44 07 8D 45 07 8D "
+                        "46 07 4C BD F8",
+        "entry": "obinspect",
+        "expect_cpu": 0xFB47,
+        "note": "issue #3 spell slot 27 cast entry. A cast sets insplatch "
+                "($0743) and insppow ($0744, firespell's t2, 1..4) and "
+                "returns. inspdraw, called after the sprite wipe, draws "
+                "the mark while the latch is set. inspclr zeros the latch, "
+                "the power, the pulse byte and the bar turn on title entry",
+    },
+    "INSPTITL.PDS": {
+        # dotitle's jsr initdma. Slot 0 is at $8000 when that runs.
+        # Three bytes, and the jsr initcols at $8043 is not written.
+        "origin": 0x8040,
+        "window_slots": {0x8000: 0},
+        "expect_bytes": "20 6E FB",
+        "entry": "insptitl",
+        "expect_cpu": 0x8040,
+        "note": "issue #3 title hook: dotitle's jsr initdma at $8040 now "
+                "jsr inspclr, which zeros the inspect slack and jumps to "
+                "initdma. The jsr initcols that follows is not written",
+    },
+    "INSPHOOK.PDS": {
+        # The jsr tickmana at $DFF0 stays; these two bytes retarget it at
+        # inspdraw. $C000 forces slot 14. inspdraw calls tickmana itself,
+        # then the marker.
+        "origin": 0xDFF1,
+        "expect_bytes": "52 FB",
+        "entry": "insphook",
+        "expect_cpu": 0xDFF1,
+        "note": "issue #3 per-frame hook: the address half of "
+                "`jsr tickmana` at $DFF0, now jsr inspdraw. The jmp "
+                "emptypan that follows is not written",
+    },
+    "INSPBODY.PDS": {
+        "slot": 1,
+        "origin": 0xB92D,
+        # Slot 1 is X2's $A000 half. mptrh ends at $B92C; $B92D through
+        # the end of the bank is the $FF pad (PRG $392D, 1746 bytes).
+        # farjsr67 Y=1 maps this slot at $A000, which is where inspdraw
+        # calls the body.
+        "window_slots": {0xA000: 1},
+        "expect_bytes": "AD 46 07 18 69 01 C9 03 90 02 A9 00 "
+                        "8D 46 07 20 23 BB 20 33 BB AE 46 07 "
+                        "A9 03 48 E0 03 F0 2D BD F4 04 30 28 "
+                        "38 BD 14 05 E5 94 85 13 BD 18 05 E5 "
+                        "95 D0 19 38 BD 1C 05 E5 96 85 14 BD "
+                        "20 05 E5 97 D0 0A BD 30 05 29 0C F0 "
+                        "03 20 8B B9 E8 E0 03 90 02 A2 00 68 "
+                        "38 E9 01 F0 04 48 4C 48 B9 60 20 0A "
+                        "FB 08 A5 13 85 17 A5 14 85 1A AD 45 "
+                        "07 C9 1F B0 12 28 F0 07 20 46 BB A9 "
+                        "01 D0 02 A9 03 20 9F BA 4C B1 B9 28 "
+                        "AD 44 07 C9 02 90 3B A5 1A 38 E9 18 "
+                        "90 31 85 18 85 14 A5 17 85 13 A9 02 "
+                        "85 16 A9 B2 85 15 20 25 FB F0 1C 85 "
+                        "19 20 F3 BA B0 15 A4 19 98 48 20 98 "
+                        "EE 68 A8 A5 13 18 69 08 B0 05 85 13 "
+                        "88 D0 ED 20 F4 B9 60 AD 44 07 C9 02 "
+                        "B0 03 4C 9E BA BD 28 05 F0 18 A5 18 "
+                        "18 69 08 B0 11 85 14 A5 17 85 13 A9 "
+                        "D8 85 15 A9 02 85 16 20 98 EE AD 44 "
+                        "07 C9 03 B0 03 4C 9E BA A9 00 85 19 "
+                        "A5 19 0A 0A 85 1A 8A 18 65 1A A8 B9 "
+                        "38 05 F0 20 A5 18 38 E9 08 90 19 85 "
+                        "14 A5 19 0A 0A 0A 18 65 17 B0 0D 85 "
+                        "13 A9 B2 85 15 A9 02 85 16 20 98 EE "
+                        "E6 19 A5 19 C9 04 D0 C8 AD 44 07 C9 "
+                        "04 B0 03 4C 9E BA 20 2E FB C9 80 D0 "
+                        "04 A9 C8 D0 12 C9 01 D0 04 A9 D8 D0 "
+                        "0A C9 02 D0 04 A9 D0 D0 02 A9 DE 85 "
+                        "15 A5 18 38 E9 10 90 0D 85 14 A5 17 "
+                        "85 13 A9 02 85 16 20 98 EE 60 85 15 "
+                        "A0 00 C4 B0 F0 4B 98 48 0A 0A A8 B9 "
+                        "01 02 C9 74 90 3A C9 7E B0 36 B9 03 "
+                        "02 38 E5 17 C9 F0 F0 08 C9 F8 F0 04 "
+                        "C9 00 D0 24 B9 00 02 38 E5 1A C9 EC "
+                        "F0 10 C9 F4 F0 0C C9 FC F0 08 C9 04 "
+                        "F0 04 C9 0C D0 0A B9 02 02 29 FC 05 "
+                        "15 99 02 02 68 A8 C8 D0 B1 60 A9 40 "
+                        "38 E5 B0 C5 19 B0 02 38 60 A0 00 A9 "
+                        "00 85 1A C4 B0 F0 13 98 48 0A 0A A8 "
+                        "B9 00 02 C5 14 D0 02 E6 1A 68 A8 C8 "
+                        "D0 E9 A5 1A 18 65 19 C9 09 60 AD 45 "
+                        "07 C9 3C 90 02 A9 00 18 69 01 8D 45 "
+                        "07 60 AD 47 07 C9 5A D0 0B AD CB 04 "
+                        "8D EB 04 A9 00 8D 47 07 60 A9 16 8D "
+                        "EB 04 A9 5A 8D 47 07 60",
+        "entry": "inspbody",
+        "expect_cpu": 0xB92D,
+        "note": "issue #3 inspect marker. Level 1 replaces the palette "
+                "bits on the object's standing sprites (tiles $74-$7D) "
+                "for inspph 1..30 and leaves them for 31..60. Friendly "
+                "is attribute $03 and palette 3 stays green $2A/$3A. "
+                "Hostile is attribute $01 and queues $16 into cursprpal "
+                "palette 1 index 3; index 2 stays $26 because the "
+                "player's tiles $02-$05 use it. The dim half and a "
+                "friendly frame copy that byte back from orgsprpal. "
+                "Palette 0 and palette 2 are not written. No tile $B2 "
+                "is drawn for the pulse. Level 2 adds the white obhbar "
+                "bar only when every segment fits on that scanline and "
+                "sprind still has an entry for each of them. The first "
+                "object rotates through slots 0, 1 and 2. Level 3 a pip "
+                "per stored shield byte, stopped before the pip would "
+                "wrap past $FF. Level 4 one obweak tile"
+    },
+    "SPNAME.PDS": {
+        # Fixed $C000 window, so the org in the file places it. Seven bytes,
+        # the same length as the " UNUSED" they replace, so FEATHERLITE does
+        # not move. $49 $4E $53 $50 $45 $43 $D4 is "INSPECT" with bit 7 on T.
+        "expect_bytes": "49 4E 53 50 45 43 D4",
+        "entry": "sp27nm",
+        "expect_cpu": 0xCAC2,
+        "note": "issue #3 slot 27 name, same length as the cartridge's "
+                "' UNUSED' at $CAC2, so the following spell names stay put",
+    },
+    "SPSLOT.PDS": {
+        "slot": 0,
+        # Two bytes, not contiguous: the low and high halves of init vector
+        # index $1B. `expect` (not expect_bytes) because the readback for a
+        # code module demands one contiguous run, and these are $2A apart.
+        # Listed in address order, which is the order the readback pairs
+        # with the sorted write offsets.
+        "expect": {"sp27lo": "47", "sp27hi": "FB"},
+        "note": "issue #3 slot 27 init vector, was $9112 (rts). Now the "
+                "address of obinspect. Neighbour entries $1A and $1C are "
+                "not written",
+    },
+    "DRAW.PDS": {
+        "slot": 15,
+        "origin": 0xFAFF,
+        # The build's own readback: the placed code must be FINALLY in the
+        # image, byte for byte, in this order, contiguous, at the entry symbol
+        # the assembler resolved. This is STARTLEV.PDS's `expect` idea extended
+        # to a code module: assembly reporting "11 bytes written" is not the
+        # same fact as "the image carries the code" -- when the assemble order
+        # was wrong (our_modules() sorted DRAW.PDS in front of SLOT15.PDS) the
+        # writes happened and the image still read $FF.
+        #
+        # Measured against Beta 1 (this build's target): $FAFF-$FB7F is the
+        # cartridge's own end-of-code padding, all $FF (X7.PDS:1716-1719 pads
+        # the same range with $00 in a build where X7's `ds` runs after ours;
+        # here SLOT15.PDS recreates it from the dump first, and this module's
+        # 11 bytes replace 11 of those padding bytes). Our bytes differ from
+        # the dump there, so the PRG identical count is 131072 - 11 = 131061
+        # and cmpbank.py's `differ` run names exactly this range. Everything
+        # else must stay byte-identical.
+        "expect_bytes": "E0 00 F0 06 8D 07 20 CA D0 FA 60",
+        "entry": "drawfill",
+        "expect_cpu": 0xFAFF,
+        "note": "shared drawing layer scaffold: horizontal fill primitive "
+                "(A=tile, X=count) writing to $2007, for enemy health bars and "
+                "the status HUD",
+    },
     "SLOT0.PDS": {
         "slot": 0,
         "note": "recreated from Beta 1 PRG slot 0 (disassembly in magician-src/)",
@@ -202,9 +414,39 @@ def check_our_manifest() -> list[str]:
     return problems
 
 
+# Which of our modules recreate a whole 8 KiB slot from the Beta 1 dump rather
+# than add to it. This is an assembly-ORDER rule, not a classification of
+# content: a SLOTx.PDS recreate writes every byte of its slot, so any module of
+# ours that is placed inside that slot has to be assembled *after* the recreate,
+# or the recreate erases it and the module silently vanishes from the image.
+#
+# That is not hypothetical. DRAW.PDS was placed at origin $FAFF in slot 15 and
+# the build reported 11 byte(s) written there -- while the finished image still
+# read $FF at every one of those offsets, because `our_modules()` sorted
+# `DRAW.PDS` alphabetically in front of `SLOT15.PDS`, which then overwrote the
+# whole slot with the Beta 1 bytes. `cmpbank.py bank` kept printing 131072/131072
+# identical, because both images carry Beta 1's own $FF padding at that
+# address: a 100.00% match over a module that was not in the ROM.
+# verify_our_scenes() caught the residue ("wrote 11 byte(s) that are not the
+# scene we packed"), but nothing failed on it until the expect readback below.
+OUR_SLOT_RECREATES = frozenset(f"SLOT{i}.PDS" for i in range(16))
+
+
 def our_modules() -> list[str]:
-    """Our module names, in assembly order, verified against what is on disk."""
-    return sorted(OUR_MODULES)
+    """Our module names, in assembly order, verified against what is on disk.
+
+    The order is the role rule above: the slot recreates go first, then
+    everything that deliberately adds to what they wrote. Both halves are
+    name-sorted inside themselves, and STARTLEV.PDS/TITLE.SRC keep the order
+    they have always had (they sort after every SLOT name either way).
+    """
+    missing = OUR_SLOT_RECREATES - set(OUR_MODULES)
+    if missing:
+        raise SystemExit(f"OUR_SLOT_RECREATES names module(s) the manifest does "
+                         f"not know: {', '.join(sorted(missing))}")
+    recreates = sorted(n for n in OUR_MODULES if n in OUR_SLOT_RECREATES)
+    overlays = sorted(n for n in OUR_MODULES if n not in OUR_SLOT_RECREATES)
+    return recreates + overlays
 
 # ---------------------------------------------------------------------------
 # The bank map, and what is known about each module's slot.
@@ -1191,8 +1433,65 @@ def verify_our_scenes(asm, prg: bytearray, packed: bytes, log: list[str]) -> Non
 
     for m in our_modules():
         offs = sorted(asm.writes_by_file.get(m, ()))
+        expect_bytes = OUR_MODULES[m].get("expect_bytes")
         if not offs:
+            # An empty module used to `continue` here, before expect_bytes was
+            # read, so a manifest that named the code still reported success
+            # when the file emitted nothing. A declared placement that wrote
+            # zero bytes is the placement missing, not a module with nothing
+            # to check.
+            if expect_bytes:
+                raise SystemExit(
+                    f"{m}: the manifest declares expect_bytes but the module "
+                    f"wrote no bytes. An empty placement is not the code the "
+                    f"manifest names.")
             log.append(f"  *** {m} emitted no bytes; nothing to verify ***")
+            continue
+        if expect_bytes:
+            # A placed code module, not an overlay label and not a scene: read
+            # the finished image back at the offsets this module is recorded as
+            # having written and demand the manifest's code, contiguous and in
+            # order. Anything that overwrote the placement after assembly --
+            # another of our modules, a recreate, an overlay in the wrong
+            # order -- fails here instead of shipping a ROM that never held
+            # the code.
+            want = bytes.fromhex(expect_bytes.replace(" ", ""))
+            first, last_off = offs[0], offs[-1]
+            if len(offs) != len(want) or last_off != first + len(want) - 1:
+                raise SystemExit(
+                    f"{m}: the manifest's expect_bytes is {len(want)} byte(s) but "
+                    f"the module wrote {len(offs)} (${first:05X}-${last_off:05X}), "
+                    f"which is not a contiguous run of that length. A hole or a "
+                    f"non-contiguous write is a different placement, not a "
+                    f"typo.")
+            entry = OUR_MODULES[m].get("entry")
+            expect_cpu = OUR_MODULES[m].get("expect_cpu")
+            if entry is not None:
+                resolved = asm.sym.get(entry)
+                if resolved is None:
+                    raise SystemExit(
+                        f"{m}: the manifest names entry `{entry}` but the build "
+                        f"resolved no such symbol.")
+                if expect_cpu is not None and resolved != expect_cpu:
+                    raise SystemExit(
+                        f"{m}: `{entry}` resolved to ${resolved:04X} and the "
+                        f"manifest says ${expect_cpu:04X}. The module's entry "
+                        f"point did not land where the manifest records it.")
+            got = bytes(prg[first:first + len(want)])
+            cpu_of_first = first - 0x10000 if first >= 0x10000 else None
+            cpu_txt = (f" (CPU ${cpu_of_first:04X})" if cpu_of_first is not None
+                       else "")
+            if got != want:
+                raise SystemExit(
+                    f"{m}: the image at PRG ${first:05X}{cpu_txt} holds "
+                    f"{got.hex(' ').upper()} and the manifest says "
+                    f"{want.hex(' ').upper()}. The module assembled and then "
+                    f"something overwrote it -- check the order our modules "
+                    f"are assembled in.")
+            addr = asm.sym.get(entry) if entry is not None else None
+            sym_txt = (f", `{entry}` at ${addr:04X}" if addr is not None else "")
+            log.append(f"  {m}: {len(want)} byte(s) at PRG ${first:05X}{cpu_txt}"
+                       f" are the module's code as declared{sym_txt}")
             continue
         expect = OUR_MODULES[m].get("expect")
         if expect:

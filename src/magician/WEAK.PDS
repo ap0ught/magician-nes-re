@@ -1,0 +1,68 @@
+;   Vulnerability class — fourth piece of the shared drawing layer (issue #3).
+;
+;   Tier 4 of the inspect spell wants a weakness icon. Measured where the
+;   shipped game decides whether a bullet hurts an object, before any icon
+;   was drawn (Beta 1 image, slot 4, the collision routine entered at $8B0D):
+;
+;     $8B94  lda obchr,x
+;     $8B97  bmi miss          ; bit 7 set: ethereal, bullets cannot hit
+;     $8B99  and #$30
+;     $8B9B  beq explode_only  ; bits 5-4 = 0: explode, do not damage
+;     $8B9D  cmp #$20
+;     $8B9F  bne damage        ; bits 5-4 = 1 or 3: the damage path
+;            ; bits 5-4 = 2 falls through to miss: no explode, no damage
+;
+;   Those two fields are the `c` macro's @1 and @3 (X0.PDS:163-169):
+;   "physical/ethereal vulnerability" in bit 7, "physical bullet action when
+;   hit" in bits 5-4. The equates are oc_phyy/oc_phyn and oc_beydn/oc_beydy/
+;   oc_bendn/oc_unusd (MISC.SRC:1405-1414). obchars (MISC.SRC:1425, 44 rows)
+;   is copied into obchr at activation (X6.PDS:522-523). There is no second
+;   per-type table.
+;
+;   What was looked for and is not there, so it is not encoded:
+;
+;     * The four shield counters (obphysh/obvensh/obfirsh/obpowsh, X0.PDS:
+;       554-556) are written twice and read never. Player casts store $FF at
+;       the player slot (slot 0, $9007/$900D/$9013/$9019, the is11-is14
+;       inits). actob clears all four (slot 15, $EBD4). No lda/cmp/dec/adc
+;       of those addresses exists in the image, so a shield is not a
+;       weakness and $FF-means-immune is a comment on a byte nothing tests.
+;     * Spell type does not select a damage amount. The source's speldam
+;       (x3.pds) is 42 zero bytes and nothing indexes it. The cartridge's
+;       damage path (slot 4 $8BEB) is `lda #$E0 / bit harm` — one constant,
+;       and `bit` does not call harm. shexp, the table that IS indexed by
+;       the spell, picks an explosion animation.
+;
+;   So an icon for "weak to fire / venom / power" would be a guess. This
+;   routine returns the hit test's own four exits, with ethereal winning
+;   over the bullet-action field, which is the order the test itself uses.
+;
+;   IN:  X = object index, 0..maxob-1 (caller's job to keep in range)
+;   OUT: A = the class the bullet hit test would take for this object:
+;          $80  ethereal — bullets cannot hit (obchr bit 7)
+;          $01  physical bullets explode and do not damage (bits 5-4 = 0)
+;          $02  physical bullets neither explode nor damage (bits 5-4 = 2)
+;          $03  physical bullets take the damage path (bits 5-4 = 1 or 3)
+;        X and Y preserved. N/Z/C reflect the final `lda #`.
+;   USES: A only
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $fb2e
+obweak  lda obchr,x
+        bmi obweak_eth
+        and #$30
+        beq obweak_nodmg
+        cmp #$20
+        beq obweak_none
+        lda #$03
+        rts
+obweak_eth
+        lda #$80
+        rts
+obweak_nodmg
+        lda #$01
+        rts
+obweak_none
+        lda #$02
+        rts

@@ -1,0 +1,28 @@
+;   Spell slot 27's init vector.
+;
+;   The dispatcher at slot 0 $8F39 is:
+;
+;       ldy $8F81,x
+;       sty $13
+;       ldy $8FAB,x
+;       sty $14
+;       jmp ($0013)
+;
+;   $8F81 and $8FAB are the low and high tables, 42 bytes each (40 spells
+;   plus the empty and unknown sentinels). Index $1B is slot 27. Measured
+;   on the rebuilt image before this overlay: low $8F9C held $12 and high
+;   $8FC6 held $91, so the vector was $9112, a single `rts`. The bytes on
+;   either side of index $1B are left alone (index $1A stays $9111, another
+;   rts; index $1C stays $912E, featherlite).
+;
+;   The two bytes below are the address of `obinspect`. They are literals
+;   because the two tables are not contiguous and this module cannot see a
+;   forward symbol as a relocation; test_spell_slot.py reads `obinspect` back
+;   out of the image and fails if these bytes are not that address.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $8f9c
+sp27lo  db $47
+        org $8fc6
+sp27hi  db $fb

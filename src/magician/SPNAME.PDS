@@ -1,0 +1,18 @@
+;   Spell slot 27's name.
+;
+;   sptxt at $C9F2 is high-bit terminated: the last byte of each name has
+;   bit 7 set, and the next name starts on the following byte. Slot 27 is
+;   the 7 bytes at $CAC2, which the cartridge stores as " UNUSED" ($20 $55
+;   $4E $55 $53 $45 $C4). The byte before it is SLOWMO's terminating $CF
+;   and the byte after it is FEATHERLITE's $46. A different length would
+;   slide every later name, so this overlay is the same seven bytes:
+;   "INSPECT" with bit 7 set on the T.
+;
+;   The rune nybbles at `spells` and the learned-bit in `invsp` are not
+;   touched. A fresh save still does not have the spell equipped; the book
+;   text is the only change.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $cac2
+sp27nm  hex 49 4e 53 50 45 43 d4

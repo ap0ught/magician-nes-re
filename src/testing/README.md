@@ -91,7 +91,7 @@ instruments are the thing that has to be pinned.
 | `test_placement_tools.py` | 35 | the four placement tools' `run_file` overrides against the assembler's signature, and that a tool with its tracing flag off records nothing |
 | `test_placement_math.py` | 34 | `dis6502`'s opcode table, and slotalign's rule that a **modal displacement is not the origin test** — reproduced, not asserted |
 | `test_nestrace_cpu.py` | 28 | the CPU core only. Every check is named `cpu:` and none is about pixels |
-| `test_repo_hygiene.py` | 24 | no cartridge, no movie, no save, no archive committed; `guard_staged.sh` exercised against a synthetic index; `vendor/` unmodified; **and no *code* in the tree reaches into another project's checkout** (section F) |
+| `test_repo_hygiene.py` | 27 | no cartridge, no movie, no save, no archive committed; `guard_staged.sh` exercised against a synthetic index; `vendor/` code and data unmodified, with a `;` comment in a `.SRC` file allowed; **and no *code* in the tree reaches into another project's checkout** (section F) |
 | `test_bizpath.py` | 48 | `tools/bizhawk/bizpath.sh`: one name for the emulator directory, one answer, no fallback onto a path that happens to exist; `run.sh` honours it; and the Python and bash halves are compared against each other rather than assumed to agree |
 
 `synthcart.py` is the shared helper: a synthetic iNES image built from

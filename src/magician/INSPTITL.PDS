@@ -1,0 +1,9 @@
+;   Title init clears through lastz ($0742). These three bytes are the
+;   `jsr initdma` at dotitle ($8040, slot 0). They now call `inspclr`,
+;   which zeros the inspect slack and jumps to initdma, so initdma's
+;   rts still reaches the `jsr initcols` that follows.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $8040
+insptitl jsr inspclr

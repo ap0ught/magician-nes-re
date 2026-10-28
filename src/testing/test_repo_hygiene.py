@@ -17,8 +17,9 @@ Twenty checks:
   B. what is in the working tree but not tracked, same list
   C. the guard refuses, for each of the four classes -- exercised, not asserted
   D. the guard exits 0 on a clean index, so it can be wired into a hook
-  E. `vendor/` is byte-identical to what is committed, and the upstream pin in
-     LEGAL.md and README.md is the same 40 characters in both
+  E. `vendor/` code and data match what is committed. A `;` comment in a
+     `.SRC` file may differ, which is the exception LEGAL.md states. The
+     upstream pin in LEGAL.md and README.md is the same 40 characters in both
   F. no CODE in this repository reaches into another project's checkout. Prose,
      docstrings and `journal/` may name it -- that is where the provenance lives
      -- but a default path may not. See `src/testing/nodep.py` for why the
@@ -175,8 +176,9 @@ check(f"no tracked file is over {SIZE_CEILING // 1024} KiB", not big,
 # What must not be tracked is a *change* to it, which is check E.
 check("vendor/ IS tracked, because the build reads Eurocom's files from it",
       any(f.startswith("vendor/") for f in TRACKED),
-      "the rule is not 'never commit vendor/' but 'never modify it'. LEGAL.md "
-      "records the upstream commit these files are byte-identical to.")
+      "the rule is not 'never commit vendor/' but 'never change its code or "
+      "data'. A `;` comment in a .SRC file is the exception LEGAL.md states. "
+      "LEGAL.md records the upstream commit the code and data match.")
 
 # B. What is in the tree but not tracked.
 # `--exclude-standard` is what applies .gitignore; without it `git ls-files
@@ -212,11 +214,27 @@ import patches  # noqa: E402  (asm/patches.py)
 registry = {e["sha1_full"]: n for n, e in patches.CARTS.items()}
 import hashlib  # noqa: E402
 
-# The rebuild is now intentionally byte-identical to the target dump (Beta 1):
-# see LEGAL.md "Cartridge-derived bytes (exception)" and journal 17. This is the
-# desired outcome, not a leak, so the old "must differ" assertion no longer
-# applies. What we still guard against is a rebuild that matches a *different*
-# dump than the target, which would mean the build drifted off Beta 1.
+# The rebuild is now intentionally byte-identical to the target dump (Beta 1)
+# EXCEPT the deliberate bytes our own modules place into it: see LEGAL.md
+# "Cartridge-derived bytes (exception)", journal 17, and journal 18's
+# iteration 2 (DRAW.PDS at $FAFF, 11 bytes). Each deliberate change is recorded
+# in asm/build.py:OUR_MODULES with an expect readback, and the image here is
+# what the build --Beta 1 targeted-- produces. The identity assertion is
+# therefore against the sha of THAT build, a derived constant, not a dump in
+# the registry:
+#
+# sha1(asm/out/magician-rebuilt.nes) after hostile and friendly use
+# different sprite attributes. Friendly stays attribute $03 and
+# palette 3's green. Hostile is attribute $01 and queues $16 into
+# palette 1 index 3. The health bar still rotates through slots
+# 0, 1 and 2 and is refused when OAM cannot hold every segment.
+#   = 08a29100... (the constant below); it must be re-measured and
+#   updated together with OUR_MODULES whenever a placement changes on purpose.
+#
+# The guard against drift stays: the rebuild must never equal the sha of a
+# dump it is not supposed to be. A rebuild equal to beta1 whole-file would now
+# mean our code silently vanished from the ROM again, which is the failure the
+# per-byte placement checks exist for.
 target_name = "beta1"
 target_sha = None
 for sha, name in registry.items():
@@ -227,9 +245,13 @@ for f in rebuilt:
     h = hashlib.sha1(data).hexdigest()
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
-check("the generated rebuild matches the target dump (beta1) byte for byte",
-      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest() == target_sha for f in rebuilt),
-      "rebuilt .nes does not match beta1")
+# Derived name, to say what it is: Beta 1's image with our placed-bytes ledger applied.
+REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 = "08a29100802b63ef1c9cfd58ba62bf1bc3deef9c"
+check("the generated rebuild matches Beta 1 except the placed bytes recorded "
+      "in OUR_MODULES (derived sha, journal 18 inspect review fixes)",
+      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest()
+          == REBUILD_BETA1_EXCEPT_PLACEMENTS_SHA1 for f in rebuilt),
+      "rebuilt .nes does not match the derived Beta-1-except-placements sha")
 
 # =====================================================================================
 # C+D. The guard, exercised. A synthetic index, so the real one is never touched and
@@ -281,25 +303,67 @@ check("the guard exits 0 on a clean index, so it can be wired into a hook and "
 # The real index, right now. If something is staged that the guard would refuse,
 # this fails -- which is the "fails if the .fm2 is ever staged" requirement, on the
 # index a commit would actually use.
+#
+# vendor/* is in NEVER_STAGED, and the guard's one exception is a `;` comment
+# in a plain-text .SRC. This check has to use that same exception. Applying
+# the glob alone fails the suite for a change guard_staged.sh accepts.
+sys.path.insert(0, str(ROOT / "tools"))
+import vendor_comments as vc  # noqa: E402
+
+
+def staged_would_fail(path: str) -> bool:
+    if any(fnmatch_name(path, pat) for pat in NEVER_IN_TREE):
+        return True
+    if any(fnmatch_name(path, pat) for pat in NEVER_STAGED):
+        if path.endswith(".SRC") and vc.staged_is_comment_only(path):
+            return False
+        return True
+    return False
+
+
 STAGED = [f for f in git("diff", "--cached", "--name-only",
                          "--diff-filter=ACDMRTUXB").stdout.splitlines() if f]
-bad_s = [f for f in STAGED if any(fnmatch_name(f, pat)
-                                       for pat in NEVER_IN_TREE + NEVER_STAGED)]
+bad_s = [f for f in STAGED if staged_would_fail(f)]
 check("nothing staged RIGHT NOW would be refused by the guard",
       not bad_s,
       f"staged and offending: {bad_s}\n         The index a commit would use "
       f"currently holds: {STAGED}")
+check("a comment-only vendor .SRC is not a staged failure, and anything else "
+      "under vendor/ still is",
+      vc.staged_is_comment_only("vendor/Magician-NES/MISC.SRC")
+      and not staged_would_fail("vendor/Magician-NES/MISC.SRC")
+      and staged_would_fail("vendor/Magician-NES/DAT/TILE.CHR")
+      and staged_would_fail("vendor/no-such.SRC"),
+      "the staged-path check has to call staged_is_comment_only")
 
 # =====================================================================================
-# E. vendor/ is unmodified, and its pin is the same in both documents.
+# E. vendor/ code and data are unmodified. A `;` comment in a .SRC file may
+# differ, and DAT/ art may differ. The pin is the same in both documents.
 # =====================================================================================
+sys.path.insert(0, str(ROOT / "tools"))
+import vendor_comments as vc  # noqa: E402
+
+check("a ; tail on a code line is a comment",
+      vc.same_code("\tst 0080,st_mon,$00\t;monk",
+                   "\tst 0080,st_mon,$00\t;monk, wilderness"))
+check("a new ; line is a comment",
+      vc.same_code("\tst 0080,st_mon,$00",
+                   "\t; note\n\tst 0080,st_mon,$00"))
+check("changing the data is not a comment",
+      not vc.same_code("\tst 0080,st_mon,$00", "\tst 0081,st_mon,$00"))
+
 vstatus = git("status", "--porcelain", "--", "vendor").stdout.strip()
-# Eurocom's *source* (.PDS/.SRC) must stay unmodified; only the DAT/ art assets
-# may change, per LEGAL.md "Cartridge-derived bytes (exception)" (2026-10-26).
-bad_src = [l for l in vstatus.splitlines()
-           if not l.strip().split()[-1].startswith("vendor/Magician-NES/DAT/")]
-check("Eurocom's source tree is unmodified (only vendor/.../DAT/ art assets may change)",
-      not bad_src, f"source files changed:\n" + "\n".join(bad_src))
+bad_src = []
+for line in vstatus.splitlines():
+    path = line.strip().split()[-1]
+    if path.startswith("vendor/Magician-NES/DAT/"):
+        continue
+    if path.endswith(".SRC") and vc.worktree_is_comment_only(path):
+        continue
+    bad_src.append(line)
+check("Eurocom's code and data are unmodified (a ; comment in a .SRC file may "
+      "differ, and vendor/.../DAT/ art may differ)",
+      not bad_src, "source files changed:\n" + "\n".join(bad_src))
 
 PIN = "bf653a407cd97e4dfdca665063f25d8b44da130a"
 pins = {}

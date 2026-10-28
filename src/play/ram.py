@@ -649,6 +649,21 @@ field("bookcur", 1, "the spell currently on show in the spell screen's top "
 field("plrspell", 1, "the spell in the player's hand: low 2 bits are the power "
       "level, the rest is the spell number (x6.pds:296-299 masks and rebuilds it "
       "exactly that way)", "plrspell")
+# Our own bytes, in the slack under x0.pds's RAM-overflow guard. The vendor
+# source does not name them. obinspect writes both; inspdraw and inspbody
+# read them (src/magician/INSPECT.PDS, src/magician/INSPBODY.PDS).
+field("insplatch", 1, "inspect cast latch. obinspect stores $5A and inspdraw "
+      "draws while that value is set (src/magician/INSPECT.PDS)", "insplatch")
+field("insppow", 1, "inspect power, firespell's t2, 1..4. obinspect stores it "
+      "in the byte after the latch and inspbody reads it "
+      "(src/magician/INSPECT.PDS)", "insppow")
+field("inspph", 1, "inspect pulse byte, the slack after insppow. inspclr "
+      "zeros it with the latch when dotitle runs, because that clear "
+      "stops at lastz (src/magician/INSPECT.PDS)", "inspph")
+field("inspalt", 1, "inspect bar turn. inspbody adds one each frame and "
+      "wraps at 3, so the first object rotates through slots 0, 1 and 2 "
+      "and a bar that would not fit is the complete bar on a later "
+      "frame (src/magician/INSPBODY.PDS)", "inspalt")
 field("cursp", 1, "the spell currently being CAST. Cleared to $FF every frame "
       "the player is not casting (x1.pds:711-712). NOT the spell screen's "
       "`currune` at $00CC -- two different bytes with confusingly similar names, "
