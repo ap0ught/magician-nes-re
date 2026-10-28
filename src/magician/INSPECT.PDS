@@ -1,0 +1,83 @@
+;   Inspect — the cast entry for spell slot 27 (issue #3).
+;
+;   The slot's init used to be the one-byte `rts` at $9112. The next byte,
+;   $9113, is `pha` and is called by other spells, so that rts stays. SPSLOT
+;   points the init vector here instead. The call is `jmp (t0)` from
+;   castspell's bulreq==0 path (x2.pds), so `rts` returns to firespell, which
+;   then spends the mana.
+;
+;   A cast does not draw. The sprite list is rebuilt every frame and wiped
+;   back to $F8 from `sprind` (x5.pds, the `lda #$f8` after `dobuls`), so a
+;   sprite written only inside the cast is gone on the next frame. The cast
+;   sets `insplatch` and returns. INSPHOOK calls `inspdraw` in place of
+;   `jsr tickmana`, after that wipe, and `inspdraw` asks INSPBODY to mark
+;   whoever is on screen. The latch stays set, so the mark follows the
+;   object: friendly on one frame, the bar on the next, once an interact
+;   has dropped his count to 0.
+;
+;   `insplatch` is the first byte of the slack under x0.pds's
+;   `if z>$0756`. `z` is $0743 and nothing in the source names $0743-$0756.
+;   BizHawk's RAM comes up $FF there and the game never writes it, so the
+;   "showing" value is $5A rather than any non-zero. $00 and $FF both mean off.
+;   The next byte, `insppow`, is the power firespell left in t2: `iny` makes
+;   it 1..4. The drawer reads it every frame.
+;
+;   dotitle clears through lastz ($0742) and then jsr initdma. That leaves
+;   the slack, so a cast's $5A would still be set after a return to the
+;   title. The three bytes at $8040 call `inspclr` instead, which zeros
+;   the latch, the power, the pulse byte and the bar-turn byte, then
+;   jumps to initdma. initdma's rts still reaches the jsr initcols that
+;   follows the hook. A stays 0, which is what that jsr already passed.
+;
+;   IN:  as the spell init (jmp indirect). t2 = power 1..4.
+;   OUT: A = t2, X and Y preserved, insplatch = $5A, insppow = t2
+;   USES: A
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+insplatch equ $0743
+insppow   equ $0744
+inspph    equ $0745
+inspalt   equ $0746
+;   Retail farjsr67 is $F8F7 and its `jmp (ma)` is `jmp ($0025)`.
+;   The source symbols (farjsr67 $F909, ma $27, initdma $F94E) are not
+;   those bytes. Bank 0 is the slot the body was placed in.
+cartma    equ $25
+farcall   equ $f8f7
+cartinit  equ $f93c
+
+;   The Beta 1 stub lived at $FB47. That address is palette data on the
+;   retail cart. The 56 bytes sit in the $00 run at $FFA0 (80 bytes,
+;   ending before the "MAGIC-*" signature at $FFF0). The $FBC1 hole is
+;   127 bytes and the four helpers already use 72, so this does not fit
+;   behind them.
+        org $ffa0
+obinspect
+        lda #$5a
+        sta insplatch
+        lda t2
+        sta insppow
+        rts
+
+inspdraw
+        jsr tickmana
+        lda insplatch
+        cmp #$5a
+        bne insp_out
+        lda #>inspbody
+        ldx #<inspbody
+        stx cartma
+        ldx #0
+        stx cartma+2
+        ldy #0
+        sty cartma+3
+        jsr farcall
+insp_out
+        rts
+
+inspclr lda #$00
+        sta insplatch
+        sta insppow
+        sta inspph
+        sta inspalt
+        jmp cartinit
