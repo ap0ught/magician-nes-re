@@ -113,7 +113,7 @@ base_params = [n for n in inspect.signature(pds6502.Assembler.run_file).paramete
 # Every keyword `run_all` passes to `self.run_file(...)`, found by parsing the
 # source. This is the list that grew by one and broke four tools, so it is
 # derived from the file that grew rather than copied into this test.
-pds_src = (ROOT / "asm" / "pds6502.py").read_text(encoding="utf-8")
+pds_src = Path(pds6502.ASSEMBLER_FILE).read_text(encoding="utf-8")
 tree = ast.parse(pds_src)
 call_kwargs: set[str] = set()
 for node in ast.walk(tree):

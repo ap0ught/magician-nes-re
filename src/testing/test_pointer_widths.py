@@ -305,7 +305,8 @@ ok(f"check 16: {len(dl_runs)} `dl` statements and {len(dh_runs)} `dh` statements
    collections.Counter(dl_runs) == collections.Counter(dh_runs) and len(dl_runs) > 50)
 
 # ------------------------------------------------- 17: the widths are not old
-src = (_ROOT / "asm" / "pds6502.py").read_text(encoding="latin-1")
+import pds6502
+src = pathlib.Path(pds6502.ASSEMBLER_FILE).read_text(encoding="latin-1")
 ok("check 17a: the old widths are gone from the code -- there is no `\"dl\": 4` "
    "and no `\"dh\": 2` anywhere",
    not re.search(r'"dl"\s*:\s*4', src) and not re.search(r'"dh"\s*:\s*2', src))
