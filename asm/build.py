@@ -104,6 +104,129 @@ OUR_MODULES: dict[str, dict] = {
                 "marked `** tmp`, overlaid with the value the cartridge we "
                 "target actually ships. See STARTLEV.PDS for the measurement",
     },
+    # Retail placements. Beta 1's orgs ($FAFF, $FB0A, $FB25, $FB2E, $FB47,
+    # $B92D, $8040) are live bytes on this cart. The helpers share the $00
+    # run at $FBC1 (127 bytes, SAM.SAM at $FC40). INSPECT is 56 bytes and
+    # does not fit in the 55 bytes those four leave, so it sits in the $00
+    # run at $FFA0 (80 bytes, before "MAGIC-*" at $FFF0). The body sits in
+    # slot 0's zero tail (file $19C8). INSPHOOK, SPNAME and SPSLOT are not
+    # entries: their Beta 1 sites are not the retail instruction, and no
+    # free byte is the thing they overwrite. See journal/20-retail-ips.md.
+    "DRAW.PDS": {
+        "slot": 15,
+        "origin": 0xFBC1,
+        "entry": "drawfill",
+        "expect_cpu": 0xFBC1,
+        "expect_bytes": "E0 00 F0 06 8D 07 20 CA D0 FA 60",
+        "note": "horizontal fill. Retail $00 hole at $FBC1, not Beta 1 $FAFF",
+    },
+    "AGGRO.PDS": {
+        "slot": 15,
+        "origin": 0xFBCC,
+        "entry": "obaggro",
+        "expect_cpu": 0xFBCC,
+        "expect_bytes": "BD F4 04 30 13 BD 30 05 29 0C C9 0C "
+                        "D0 0A BD 30 05 29 03 D0 03 A9 01 60 "
+                        "A9 00 60",
+        "note": "aggression predicate, packed behind DRAW.PDS in the $FBC1 hole",
+    },
+    "HEALTH.PDS": {
+        "slot": 15,
+        "origin": 0xFBE7,
+        "entry": "obhbar",
+        "expect_cpu": 0xFBE7,
+        "expect_bytes": "BD 24 05 4A 4A 4A 4A 4A 60",
+        "note": "health scale, packed behind AGGRO.PDS in the $FBC1 hole",
+    },
+    "WEAK.PDS": {
+        "slot": 15,
+        "origin": 0xFBF0,
+        "entry": "obweak",
+        "expect_cpu": 0xFBF0,
+        "expect_bytes": "BD 30 05 30 0B 29 30 F0 0A C9 20 F0 "
+                        "09 A9 03 60 A9 80 60 A9 01 60 A9 02 "
+                        "60",
+        "note": "vulnerability class, packed behind HEALTH.PDS. Ends at $FC08, "
+                "before SAM.SAM at $FC40",
+    },
+    "INSPECT.PDS": {
+        "slot": 15,
+        "origin": 0xFFA0,
+        "entry": "obinspect",
+        "expect_cpu": 0xFFA0,
+        "expect_bytes": "A9 5A 8D 43 07 A5 15 8D 44 07 60 20 "
+                        "56 F3 AD 43 07 C9 5A D0 11 A9 B9 A2 "
+                        "C8 86 25 A2 00 86 27 A0 00 84 28 20 "
+                        "F7 F8 60 A9 00 8D 43 07 8D 44 07 8D "
+                        "45 07 8D 46 07 4C 3C F9",
+        "note": "cast stub, inspdraw and inspclr. $FFA0 $00 run, 56 bytes, "
+                "before the MAGIC-* signature at $FFF0. farjsr is the retail "
+                "routine at $F8F7 (ma $25) and the body bank is 0",
+    },
+    "INSPBODY.PDS": {
+        "slot": 0,
+        "origin": 0xB9C8,
+        "window_slots": {0xA000: 0},
+        "entry": "inspbody",
+        "expect_cpu": 0xB9C8,
+        "expect_bytes": "AD 46 07 18 69 01 C9 03 90 02 A9 00 "
+                        "8D 46 07 20 BE BB 20 CE BB AE 46 07 "
+                        "A9 03 48 E0 03 F0 2D BD F4 04 30 28 "
+                        "38 BD 14 05 E5 94 85 13 BD 18 05 E5 "
+                        "95 D0 19 38 BD 1C 05 E5 96 85 14 BD "
+                        "20 05 E5 97 D0 0A BD 30 05 29 0C F0 "
+                        "03 20 26 BA E8 E0 03 90 02 A2 00 68 "
+                        "38 E9 01 F0 04 48 4C E3 B9 60 20 CC "
+                        "FB 08 A5 13 85 17 A5 14 85 1A AD 45 "
+                        "07 C9 1F B0 12 28 F0 07 20 E1 BB A9 "
+                        "01 D0 02 A9 03 20 3A BB 4C 4C BA 28 "
+                        "AD 44 07 C9 02 90 3B A5 1A 38 E9 18 "
+                        "90 31 85 18 85 14 A5 17 85 13 A9 02 "
+                        "85 16 A9 B2 85 15 20 E7 FB F0 1C 85 "
+                        "19 20 8E BB B0 15 A4 19 98 48 20 29 "
+                        "EF 68 A8 A5 13 18 69 08 B0 05 85 13 "
+                        "88 D0 ED 20 8F BA 60 AD 44 07 C9 02 "
+                        "B0 03 4C 39 BB BD 28 05 F0 18 A5 18 "
+                        "18 69 08 B0 11 85 14 A5 17 85 13 A9 "
+                        "D8 85 15 A9 02 85 16 20 29 EF AD 44 "
+                        "07 C9 03 B0 03 4C 39 BB A9 00 85 19 "
+                        "A5 19 0A 0A 85 1A 8A 18 65 1A A8 B9 "
+                        "38 05 F0 20 A5 18 38 E9 08 90 19 85 "
+                        "14 A5 19 0A 0A 0A 18 65 17 B0 0D 85 "
+                        "13 A9 B2 85 15 A9 02 85 16 20 29 EF "
+                        "E6 19 A5 19 C9 04 D0 C8 AD 44 07 C9 "
+                        "04 B0 03 4C 39 BB 20 F0 FB C9 80 D0 "
+                        "04 A9 C8 D0 12 C9 01 D0 04 A9 D8 D0 "
+                        "0A C9 02 D0 04 A9 D0 D0 02 A9 DE 85 "
+                        "15 A5 18 38 E9 10 90 0D 85 14 A5 17 "
+                        "85 13 A9 02 85 16 20 29 EF 60 85 15 "
+                        "A0 00 C4 B0 F0 4B 98 48 0A 0A A8 B9 "
+                        "01 02 C9 74 90 3A C9 7E B0 36 B9 03 "
+                        "02 38 E5 17 C9 F0 F0 08 C9 F8 F0 04 "
+                        "C9 00 D0 24 B9 00 02 38 E5 1A C9 EC "
+                        "F0 10 C9 F4 F0 0C C9 FC F0 08 C9 04 "
+                        "F0 04 C9 0C D0 0A B9 02 02 29 FC 05 "
+                        "15 99 02 02 68 A8 C8 D0 B1 60 A9 40 "
+                        "38 E5 B0 C5 19 B0 02 38 60 A0 00 A9 "
+                        "00 85 1A C4 B0 F0 13 98 48 0A 0A A8 "
+                        "B9 00 02 C5 14 D0 02 E6 1A 68 A8 C8 "
+                        "D0 E9 A5 1A 18 65 19 C9 09 60 AD 45 "
+                        "07 C9 3C 90 02 A9 00 18 69 01 8D 45 "
+                        "07 60 AD 47 07 C9 5A D0 0B AD CB 04 "
+                        "8D EB 04 A9 00 8D 47 07 60 A9 16 8D "
+                        "EB 04 A9 5A 8D 47 07 60",
+        "note": "inspect marker. Slot 0 zero tail at file $19C8, not the "
+                "Beta 1 $FF run at $B92D. farjsr bank argument is 0",
+    },
+    "INSPTITL.PDS": {
+        "origin": 0x8056,
+        "window_slots": {0x8000: 0},
+        "entry": "insptitl",
+        "expect_cpu": 0x8056,
+        "expect_bytes": "20 C7 FF",
+        "note": "three bytes at retail dotitle's jsr initdma ($8056, "
+                "20 3C F9). The following jsr initcols ($F04A) is not written",
+    },
     "SLOT0.PDS": {
         "slot": 0,
         "note": "recreated from the retail PRG slot 0 (disassembly in magician-src/)",
@@ -199,9 +322,25 @@ def check_our_manifest() -> list[str]:
     return problems
 
 
+# Slot recreates are the cart's own bytes. An overlay assembled before the
+# recreate of its slot is erased: sorted() puts DRAW.PDS before SLOT15.PDS,
+# and the finished image then still reads the cart at the overlay's origin.
+OUR_SLOT_RECREATES = frozenset(f"SLOT{i}.PDS" for i in range(16))
+
+
 def our_modules() -> list[str]:
-    """Our module names, in assembly order, verified against what is on disk."""
-    return sorted(OUR_MODULES)
+    """Our module names, in assembly order, verified against what is on disk.
+
+    Slot recreates first, then the modules that write on top of them. Each
+    half is name-sorted.
+    """
+    missing = OUR_SLOT_RECREATES - set(OUR_MODULES)
+    if missing:
+        raise SystemExit(f"OUR_SLOT_RECREATES names module(s) the manifest does "
+                         f"not know: {', '.join(sorted(missing))}")
+    recreates = sorted(n for n in OUR_MODULES if n in OUR_SLOT_RECREATES)
+    overlays = sorted(n for n in OUR_MODULES if n not in OUR_SLOT_RECREATES)
+    return recreates + overlays
 
 # ---------------------------------------------------------------------------
 # The bank map, and what is known about each module's slot.
@@ -1188,8 +1327,38 @@ def verify_our_scenes(asm, prg: bytearray, packed: bytes, log: list[str]) -> Non
 
     for m in our_modules():
         offs = sorted(asm.writes_by_file.get(m, ()))
+        expect_bytes = OUR_MODULES[m].get("expect_bytes")
         if not offs:
+            if expect_bytes:
+                raise SystemExit(
+                    f"{m}: the manifest declares expect_bytes but the module "
+                    f"wrote no bytes.")
             log.append(f"  *** {m} emitted no bytes; nothing to verify ***")
+            continue
+        if expect_bytes:
+            want = bytes.fromhex(expect_bytes.replace(" ", ""))
+            first, last_off = offs[0], offs[-1]
+            if len(offs) != len(want) or last_off != first + len(want) - 1:
+                raise SystemExit(
+                    f"{m}: expect_bytes is {len(want)} byte(s) but the module "
+                    f"wrote {len(offs)} (${first:05X}-${last_off:05X}), not one "
+                    f"contiguous run of that length.")
+            entry = OUR_MODULES[m].get("entry")
+            expect_cpu = OUR_MODULES[m].get("expect_cpu")
+            if entry is not None:
+                resolved = asm.sym.get(entry)
+                if resolved is None or (expect_cpu is not None and resolved != expect_cpu):
+                    raise SystemExit(
+                        f"{m}: `{entry}` resolved to "
+                        f"{'nothing' if resolved is None else f'${resolved:04X}'} "
+                        f"and the manifest says ${expect_cpu:04X}.")
+            got = bytes(prg[first:first + len(want)])
+            if got != want:
+                raise SystemExit(
+                    f"{m}: the image at PRG ${first:05X} does not hold the "
+                    f"manifest's expect_bytes. Something overwrote the placement.")
+            log.append(f"  {m}: {len(want)} byte(s) at PRG ${first:05X} match "
+                       f"expect_bytes")
             continue
         expect = OUR_MODULES[m].get("expect")
         if expect:

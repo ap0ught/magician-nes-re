@@ -212,23 +212,21 @@ import patches  # noqa: E402  (asm/patches.py)
 registry = {e["sha1_full"]: n for n, e in patches.CARTS.items()}
 import hashlib  # noqa: E402
 
-# The rebuild is intentionally byte-identical to the target dump. On this
-# branch that dump is the retail cart (`release`). The `beta1` tag is the
-# tree that matches Beta 1. A rebuild that matches some other registered
-# dump has drifted off the cart this branch claims to rebuild.
-target_name = patches.DEFAULT_CART
-target_sha = None
-for sha, name in registry.items():
-    if name == target_name:
-        target_sha = sha
+# The unpatched parent of this branch is the retail cart. `make rom` then
+# writes the seven placed modules on top of it, so the rebuild is not the
+# cart. The IPS in ips/retail-modules.ips is that delta: applied to the cart
+# it must equal the rebuild, and the cart file itself must stay
+# 7b0da149c3892b9aec3e97400b79e1089cb8cc47. A rebuild that matches some other
+# registered dump has drifted off both.
+PATCHED_SHA1 = "ef8bb81bd6da2af0ee4b82671a636ba3a506e8eb"
 for f in rebuilt:
     data = (ROOT / f).read_bytes()
     h = hashlib.sha1(data).hexdigest()
-    if h in registry and registry[h] != target_name:
-        raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
-check(f"the generated rebuild matches the target dump ({target_name}) byte for byte",
-      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest() == target_sha for f in rebuilt),
-      f"rebuilt .nes does not match {target_name}")
+    if h in registry:
+        raise AssertionError(f"{f} matches registered dump {registry[h]}")
+check("the generated rebuild is the retail cart plus the placed modules",
+      any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest() == PATCHED_SHA1 for f in rebuilt),
+      f"rebuilt .nes is not {PATCHED_SHA1}")
 
 # =====================================================================================
 # C+D. The guard, exercised. A synthetic index, so the real one is never touched and
@@ -243,9 +241,11 @@ def guard_against(paths):
     """Run guard_staged.sh against an index that has `paths` staged."""
     if IDX.exists():
         IDX.unlink()
-    git("rev-parse", "--git-dir")
+    index = Path(git("rev-parse", "--git-path", "index").stdout.strip())
+    if not index.is_absolute():
+        index = (ROOT / index).resolve()
     import shutil
-    shutil.copyfile(ROOT / ".git" / "index", IDX)
+    shutil.copyfile(index, IDX)
     for path in paths:
         # A blob id for content that is one byte of text. Nothing is written to
         # the object database (`--info-only` below), so this leaves no trace in

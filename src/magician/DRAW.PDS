@@ -1,0 +1,23 @@
+;   Shared drawing layer (scaffold).
+;
+;   First concrete piece: a horizontal fill primitive used by both enemy health
+;   bars and the status HUD. It writes `count` copies of `tile` to the PPU data
+;   port, assuming the caller has already set the destination address via $2006.
+;
+;   IN:  A = tile to fill with
+;        X = number of bytes to write
+;   OUT: none
+;   USES: none (A/X preserved? no -- X is consumed)
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+;   Retail placement: the Beta 1 $FF run at $FAFF is live data. The
+;   corresponding hole is the $00 run at $FBC1, 127 bytes, ending where
+;   SAM.SAM starts at $FC40. This module is the first 11 of those bytes.
+        org $fbc1
+drawfill cpx #0
+        beq drawfill_done
+drawfill_loop sta $2007
+        dex
+        bne drawfill_loop
+drawfill_done rts

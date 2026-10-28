@@ -1,0 +1,12 @@
+;   Title init clears through lastz ($0742). These three bytes are the
+;   `jsr initdma` in dotitle. On the retail cart that jsr is at $8056
+;   (`20 3C F9`, initdma = $F93C) and the next instruction is
+;   `jsr initcols` at $F04A (`20 4A F0`). Beta 1's $8040 is a different
+;   jsr ($F9A3) followed by `lda #$EF`, so it is not this site.
+;   They now call `inspclr`, which zeros the inspect slack and jumps to
+;   initdma, so initdma's rts still reaches the jsr initcols.
+;
+;   Written by us. Eurocom's source is read-only and pinned; see README.md.
+
+        org $8056
+insptitl jsr inspclr
