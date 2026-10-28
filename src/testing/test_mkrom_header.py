@@ -27,23 +27,24 @@ WHAT IS PINNED
    1-3.  the header is a well-formed 16-byte iNES header naming mapper 4 with
          128 KiB PRG and 128 KiB CHR, and the rebuilt PRG and CHR are exactly
          those sizes
-   4.    **byte 6 == Beta 1's byte 6** -- the one fact that is a property of the
-         revision being reconstructed rather than of the mapper
-   5.    byte 6's battery bit (bit 1) is CLEAR in our header and SET in all five
-         other dumps. Both directions are checked, because an assertion that only
-         ever says "clear" would also pass against a header with the bit missing
-         entirely
+   4.    **byte 6 == the target dump's byte 6** -- the one fact that is a property
+         of the revision being reconstructed rather than of the mapper. On this
+         branch the target is `release`, whose byte 6 is `$42`
+   5.    our battery bit equals the target's, and the registry still contains both
+         a clear dump and a set dump. Both directions are checked, because an
+         assertion that only ever said "set" or only ever said "clear" would
+         also pass against a header that had lost the distinction
    6.    our header's battery bit agrees with the TARGET's, not with "whatever
-         the majority of the registry says" -- beta1 is 1-of-6, so a majority
-         rule would get this wrong
-   7.    the stale `magician-rebuilt.SaveRAM` still on disk cannot be resumed by
-         this ROM, because a core with its battery bit clear never looks for one.
-         Stated as a property of the header bit, because that is what it is; the
-         file is NOT deleted and nothing in NES/SaveRAM is written or touched
-   8-9.  `run.sh`'s battery guard agrees: its own battery test, applied to our
-         header, must come out CLEAR, and applied to the release's must come out
-         SET. The guard is parsed out of the script rather than restated, so it
-         cannot drift from the script
+         the majority of the registry says". Beta 1 is the clear dump (`$40`);
+         a header left at that byte fails when the target is `release`
+   7.    the header battery bit is the target's, so a core that honors the bit
+         resumes a save only when that bit is set. Stated as a property of the
+         header bit; the file is NOT deleted and nothing in NES/SaveRAM is
+         written or touched
+   8-9.  `run.sh`'s battery guard agrees: CLEAR does nothing, SET refuses. Applied
+         to our header, the branch taken is the target's. Beta 1 takes 'nothing';
+         the retail cart takes 'refuse'. The guard is parsed out of the script
+         rather than restated, so it cannot drift from the script
   10.    every registered dump's header is self-consistent: mapper 4, 128 KiB PRG,
          128 KiB CHR. If a future dump does not agree, checks 4-6 are comparing
          against a different machine and must not be trusted silently
@@ -184,20 +185,25 @@ ok(f"check 4: header byte 6 is ${HEADER[6]:02X} and {target}'s own byte 6 is "
    HEADER[6] == th[6])
 others = {n: hdr_of(n) for n in patches.CARTS if n != target}
 set_in_others = sorted(n for n, h in others.items() if battery(h))
-ok(f"check 5: our battery bit is CLEAR and it is SET in the other "
-   f"{len(others)} dumps ({', '.join(set_in_others)}). Both directions: an "
-   f"assertion that only ever said 'clear' would also pass on a header with no "
-   f"battery bit in it",
-   battery(HEADER) == 0 and len(set_in_others) == len(others))
-ok(f"check 6: the battery bit agrees with the TARGET ({target}), not with the "
-   f"majority of the registry -- {target} is 1 of {len(patches.CARTS)}, so a "
-   f"majority rule would pick the wrong answer here",
-   battery(HEADER) == battery(th) != (len(set_in_others) > len(others) // 2))
-ok("check 7: the stale NES/SaveRAM/magician-rebuilt.SaveRAM cannot be resumed by "
-   "this ROM, because a core whose header battery bit is clear keeps no save "
-   "state to resume. The file is NOT deleted and NES/SaveRAM is not written to "
-   "or read from by this suite -- this is a statement about the header bit",
-   battery(HEADER) == 0)
+clear_others = sorted(n for n, h in others.items() if not battery(h))
+ok(f"check 5: our battery bit equals {target}'s "
+   f"(${HEADER[6]:02X}), and the registry still contains both a clear dump "
+   f"and a set dump ({', '.join(clear_others) or 'none clear'}; "
+   f"{', '.join(set_in_others) or 'none set'}). Both directions exist, so a "
+   f"check that only ever said 'set' or only ever said 'clear' is not what "
+   f"this is",
+   battery(HEADER) == battery(th) and bool(clear_others) and bool(set_in_others)
+   or (battery(HEADER) == battery(th) and not others))
+ok(f"check 6: the battery bit agrees with the TARGET ({target}). "
+   f"Beta 1 is the clear dump; this rebuild is not that cart, so a header "
+   f"left at Beta 1's $40 would fail here",
+   battery(HEADER) == battery(th) and battery(hdr_of("beta1")) == 0
+   and (target == "beta1" or battery(HEADER) == 1))
+ok("check 7: the header battery bit is the target's, so a core that honors "
+   "the bit resumes a save only when that bit is set. The file is NOT deleted "
+   "and NES/SaveRAM is not written to or read from by this suite -- this is a "
+   "statement about the header bit",
+   battery(HEADER) == battery(th))
 
 # ------------------------------------------ 8-9: run.sh's own battery test agrees
 #
@@ -210,9 +216,10 @@ ok("check 8: run.sh reads HAS_BATTERY out of identity.py's KEY=VALUE output rath
    re.search(r"^\s*battery\)\s+HAS_BATTERY=", run_sh, re.M) is not None
    and "identity.py" in run_sh)
 ok("check 9: run.sh branches on that bit -- CLEAR does nothing, SET refuses rather "
-   "than deleting -- and applied to OUR header the branch taken is 'nothing', while "
-   "the release's would take 'refuse'",
-   battery(HEADER) == 0
+   "than deleting -- and applied to OUR header the branch taken is the target's. "
+   "Beta 1 takes 'nothing'; a set bit takes 'refuse'",
+   battery(HEADER) == battery(th)
+   and battery(hdr_of("beta1")) == 0
    and battery(hdr_of("release")) == 1
    and re.search(r'if \[ "\$HAS_BATTERY" = "0" \]; then', run_sh) is not None
    and 'HAS_BATTERY" = 1 ] && echo SET' in run_sh

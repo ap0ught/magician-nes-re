@@ -60,4 +60,4 @@
 ;   Written by us. Eurocom's source is read-only and pinned; see README.md.
 
         org stlev              ; the label `initvars` already reads (X1.PDS:27)
-stlev  db $00
+stlev  db $41              ; retail byte at $C300. Beta 1's byte here is $00.

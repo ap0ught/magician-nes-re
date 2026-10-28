@@ -86,15 +86,12 @@ MODULES = [f"X{i}.PDS" for i in range(8)]
 # prg.bin $CBA7, which is real code, and `verify_our_scenes()` catches it because
 # the bytes it finds there are not the scene it packed. The build did that rather
 # than reporting success.
-OUR_TITLE_WINDOW_SLOTS = {0x8000: 6, 0xA000: 7, 0xC000: 14, 0xE000: 15}
-
 OUR_MODULES: dict[str, dict] = {
-    "TITLE.SRC": {
-        "window_slots": OUR_TITLE_WINDOW_SLOTS,
-        "note": "our title screen: the packed scene descriptor overlaid on X7's "
-                "`titdat`, so Eurocom's own `dotitle` loads it with no change to "
-                "vendor/ at all",
-    },
+    # No TITLE.SRC on this branch. The beta1 tag overlays `titdat` with a scene
+    # that is already the Beta 1 bytes. Here the bytes at that address in the
+    # retail PRG are not that scene (2 of 314 agree, and they do not decode),
+    # so an overlay would punch the Beta 1 screen into the retail image. The
+    # slot recreate already holds the cart's own title data.
     "STARTLEV.PDS": {
         # `expect` is the build's assertion that the overlay actually changed the
         # image, which is a different question from "did it assemble". A module
@@ -102,74 +99,74 @@ OUR_MODULES: dict[str, dict] = {
         # and a ROM with somebody else's value in it -- and this byte is the
         # whole difference between entering level 1 and entering level 2. So the
         # bytes are named here and read back out of the finished image.
-        "expect": {"stlev": "00"},
+        "expect": {"stlev": "41"},
         "note": "the level a new game starts on: X5.PDS:8's `stlev db $01` "
                 "marked `** tmp`, overlaid with the value the cartridge we "
                 "target actually ships. See STARTLEV.PDS for the measurement",
     },
     "SLOT0.PDS": {
         "slot": 0,
-        "note": "recreated from Beta 1 PRG slot 0 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 0 (disassembly in magician-src/)",
     },
     "SLOT1.PDS": {
         "slot": 1,
-        "note": "recreated from Beta 1 PRG slot 1 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 1 (disassembly in magician-src/)",
     },
     "SLOT2.PDS": {
         "slot": 2,
-        "note": "recreated from Beta 1 PRG slot 2 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 2 (disassembly in magician-src/)",
     },
     "SLOT3.PDS": {
         "slot": 3,
-        "note": "recreated from Beta 1 PRG slot 3 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 3 (disassembly in magician-src/)",
     },
     "SLOT4.PDS": {
         "slot": 4,
-        "note": "recreated from Beta 1 PRG slot 4 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 4 (disassembly in magician-src/)",
     },
     "SLOT5.PDS": {
         "slot": 5,
-        "note": "recreated from Beta 1 PRG slot 5 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 5 (disassembly in magician-src/)",
     },
     "SLOT6.PDS": {
         "slot": 6,
-        "note": "recreated from Beta 1 PRG slot 6 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 6 (disassembly in magician-src/)",
     },
     "SLOT7.PDS": {
         "slot": 7,
-        "note": "recreated from Beta 1 PRG slot 7 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 7 (disassembly in magician-src/)",
     },
     "SLOT8.PDS": {
         "slot": 8,
-        "note": "recreated from Beta 1 PRG slot 8 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 8 (disassembly in magician-src/)",
     },
     "SLOT9.PDS": {
         "slot": 9,
-        "note": "recreated from Beta 1 PRG slot 9 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 9 (disassembly in magician-src/)",
     },
     "SLOT10.PDS": {
         "slot": 10,
-        "note": "recreated from Beta 1 PRG slot 10 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 10 (disassembly in magician-src/)",
     },
     "SLOT11.PDS": {
         "slot": 11,
-        "note": "recreated from Beta 1 PRG slot 11 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 11 (disassembly in magician-src/)",
     },
     "SLOT12.PDS": {
         "slot": 12,
-        "note": "recreated from Beta 1 PRG slot 12 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 12 (disassembly in magician-src/)",
     },
     "SLOT13.PDS": {
         "slot": 13,
-        "note": "recreated from Beta 1 PRG slot 13 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 13 (disassembly in magician-src/)",
     },
     "SLOT14.PDS": {
         "slot": 14,
-        "note": "recreated from Beta 1 PRG slot 14 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 14 (disassembly in magician-src/)",
     },
     "SLOT15.PDS": {
         "slot": 15,
-        "note": "recreated from Beta 1 PRG slot 15 (disassembly in magician-src/)",
+        "note": "recreated from the retail PRG slot 15 (disassembly in magician-src/)",
     },
 }
 
@@ -1237,6 +1234,10 @@ def verify_our_scenes(asm, prg: bytearray, packed: bytes, log: list[str]) -> Non
             continue
         log.append(f"  {m}: ${first:04X}-${last:04X} in the image is byte-for-byte "
                    f"the scene src/magician/title/ describes")
+
+    if "TITLE.SRC" not in our_modules():
+        log.append("  no TITLE.SRC overlay; the slot recreate keeps the cart's titdat")
+        return
 
     titdat, pwdat = asm.sym.get("titdat"), asm.sym.get("pwdat")
     if titdat is None or pwdat is None:

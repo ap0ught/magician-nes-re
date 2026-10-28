@@ -123,13 +123,11 @@ CARTS: dict[str, dict[str, object]] = {
     },
 }
 
-# The build's target. **Beta 1**, because the source's own last-modified date is
-# 02/03/90 and Beta 1 is dated 1990-03-02 -- they are the same build. Every
-# release-derived measurement in this repo (the X7 anchor, the MMC3 slot pins, the
-# ceiling arithmetic, the "absent work" regions, the SAM.SAM address) was taken
-# against a cartridge a year newer than the source, and re-deriving against Beta 1
-# is what dissolved most of them.
-DEFAULT_CART = "beta1"
+# The build's target on this branch. The `beta1` tag is the tree that rebuilds
+# Magician (USA) (Beta 1). This branch rebuilds the final cart, registry name
+# `release`: Magician (USA).nes, 1991-02. The slot recreates and the CHR assets
+# are that cart's bytes. Beta 1 stays in the registry; it is not this build.
+DEFAULT_CART = "release"
 
 # The classification every region must carry. These are the cases from
 # `README.md`'s "A gap is not one thing", and the point of recording one is that

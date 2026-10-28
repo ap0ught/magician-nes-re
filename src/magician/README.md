@@ -45,7 +45,13 @@ reasons:
 
 ## `TITLE.SRC` — overlaying rather than patching
 
-`src/magician/TITLE.SRC` is one `org` and one `incbin`:
+This branch does not assemble `TITLE.SRC`. The retail PRG at the source's
+`titdat` is not the 314-byte scene below (2 of those 314 bytes agree, and the
+retail bytes do not decode), so overlaying the grid would punch the Beta 1
+screen into the cart. The slot recreate already holds the retail title data.
+The `beta1` tag is the tree that still overlays the scene.
+
+On that tag, `src/magician/TITLE.SRC` is one `org` and one `incbin`:
 
         org titdat
 titscn  incbin ..\..\asm\out\ours\TIT.DAT

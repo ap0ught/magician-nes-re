@@ -51,17 +51,18 @@ OUT = ROOT / "asm" / "out"
 # `NES/SaveRAM/magician-rebuilt.SaveRAM` and then RESUMED it on the next launch,
 # so a run that claimed to be from power-on was starting from a saved game.
 # `tools/bizhawk/run.sh` caught it -- its battery-bit guard refused to launch --
-# which is the guard earning its keep, but it can only refuse. The header is
-# fixed here, and `test_mkrom_header.py` pins it against every registered dump so
-# that moving the target again cannot quietly re-arm it.
+# which is the guard earning its keep, but it can only refuse. The `beta1` tag
+# keeps `$40`. This branch rebuilds the retail cart, so byte 6 here is that
+# cart's own `$42`, and `test_mkrom_header.py` pins it against the target dump
+# so moving the target again cannot quietly re-arm the wrong machine.
 INES_HEADER = bytes([
     0x4E, 0x45, 0x53, 0x1A,   # 'NES' + EOF
     0x08,                     # 8 x 16 KiB PRG  = 128 KiB
     0x10,                     # 16 x 8 KiB CHR  = 128 KiB, non-zero so CHR-ROM
-    0x40,                     # mapper 4 (high nibble here is 0x0); bit 1 CLEAR, so
-                              #   NO battery-backed PRG RAM -- this is Beta 1's own
-                              #   byte 6, and the only one of the six dumps with it
-                              #   clear. See the note above before changing it.
+    0x42,                     # mapper 4 (high nibble here is 0x0); bit 1 SET, so
+                              #   battery-backed PRG RAM. This is the retail cart's
+                              #   own byte 6. Beta 1 is the only dump with it clear
+                              #   ($40); the `beta1` tag keeps that header.
     0x00,                     # mapper high
     0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00,

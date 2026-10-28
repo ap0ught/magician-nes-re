@@ -1,4 +1,4 @@
-; Recreated from Beta 1 PRG slot 12 (file offset $18000).
+; Recreated from the retail PRG slot 12 (file offset $18000).
  hex 58 58 58 58 02 03 06 07 0a 0b 09 0a 0d 0e 11 12
  hex 0f 10 13 14 00 01 15 16 02 03 17 18 0a 09 19 1a
  hex 0a 09 1b 1c 0a 0b 1d 1e 0d 0e 1f 20 0f 10 21 22
@@ -71,54 +71,39 @@
  hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
  hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
  hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
- hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
- hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
- hex 50 50 55 55 55 55 55 55 55 55 50 50 50 50 50 50
- hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
- hex 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50
- hex 50 50 50 50 55 55 55 55 55 55 55 55 55 55 55 55
- hex 55 55 55 55 55 05 45 55 55 15 05 55 55 55 55 05
+ hex 50 50 50 50 50 50 50 50 50 50 55 55 55 55 55 55
+ hex 55 55 50 50 50 50 50 50 50 50 50 50 50 50 50 50
+ hex 50 50 50 50 50 50 50 50 50 50 50 50 55 55 55 55
+ hex 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 05
  hex 55 55 15 05 05 55 55 55 55 55 55 05 05 55 15 05
- hex 05 05 05 05 55 55 55 55 55 55 55 55 55 15 45 45
- hex 55 15 05 55 55 55 55 55 55 55 55 05 05 05 45 45
- hex 55 15 05 05 55 55 55 55 55 55 55 55 55 05 45 45
- hex 55 15 05 05 05 05 45 45 51 15 05 05 05 55 55 55
+ hex 05 05 05 05 55 15 45 45 55 15 05 55 55 55 55 55
+ hex 55 55 55 05 05 05 45 45 55 15 05 05 55 55 55 55
+ hex 55 55 55 55 55 05 45 45 55 15 05 05 05 55 55 55
  hex 55 55 55 05 05 55 55 45 51 55 15 05 05 05 45 45
- hex 55 15 05 05 55 05 45 55 55 15 05 05 05 55 55 55
- hex 55 55 55 55 05 05 45 55 55 15 05 55 55 55 55 55
+ hex 55 15 05 05 55 05 45 55 55 15 05 05 55 55 55 55
  hex 55 55 55 55 00 00 00 00 00 00 00 55 55 00 00 15
- hex 45 55 55 55 55 00 40 50 50 10 00 55 51 00 00 11
- hex 00 00 00 00 00 00 00 40 50 00 00 00 00 00 00 40
- hex 10 00 00 00 55 00 00 55 10 00 00 55 11 00 40 50
+ hex c5 f5 f5 55 51 00 00 11 00 00 00 00 00 00 00 40
+ hex 50 00 00 00 00 00 00 40 10 00 00 00 11 00 40 50
  hex 50 00 00 55 55 00 00 44 55 00 00 00 00 00 40 50
  hex 50 10 00 00 55 00 00 55 11 00 44 55 55 00 40 50
- hex 50 10 00 00 00 00 40 50 50 10 00 00 00 00 00 44
- hex 55 00 00 00 40 10 00 00 00 00 00 00 00 00 40 50
- hex 50 00 00 00 11 00 40 50 50 10 00 00 00 00 40 14
- hex 05 00 00 55 40 00 40 50 50 10 00 55 11 00 00 55
- hex 11 00 44 55 00 00 00 00 00 00 00 55 55 50 50 10
- hex 44 55 51 55 59 55 55 2a 8a 55 10 55 15 50 50 00
+ hex 50 10 00 00 00 00 00 44 55 00 00 00 40 10 00 00
+ hex 00 00 00 00 00 00 40 50 50 00 00 00 11 00 40 50
+ hex 50 10 00 00 11 00 00 55 11 00 44 55 00 00 00 00
+ hex 00 00 00 55 55 50 50 10 cc ff 73 55 15 50 50 00
  hex 50 11 54 00 40 50 50 2a 8a 50 64 50 00 50 04 55
- hex 55 10 50 01 55 50 50 2a 8a 50 50 55 15 00 54 2a
- hex 8a 11 10 55 19 50 50 50 50 50 54 00 00 55 55 2a
- hex 8a 55 10 00 55 50 50 50 50 50 55 55 19 00 54 2a
- hex 8a 55 10 00 00 00 54 2a 8a 15 10 00 00 50 50 50
+ hex 55 10 50 01 15 00 54 2a 8a 11 10 55 19 50 50 50
+ hex 50 50 54 00 00 55 55 2a 8a 55 10 00 55 50 50 50
+ hex 50 50 55 55 19 00 54 2a 8a 55 10 00 00 50 50 50
  hex 50 50 54 00 55 55 10 50 01 50 54 00 00 00 54 2a
- hex 8a 51 00 00 15 55 55 2a 8a 55 10 00 00 50 55 55
- hex 10 00 40 55 48 55 55 2a 8a 55 10 55 15 50 50 50
+ hex 8a 51 00 00 15 55 55 2a 8a 55 10 00 15 50 50 50
  hex 50 50 55 55 55 55 55 55 55 55 55 55 55 55 55 55
- hex 54 55 55 55 55 55 55 62 98 55 55 55 55 55 55 55
- hex 55 55 55 50 55 55 55 62 98 55 55 55 00 55 55 55
- hex 55 55 50 10 55 55 55 62 98 55 55 55 55 55 55 62
+ hex 54 55 55 55 55 55 55 55 55 55 55 50 55 55 55 62
+ hex 98 55 55 55 00 55 55 55 55 55 50 10 55 55 55 62
  hex 98 51 50 54 55 44 55 55 55 55 55 50 00 55 55 62
  hex 98 55 55 00 55 55 55 55 55 55 55 55 55 55 55 62
- hex 98 55 55 00 40 55 54 62 98 55 55 00 00 55 55 55
- hex 55 55 51 10 55 55 55 50 10 55 11 00 40 55 54 62
- hex 98 55 11 00 55 55 55 62 98 55 55 00 00 55 55 55
- hex 55 10 00 55 00 55 55 62 98 55 55 55 55 44 55 55
- hex 55 55 55 55 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 98 55 55 00 00 55 55 55 55 55 51 10 55 55 55 50
+ hex 10 55 11 00 40 55 54 62 98 55 11 00 55 55 55 62
+ hex 98 55 55 00 55 44 55 55 55 55 55 55 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
@@ -145,8 +130,8 @@
  hex 00 00 bf c0 ad ae b1 b2 03 b3 07 b5 c1 c2 c3 c4
  hex b8 04 b9 08 01 ba 05 bb 9c 9f a0 a3 b4 04 b6 08
  hex 94 97 98 9b 60 b7 66 67 bc bd 68 69 be 65 6a 6b
- hex 87 88 c9 c6 c7 c8 c5 c6 c7 c8 9a 9b ca 61 cb 67
- hex 20 20 00 00 01 14 00 0b 3d 3d 3d 3d 3d 3d 3d 3d
+ hex 87 88 c9 c6 c7 c8 c5 c6 c7 c8 9a 9b cb cc ce cf
+ hex 20 20 00 00 60 ca 66 cd 01 14 00 0b 3d 3d 3d 3d
  hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d
  hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d
  hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d
@@ -163,7 +148,7 @@
  hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d
  hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d
  hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d
- hex 3d 3d 3d 3d 3d 3d 3d 3d 00 00 00 00 00 00 00 00
+ hex 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
@@ -181,10 +166,11 @@
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 bc c0 c4 c8 c0 c4 bc c0 c4 c8 c0 c4
  hex bc c0 c4 c8 c0 c4 bc c0 c4 c8 c0 c4 bc c0 c4 c8
  hex c0 c4 bc c0 c4 c8 c0 c4 bc c0 c4 c8 c0 c4 bc c0
  hex c4 c8 c0 c4 bc c0 c4 c8 c0 c4 bc c0 c4 c8 c0 c4
- hex bc c0 c4 c8 c0 c4 bc c0 c4 c8 c0 c4 bc c0 c4 c8
+ hex bc c0 c4 c8 c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0
  hex c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc c0
  hex c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4
  hex bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0
@@ -197,146 +183,145 @@
  hex c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc c0
  hex c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4
  hex bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0
- hex c0 c4 bc c0 c4 d0 c0 c4 bc c0 c4 d0 c0 c4 bc 2d
- hex c0 c4 d0 c0 dc e0 dc cc dc e0 e4 e8 e4 d8 04 08
- hex 04 08 e4 d8 e4 e8 04 08 04 d4 e4 e8 e4 e8 e4 d8
- hex e4 e8 04 08 04 d4 e4 e8 dc e0 e4 d8 e4 e8 e4 e8
- hex e4 d8 e4 e8 e4 e8 e4 d8 dc e0 e4 e8 e4 d8 04 08
- hex 11 08 04 d4 e4 e8 e4 e8 dc cc e4 e8 e4 e8 04 d4
- hex 04 08 04 08 e4 d8 04 08 04 08 e4 d8 e4 e8 dc e0
- hex dc cc e4 e8 e4 e8 04 d4 e4 e8 e4 e8 e4 d8 e4 e8
- hex dc e0 dc cc dc e0 e4 e8 e4 d8 04 08 04 08 04 d4
- hex e4 e8 e4 e8 04 d4 e4 e8 e4 e8 04 d4 04 08 04 08
+ hex c0 c4 bc 2d c0 c4 d0 c0 dc e0 dc cc dc e0 e4 e8
+ hex e4 d8 04 08 04 08 e4 d8 e4 e8 04 08 04 d4 e4 e8
+ hex e4 e8 e4 d8 e4 e8 04 08 04 d4 e4 e8 dc e0 e4 d8
+ hex e4 e8 e4 e8 e4 d8 e4 e8 e4 e8 e4 d8 dc e0 e4 e8
+ hex e4 d8 04 08 11 08 04 d4 e4 e8 e4 e8 dc cc e4 e8
+ hex e4 e8 04 d4 04 08 04 08 e4 d8 04 08 04 08 e4 d8
+ hex e4 e8 dc e0 dc cc e4 e8 e4 e8 04 d4 e4 e8 e4 e8
+ hex e4 d8 e4 e8 dc e0 dc cc dc e0 e4 e8 e4 d8 04 08
+ hex 04 08 04 d4 e4 e8 e4 e8 04 d4 e4 e8 e4 e8 04 d4
+ hex 04 08 04 08 04 d4 04 08 04 08 04 d4 04 08 04 08
  hex 04 d4 04 08 04 08 04 d4 04 08 04 08 04 d4 04 08
- hex 04 08 04 d4 04 08 04 08 04 d4 04 08 04 08 04 d4
- hex 04 08 04 08 04 d4 e4 e8 dc e0 dc cc dc e0 e4 e8
- hex e4 d8 04 08 04 08 04 d4 04 08 e4 e8 e4 d8 e4 e8
- hex e4 e8 e4 d8 04 08 04 08 e4 d8 e4 e8 e4 e8 04 d4
- hex 04 08 e4 e8 e4 d8 e4 e8 04 08 04 d4 e4 e8 e4 e8
- hex dc cc dc e0 e4 e8 e4 d8 04 08 04 08 e4 d8 e4 e8
- hex 04 08 04 d4 e4 e8 e4 e8 04 d4 e4 e8 e4 e8 e4 d8
- hex dc e0 1d 31 e8 e4 d8 e4 e0 e4 e8 e4 e8 e4 e8 04
- hex 08 04 08 18 1c 04 08 04 08 18 1c 04 08 04 08 e4
- hex e8 e4 e8 04 08 04 08 18 1c 04 08 e4 e8 e4 e8 04
- hex 08 04 08 e4 e8 04 08 18 1c 04 08 e4 e8 e4 e8 11
- hex 08 04 08 04 08 04 08 04 08 04 08 e4 e8 e4 e8 04
- hex 08 04 08 04 08 18 1c 04 08 04 08 18 1c 04 08 e4
- hex e8 e4 e8 dc e0 e4 e8 04 08 18 1c 04 08 e4 e8 04
- hex 08 04 08 e4 e8 e4 e8 e4 e8 e4 e8 04 08 04 08 04
+ hex 04 08 04 d4 04 08 04 08 04 d4 e4 e8 dc e0 dc cc
+ hex dc e0 e4 e8 e4 d8 04 08 04 08 04 d4 04 08 e4 e8
+ hex e4 d8 e4 e8 e4 e8 e4 d8 04 08 04 08 e4 d8 e4 e8
+ hex e4 e8 04 d4 04 08 e4 e8 e4 d8 e4 e8 04 08 04 d4
+ hex e4 e8 e4 e8 dc cc dc e0 e4 e8 e4 d8 04 08 04 08
+ hex e4 d8 e4 e8 04 08 04 d4 e4 e8 e4 e8 04 d4 e4 e8
+ hex e4 e8 e4 d8 dc e0 1d 31 e8 e4 d8 e4 e0 e4 e8 e4
+ hex e8 e4 e8 04 08 04 08 18 1c 04 08 04 08 18 1c 04
+ hex 08 04 08 e4 e8 e4 e8 04 08 04 08 18 1c 04 08 e4
+ hex e8 e4 e8 04 08 04 08 e4 e8 04 08 18 1c 04 08 e4
+ hex e8 e4 e8 11 08 04 08 04 08 04 08 04 08 04 08 e4
+ hex e8 e4 e8 04 08 04 08 04 08 18 1c 04 08 04 08 18
+ hex 1c 04 08 e4 e8 e4 e8 dc e0 e4 e8 04 08 18 1c 04
+ hex 08 e4 e8 04 08 04 08 e4 e8 e4 e8 e4 e8 e4 e8 04
  hex 08 04 08 04 08 04 08 04 08 04 08 04 08 04 08 04
- hex 08 04 08 04 08 04 08 04 08 04 08 e4 e8 e4 e8 04
- hex 08 04 08 04 08 04 08 18 1c 04 08 04 08 04 08 04
- hex 08 11 08 04 08 04 08 04 08 e4 e8 dc e0 e4 e8 e4
- hex e8 e4 e8 04 08 04 08 04 08 18 1c 04 08 e4 08 e4
- hex e8 e4 e8 e4 e8 04 08 04 08 04 08 04 08 e4 e8 e4
- hex e8 04 08 18 1c 04 08 e4 e8 e4 e8 04 08 18 1c 04
- hex 08 04 08 e4 e8 e4 e8 e4 e8 e4 e8 04 08 04 08 04
- hex 08 e4 e8 04 08 18 1c 04 08 e4 e8 04 08 04 08 04
- hex 08 e4 e8 e4 e8 dc e0 31 e4 e8 e4 e8 e4 e8 04 08
- hex 9c 08 04 08 04 08 04 20 24 08 04 08 04 20 24 08
- hex 04 08 04 54 58 5c 04 08 04 08 04 20 24 08 04 08
- hex 04 08 04 54 58 5c 04 08 04 08 04 20 24 08 04 08
- hex e4 e8 04 54 58 5c 04 08 04 08 04 38 3c 40 11 08
- hex 04 08 04 54 58 5c 04 08 04 20 24 08 04 08 04 20
- hex 24 08 04 54 58 5c 04 e8 e4 e8 04 08 04 20 24 08
- hex 9c 08 04 54 58 5c 04 08 04 08 e4 e8 04 08 04 08
- hex 04 08 04 54 58 5c 04 08 04 08 04 38 3c 40 04 08
- hex 04 08 04 54 58 5c 04 08 04 08 04 38 3c 40 11 08
- hex 04 08 04 08 04 08 04 08 04 08 04 20 24 08 04 08
- hex 04 08 04 08 9c 08 04 08 04 38 3c 40 04 08 e4 e8
- hex e4 e8 04 08 9c 08 04 08 04 08 04 08 04 20 24 08
- hex 9c 08 04 08 e4 e8 04 08 04 08 04 08 04 38 3c 40
- hex 11 08 04 08 04 08 04 20 24 08 04 08 04 08 04 08
- hex 04 20 24 08 04 08 04 08 04 08 e4 e8 04 08 04 08
- hex 04 38 3c 40 04 08 04 08 04 20 24 08 04 08 04 38
- hex 3c 40 11 08 04 08 e4 e8 e4 e8 1d 31 08 e4 e8 04
- hex e0 e4 e8 04 a0 04 08 04 08 04 28 2c 30 34 08 04
- hex 28 2c 30 34 08 04 60 64 68 6c 70 04 08 04 28 2c
- hex 30 34 08 04 08 04 60 64 68 6c 70 04 08 04 28 2c
- hex 30 34 08 04 08 04 60 64 68 6c 70 04 08 04 08 04
- hex 44 48 08 04 08 04 60 64 68 6c 70 04 28 2c 30 34
- hex 08 04 28 2c 30 34 60 64 68 6c 70 e4 e8 04 08 04
- hex 28 2c 30 34 a0 04 60 64 68 6c 70 04 08 e4 e8 04
- hex 08 04 08 e4 e8 04 60 64 68 6c 70 04 08 e4 e8 04
- hex 44 48 08 e4 e8 04 60 64 68 6c 70 04 08 04 08 04
- hex 44 48 08 04 08 04 08 04 08 04 08 04 08 04 28 2c
- hex 30 34 08 04 08 04 08 04 a0 04 08 04 08 04 44 48
- hex 08 e4 e8 e4 e8 e4 e8 04 a0 04 08 04 08 04 08 04
- hex 28 2c 30 34 a0 04 08 e4 e8 e4 e8 04 08 04 08 04
- hex 08 04 44 48 08 04 08 04 08 04 28 2c 30 34 08 04
- hex 08 04 08 04 28 2c 30 34 08 04 08 04 08 e4 e8 e4
- hex e8 04 08 04 08 04 44 48 08 04 08 04 28 2c 30 34
- hex 08 04 08 04 44 48 08 04 08 e4 e8 e4 e8 dc e0 31
- hex e4 e8 e4 e8 e4 e8 04 08 04 08 04 08 04 08 04 28
- hex 34 08 04 08 04 28 34 08 04 08 74 78 7c 80 84 94
- hex 04 08 04 28 34 08 04 08 04 08 74 78 7c 80 84 15
- hex 04 08 04 28 34 08 04 08 04 08 74 78 7c 80 84 94
- hex 04 08 04 0d 4c 08 04 08 04 08 74 78 7c 80 84 94
- hex 04 28 34 08 04 08 04 28 34 08 74 78 7c 80 84 94
- hex e4 e8 04 08 04 28 34 08 04 08 74 78 7c 80 84 94
- hex 04 08 04 ec f0 f4 04 08 e4 e8 74 78 7c 80 84 15
- hex e4 e8 04 0d 4c 08 04 08 e4 e8 74 78 7c 80 84 15
- hex 04 08 04 0d 4c 08 04 08 04 08 04 08 04 ec f0 f4
- hex 04 08 04 28 34 08 04 08 04 ec f0 f4 04 08 04 08
- hex 11 08 4c 08 04 08 e4 e8 e4 e8 04 08 04 08 04 08
- hex 04 08 04 08 04 28 34 08 04 08 e4 e8 dc e0 e4 e8
- hex 04 08 04 08 04 0d 4c 08 04 08 04 08 04 08 04 28
- hex 34 08 04 08 04 08 04 08 04 28 34 08 04 08 04 08
- hex 04 08 e4 e8 04 08 04 08 04 0d 4c 08 04 08 04 08
- hex 04 28 34 08 04 08 04 08 4c 08 04 08 04 08 e4 e8
- hex e4 e8 dc 35 e8 7c 7c e4 e0 e4 e8 e4 e8 04 08 04
- hex 08 04 08 04 08 04 08 04 08 04 08 04 08 15 88 8c
- hex 8c 90 88 e4 e8 04 08 04 08 04 08 e4 e8 94 88 8c
- hex 8c 90 88 e4 e8 e4 e8 04 08 04 08 e4 e8 94 88 8c
- hex 8c 90 88 e4 e8 04 08 04 50 04 08 04 08 15 88 8c
- hex 8c 90 88 e4 e8 04 08 04 08 04 08 04 08 94 88 8c
- hex 8c 90 88 e4 e8 e4 e8 04 08 04 08 04 08 94 88 8c
- hex 8c 90 88 e4 e8 04 08 f8 fc 01 08 e4 e8 15 88 8c
- hex 8c 90 88 dc e0 e4 e8 04 50 04 08 e4 e8 1d 88 8c
- hex 8c 90 88 e4 e8 04 08 04 50 04 08 04 08 04 08 04
- hex 08 f8 fc 01 08 04 08 04 08 04 08 04 08 f8 fc 01
- hex 08 04 08 04 08 04 50 04 08 e4 e8 dc e0 e4 e8 e4
- hex e8 04 08 04 08 04 08 04 08 04 08 04 08 04 e8 dc
- hex e0 dc e0 e4 e8 04 08 04 08 04 50 04 08 04 08 04
- hex 08 e4 e8 04 08 04 08 04 08 04 08 04 08 04 08 04
- hex 08 04 08 e4 e8 e4 e8 e4 e8 04 08 04 08 04 50 04
- hex 08 e4 e8 04 08 04 08 04 08 e4 e8 04 50 04 08 04
- hex 08 e4 e8 e4 e8 e4 e8 dc 1d 8c 90 1d dc e0 dc e0
- hex e4 e8 e4 e8 e4 e8 e4 e8 04 08 e4 e8 04 08 04 08
- hex e4 e8 88 98 98 98 88 15 e4 e8 e4 e8 04 08 e4 e8
- hex e4 e8 88 98 98 98 88 15 e4 e8 e4 e8 e4 e8 e4 e8
- hex e4 e8 88 98 98 98 88 15 e4 e8 e4 e8 e4 e8 04 0d
- hex e4 e8 88 98 98 98 88 15 e4 e8 e4 e8 04 08 04 08
- hex 04 08 88 98 98 98 88 94 dc e0 e4 e8 e4 e8 e4 e8
- hex 04 0d 88 98 98 98 88 15 e4 e8 04 05 09 19 e4 e8
- hex dc e0 88 98 98 98 88 1d dc e0 e4 e8 e4 e8 e4 e8
- hex dc e0 88 98 98 98 88 15 e4 e8 e4 e8 e4 e8 04 0d
- hex 04 08 e4 e8 04 05 09 19 04 08 04 08 04 08 e4 e8
- hex 04 05 09 19 04 0d 04 08 04 08 04 08 e4 e8 dc e0
- hex dc e0 dc e0 e4 e8 e4 e8 04 08 04 08 04 08 04 08
- hex 04 0d e4 e8 dc e0 e4 e8 04 08 04 08 04 08 e4 e8
- hex 04 0d 04 08 e4 e8 e4 e8 e4 e8 04 08 04 0d 04 08
- hex 04 08 04 08 e4 e8 e4 e8 dc e0 dc e0 e4 e8 e4 e8
- hex 04 08 04 08 e4 e8 e4 e8 04 08 04 08 e4 e8 e4 e8
- hex 04 08 e4 e8 e4 e8 e4 e8 dc e0 dc e0 e8 98 98 e4
+ hex 08 04 08 04 08 04 08 04 08 04 08 04 08 04 08 e4
+ hex e8 e4 e8 04 08 04 08 04 08 04 08 18 1c 04 08 04
+ hex 08 04 08 04 08 11 08 04 08 04 08 04 08 e4 e8 dc
+ hex e0 e4 e8 e4 e8 e4 e8 04 08 04 08 04 08 18 1c 04
+ hex 08 e4 08 e4 e8 e4 e8 e4 e8 04 08 04 08 04 08 04
+ hex 08 e4 e8 e4 e8 04 08 18 1c 04 08 e4 e8 e4 e8 04
+ hex 08 18 1c 04 08 04 08 e4 e8 e4 e8 e4 e8 e4 e8 04
+ hex 08 04 08 04 08 e4 e8 04 08 18 1c 04 08 e4 e8 04
+ hex 08 04 08 04 08 e4 e8 e4 e8 dc e0 31 e4 e8 e4 e8
+ hex e4 e8 04 08 9c 08 04 08 04 08 04 20 24 08 04 08
+ hex 04 20 24 08 04 08 04 54 58 5c 04 08 04 08 04 20
+ hex 24 08 04 08 04 08 04 54 58 5c 04 08 04 08 04 20
+ hex 24 08 04 08 e4 e8 04 54 58 5c 04 08 04 08 04 38
+ hex 3c 40 11 08 04 08 04 54 58 5c 04 08 04 20 24 08
+ hex 04 08 04 20 24 08 04 54 58 5c 04 e8 e4 e8 04 08
+ hex 04 20 24 08 9c 08 04 54 58 5c 04 08 04 08 e4 e8
+ hex 04 08 04 08 04 08 04 54 58 5c 04 08 04 08 04 38
+ hex 3c 40 04 08 04 08 04 54 58 5c 04 08 04 08 04 38
+ hex 3c 40 11 08 04 08 04 08 04 08 04 08 04 08 04 20
+ hex 24 08 04 08 04 08 04 08 9c 08 04 08 04 38 3c 40
+ hex 04 08 e4 e8 e4 e8 04 08 9c 08 04 08 04 08 04 08
+ hex 04 20 24 08 9c 08 04 08 e4 e8 04 08 04 08 04 08
+ hex 04 38 3c 40 11 08 04 08 04 08 04 20 24 08 04 08
+ hex 04 08 04 08 04 20 24 08 04 08 04 08 04 08 e4 e8
+ hex 04 08 04 08 04 38 3c 40 04 08 04 08 04 20 24 08
+ hex 04 08 04 38 3c 40 11 08 04 08 e4 e8 e4 e8 1d 31
+ hex 08 e4 e8 04 e0 e4 e8 04 a0 04 08 04 08 04 28 2c
+ hex 30 34 08 04 28 2c 30 34 08 04 60 64 68 6c 70 04
+ hex 08 04 28 2c 30 34 08 04 08 04 60 64 68 6c 70 04
+ hex 08 04 28 2c 30 34 08 04 08 04 60 64 68 6c 70 04
+ hex 08 04 08 04 44 48 08 04 08 04 60 64 68 6c 70 04
+ hex 28 2c 30 34 08 04 28 2c 30 34 60 64 68 6c 70 e4
+ hex e8 04 08 04 28 2c 30 34 a0 04 60 64 68 6c 70 04
+ hex 08 e4 e8 04 08 04 08 e4 e8 04 60 64 68 6c 70 04
+ hex 08 e4 e8 04 44 48 08 e4 e8 04 60 64 68 6c 70 04
+ hex 08 04 08 04 44 48 08 04 08 04 08 04 08 04 08 04
+ hex 08 04 28 2c 30 34 08 04 08 04 08 04 a0 04 08 04
+ hex 08 04 44 48 08 e4 e8 e4 e8 e4 e8 04 a0 04 08 04
+ hex 08 04 08 04 28 2c 30 34 a0 04 08 e4 e8 e4 e8 04
+ hex 08 04 08 04 08 04 44 48 08 04 08 04 08 04 28 2c
+ hex 30 34 08 04 08 04 08 04 28 2c 30 34 08 04 08 04
+ hex 08 e4 e8 e4 e8 04 08 04 08 04 44 48 08 04 08 04
+ hex 28 2c 30 34 08 04 08 04 44 48 08 04 08 e4 e8 e4
+ hex e8 dc e0 31 e4 e8 e4 e8 e4 e8 04 08 04 08 04 08
+ hex 04 08 04 28 34 08 04 08 04 28 34 08 04 08 74 78
+ hex 7c 80 84 94 04 08 04 28 34 08 04 08 04 08 74 78
+ hex 7c 80 84 15 04 08 04 28 34 08 04 08 04 08 74 78
+ hex 7c 80 84 94 04 08 04 0d 4c 08 04 08 04 08 74 78
+ hex 7c 80 84 94 04 28 34 08 04 08 04 28 34 08 74 78
+ hex 7c 80 84 94 e4 e8 04 08 04 28 34 08 04 08 74 78
+ hex 7c 80 84 94 04 08 04 ec f0 f4 04 08 e4 e8 74 78
+ hex 7c 80 84 15 e4 e8 04 0d 4c 08 04 08 e4 e8 74 78
+ hex 7c 80 84 15 04 08 04 0d 4c 08 04 08 04 08 04 08
+ hex 04 ec f0 f4 04 08 04 28 34 08 04 08 04 ec f0 f4
+ hex 04 08 04 08 11 08 4c 08 04 08 e4 e8 e4 e8 04 08
+ hex 04 08 04 08 04 08 04 08 04 28 34 08 04 08 e4 e8
+ hex dc e0 e4 e8 04 08 04 08 04 0d 4c 08 04 08 04 08
+ hex 04 08 04 28 34 08 04 08 04 08 04 08 04 28 34 08
+ hex 04 08 04 08 04 08 e4 e8 04 08 04 08 04 0d 4c 08
+ hex 04 08 04 08 04 28 34 08 04 08 04 08 4c 08 04 08
+ hex 04 08 e4 e8 e4 e8 dc 35 e8 7c 7c e4 e0 e4 e8 e4
+ hex e8 04 08 04 08 04 08 04 08 04 08 04 08 04 08 04
+ hex 08 15 88 8c 8c 90 88 e4 e8 04 08 04 08 04 08 e4
+ hex e8 94 88 8c 8c 90 88 e4 e8 e4 e8 04 08 04 08 e4
+ hex e8 94 88 8c 8c 90 88 e4 e8 04 08 04 50 04 08 04
+ hex 08 15 88 8c 8c 90 88 e4 e8 04 08 04 08 04 08 04
+ hex 08 94 88 8c 8c 90 88 e4 e8 e4 e8 04 08 04 08 04
+ hex 08 94 88 8c 8c 90 88 e4 e8 04 08 f8 fc 01 08 e4
+ hex e8 15 88 8c 8c 90 88 dc e0 e4 e8 04 50 04 08 e4
+ hex e8 1d 88 8c 8c 90 88 e4 e8 04 08 04 50 04 08 04
+ hex 08 04 08 04 08 f8 fc 01 08 04 08 04 08 04 08 04
+ hex 08 f8 fc 01 08 04 08 04 08 04 50 04 08 e4 e8 dc
+ hex e0 e4 e8 e4 e8 04 08 04 08 04 08 04 08 04 08 04
+ hex 08 04 e8 dc e0 dc e0 e4 e8 04 08 04 08 04 50 04
+ hex 08 04 08 04 08 e4 e8 04 08 04 08 04 08 04 08 04
+ hex 08 04 08 04 08 04 08 e4 e8 e4 e8 e4 e8 04 08 04
+ hex 08 04 50 04 08 e4 e8 04 08 04 08 04 08 e4 e8 04
+ hex 50 04 08 04 08 e4 e8 e4 e8 e4 e8 dc 1d 8c 90 1d
+ hex dc e0 dc e0 e4 e8 e4 e8 e4 e8 e4 e8 04 08 e4 e8
+ hex 04 08 04 08 e4 e8 88 98 98 98 88 15 e4 e8 e4 e8
+ hex 04 08 e4 e8 e4 e8 88 98 98 98 88 15 e4 e8 e4 e8
+ hex e4 e8 e4 e8 e4 e8 88 98 98 98 88 15 e4 e8 e4 e8
+ hex e4 e8 04 0d e4 e8 88 98 98 98 88 15 e4 e8 e4 e8
+ hex 04 08 04 08 04 08 88 98 98 98 88 94 dc e0 e4 e8
+ hex e4 e8 e4 e8 04 0d 88 98 98 98 88 15 e4 e8 04 05
+ hex 09 19 e4 e8 dc e0 88 98 98 98 88 1d dc e0 e4 e8
+ hex e4 e8 e4 e8 dc e0 88 98 98 98 88 15 e4 e8 e4 e8
+ hex e4 e8 04 0d 04 08 e4 e8 04 05 09 19 04 08 04 08
+ hex 04 08 e4 e8 04 05 09 19 04 0d 04 08 04 08 04 08
+ hex e4 e8 dc e0 dc e0 dc e0 e4 e8 e4 e8 04 08 04 08
+ hex 04 08 04 08 04 0d e4 e8 dc e0 e4 e8 04 08 04 08
+ hex 04 08 e4 e8 04 0d 04 08 e4 e8 e4 e8 e4 e8 04 08
+ hex 04 0d 04 08 04 08 04 08 e4 e8 e4 e8 dc e0 dc e0
+ hex e4 e8 e4 e8 04 08 04 08 e4 e8 e4 e8 04 08 04 08
+ hex e4 e8 e4 e8 04 08 e4 e8 e4 e8 e4 e8 dc e0 dc e0
+ hex e8 98 98 e4 0c 10 14 0c 10 14 0c 10 14 0c 10 14
  hex 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c
  hex 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10
  hex 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14
  hex 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c
  hex 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10
  hex 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14
- hex 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 21
- hex 25 29 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10
- hex 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14
+ hex 0c 10 14 21 25 29 0c 10 14 0c 10 14 0c 10 14 0c
+ hex 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10
+ hex 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 21 25 29
  hex 0c 10 14 0c 10 14 0c 10 14 21 25 29 0c 10 14 0c
- hex 10 14 0c 10 14 21 25 29 0c 10 14 0c 10 14 0c 10
+ hex 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10
  hex 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14
  hex 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c
  hex 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10
  hex 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14
- hex 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c 10 14 0c
- hex 10 14 0c 10 14 0c 10 14 0c 39 10 14 0c 10 14 0c
- hex 10 14 0c 10 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 0c 10 14 0c 10 14 0c 10 14 0c 10 14 41 39 10 14
+ hex 0c 10 14 0c 10 14 0c 10 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
@@ -345,42 +330,40 @@
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex 00 00 00 c0 30 00 c0 30 00 00 00 00 00 c0 30 00
- hex 00 00 00 00 00 c0 30 00 00 00 00 00 00 00 00 00
- hex 00 00 00 00 c0 30 00 c0 30 00 00 00 00 00 c0 30
+ hex 00 00 00 00 00 00 00 c0 30 00 c0 30 00 00 00 00
+ hex 00 c0 30 00 00 00 00 00 00 c0 30 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 c0 30 00 c0 30 00 00 00
+ hex 00 00 c0 30 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex 00 00 00 00 00 00 00 00 00 00 00 00 00 c0 30 00
- hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c0 30
- hex 00 00 00 00 00 00 00 00 00 00 00 c0 30 00 00 00
- hex c0 30 00 00 00 00 00 00 00 00 00 00 c0 30 00 00
- hex 00 00 00 00 00 00 00 00 00 00 00 00 c0 ab ae f0
- hex ab ae 30 00 00 00 c0 ab ae 30 00 00 00 00 c0 ab
- hex ae 30 00 00 00 00 00 00 00 00 00 00 00 c0 ab ae
- hex f0 ab ae 30 00 00 00 c0 ab ae 30 00 00 00 00 00
+ hex 00 c0 30 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 c0 30 00 00 00 00 00 00 00 00 00 00 00 c0
+ hex 30 00 00 00 c0 30 00 00 00 00 00 00 00 00 00 00
+ hex c0 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex c0 ab ae f0 ab ae 30 00 00 00 c0 ab ae 30 00 00
+ hex 00 00 c0 ab ae 30 00 00 00 00 00 00 00 00 00 00
+ hex 00 c0 ab ae f0 ab ae 30 00 00 00 c0 ab ae 30 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex 00 00 00 00 00 00 c0 ab ae 30 00 00 00 00 00 00
- hex 00 00 00 00 00 00 00 c0 ab ae 30 00 00 00 00 00
- hex 00 00 00 00 c0 ab ae 30 00 c0 ab ae 30 00 00 00
- hex 00 00 00 00 00 c0 ab ae 30 00 00 00 00 00 00 00
- hex 00 00 00 00 00 00 0c ba ea 0f ba ea 03 00 00 00
- hex 0c ba ea 03 00 00 00 00 0c ba ea 03 00 00 00 00
- hex 00 00 00 00 00 00 00 0c ba ea 0f ba ea 03 00 00
- hex 00 0c ba ea 03 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 c0 ab ae 30 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 c0 ab ae 30 00
+ hex 00 00 00 00 00 00 00 00 c0 ab ae 30 00 c0 ab ae
+ hex 30 00 00 00 00 00 00 00 00 c0 ab ae 30 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 0c ba ea 0f ba ea
+ hex 03 00 00 00 0c ba ea 03 00 00 00 00 0c ba ea 03
+ hex 00 00 00 00 00 00 00 00 00 00 00 0c ba ea 0f ba
+ hex ea 03 00 00 00 0c ba ea 03 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex 0c ba ea 03 00 00 00 00 00 00 00 00 00 00 00 00
- hex 00 0c ba ea 03 00 00 00 00 00 00 00 00 00 0c ba
- hex ea 03 00 0c ba ea 03 00 00 00 00 00 00 00 00 0c
- hex ba ea 03 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex 00 0c 03 00 0c 03 00 00 00 00 00 0c 03 00 00 00
- hex 00 00 00 0c 03 00 00 00 00 00 00 00 00 00 00 00
- hex 00 00 0c 03 00 0c 03 00 00 00 00 00 0c 03 00 00
- hex 00 00 00 00 11 00 00 00 00 00 00 00 00 00 00 00
- hex 00 00 00 00 00 00 00 00 00 11 00 0c 03 00 00 11
- hex 00 00 00 00 00 00 00 00 00 00 00 00 0c 03 00 00
- hex 00 00 00 00 00 00 00 00 00 0c 03 00 00 00 0c 03
- hex 00 00 00 00 00 00 00 00 00 00 0c 03 00 00 00 00
- hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 0c ba ea 03 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 0c ba ea 03 00 00 00 00 00 00 00
+ hex 00 00 0c ba ea 03 00 0c ba ea 03 00 00 00 00 00
+ hex 00 00 00 0c ba ea 03 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 0c 03 00 0c 03 00 00 00 00 00 0c
+ hex 03 00 00 00 00 00 00 0c 03 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 0c 03 00 0c 03 00 00 00 00 00
+ hex 0c 03 00 00 00 00 00 00 11 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 11 00 0c
+ hex 03 00 00 11 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 0c 03 00 00 00 00 00 00 00 00 00 00 00 0c 03 00
+ hex 00 00 0c 03 00 00 00 00 00 00 00 00 00 00 0c 03
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
@@ -388,111 +371,130 @@
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
- hex a6 09 6a 5a aa aa a6 a1 a4 6a 5a a0 a0 a0 a0 68
- hex 5a 26 89 aa aa aa aa aa aa aa 56 91 a4 aa aa aa
- hex aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa 5a
- hex 9a aa aa aa 0a aa 6a 5a 50 90 00 a0 a0 a0 a0 a0
- hex a0 60 50 a0 a0 a0 a0 a0 a0 a0 50 90 a0 a0 a0 a0
- hex a0 a0 a0 a0 a0 a0 50 50 50 a0 a0 a0 a0 60 50 a0
- hex a0 a0 00 a0 a0 50 90 a0 a0 a0 a0 a0 a0 60 aa 00
- hex 66 55 aa bf ff bf bb 66 55 aa aa aa aa 66 55 22
- hex 88 aa aa aa aa aa aa aa 55 99 aa aa aa aa aa aa
- hex aa aa bf ff bf bb aa aa aa aa aa aa aa 55 99 aa
- hex aa aa 00 aa 66 55 55 99 00 aa aa aa aa aa aa 66
- hex 55 aa aa aa aa aa aa aa 55 99 aa aa aa aa aa aa
- hex aa aa aa aa 55 55 55 aa aa aa aa 66 55 aa aa aa
- hex 00 aa aa 55 99 aa aa aa aa aa aa 66 55 55 55 55
- hex aa bb aa aa bb 66 55 aa aa aa aa 66 55 55 55 55
- hex 55 55 55 55 55 55 55 99 aa aa aa aa aa aa aa aa
- hex bb aa aa bb aa aa aa aa aa aa aa 55 55 55 55 55
- hex 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 aa
- hex aa aa aa aa aa aa 55 99 aa aa aa aa aa aa aa aa
- hex aa aa 55 55 55 aa aa aa aa 66 55 55 55 55 55 55
- hex 55 55 99 aa aa aa aa aa aa 66 aa aa 66 55 aa aa
- hex aa aa aa 66 55 aa aa aa aa 66 55 aa aa aa aa aa
- hex aa aa aa aa 55 99 aa aa aa aa aa aa aa aa aa aa
- hex aa aa aa aa aa 22 88 aa aa 55 99 22 88 aa aa aa
- hex 66 55 55 99 aa aa aa 22 88 aa aa 66 55 aa 00 aa
- hex aa aa 00 aa 55 99 22 88 aa aa 22 88 aa aa 22 88
- hex 55 55 55 22 88 aa aa 66 55 aa 22 88 aa aa aa 55
- hex 99 aa 22 88 aa aa aa 66 5a 5a 56 55 5a 5a 5a 5a
- hex 5a 56 55 5a 5a 5a 5a 56 55 5a 5a 5a 5a 5a 5a 5a
- hex 5a 5a 55 59 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a
- hex 5a 5a 5a 56 59 5a 5a 55 59 56 59 5a 5a 5a 56 55
- hex 55 59 5a 5a 5a 52 58 5a 5a 56 55 5a 50 5a 5a 5a
- hex 50 5a 55 59 56 59 5a 5a 56 59 5a 5a 56 59 55 55
- hex 55 52 58 5a 5a 56 55 5a 56 59 5a 5a 5a 55 59 5a
- hex 56 59 5a 9a aa 66 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 56 99 aa aa aa aa a6 a1 a4 52 9a 20
- hex 80 20 80 a8 fa f6 a9 2a 8a aa 6a 5a 58 9a 26 81
- hex a4 aa aa aa aa 6a 5a aa aa aa aa aa aa 5a 9a aa
- hex 0a aa aa aa aa aa aa 6a 5a aa aa aa a0 a0 a0 a0
- hex a0 a0 60 50 50 90 a0 a0 a0 a0 a0 20 80 a0 60 50
- hex a0 a0 a0 a0 a0 a0 a0 a0 a0 a0 60 50 a0 a0 a0 a0
- hex a0 a0 a0 50 90 a0 a0 a0 a0 a0 a0 e0 f0 f0 20 80
- hex 60 50 55 99 aa aa aa aa aa aa aa 55 99 22 88 22
- hex 88 aa ab ae aa 22 88 aa 66 55 55 99 22 88 aa aa
- hex aa aa aa 66 55 aa aa aa aa aa aa 55 99 aa 00 aa
- hex aa aa aa aa aa 66 55 aa aa ee ef ff ef aa aa aa
- hex 66 55 55 99 aa aa aa aa aa 22 88 aa 66 55 aa aa
- hex aa aa aa aa aa aa aa aa 66 55 aa aa aa aa aa aa
- hex aa 55 99 aa aa aa aa aa aa ae aa ae 22 88 66 55
- hex 55 99 aa aa aa aa aa aa aa 55 55 55 55 55 55 55
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 a6 09 6a 5a aa aa a6 a1 a4 6a 5a a0
+ hex a0 a0 a0 68 5a 26 89 aa aa aa aa aa aa aa 56 91
+ hex a4 aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+ hex aa aa aa 5a 9a aa aa aa 0a aa 6a 5a 50 90 00 a0
+ hex a0 a0 a0 a0 a0 60 50 a0 a0 a0 a0 a0 a0 a0 50 90
+ hex a0 a0 a0 a0 a0 a0 a0 a0 a0 a0 50 50 50 a0 a0 a0
+ hex a0 60 50 a0 a0 a0 00 a0 a0 50 90 a0 a0 a0 a0 a0
+ hex a0 60 aa 00 66 55 aa bf ff bf bb 66 55 aa aa aa
+ hex aa 66 55 22 88 aa aa aa aa aa aa aa 55 99 aa aa
+ hex aa aa aa aa aa aa bf ff bf bb aa aa aa aa aa aa
+ hex aa 55 99 aa aa aa 00 aa 66 55 55 99 00 aa aa aa
+ hex aa aa aa 66 55 aa aa aa aa aa aa aa 55 99 aa aa
+ hex aa aa aa aa aa aa aa aa 55 55 55 aa aa aa aa 66
+ hex 55 aa aa aa 00 aa aa 55 99 aa aa aa aa aa aa 66
+ hex 55 55 55 55 aa bb aa aa bb 66 55 aa aa aa aa 66
+ hex 55 55 55 55 55 55 55 55 55 55 55 99 aa aa aa aa
+ hex aa aa aa aa bb aa aa bb aa aa aa aa aa aa aa 55
  hex 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55
- hex 55 55 55 aa aa aa aa aa aa 55 55 55 55 55 55 55
- hex 55 55 55 55 55 aa aa ee aa aa ee aa aa aa 66 55
- hex 55 55 55 55 55 55 55 55 55 55 55 55 aa aa aa aa
- hex aa aa aa aa aa aa 66 55 aa aa aa aa aa aa aa 55
- hex 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 99
- hex 00 aa aa aa aa aa aa 55 99 bf ef aa aa aa aa aa
- hex 00 aa aa aa 66 55 55 99 aa aa aa 22 88 aa aa 66
- hex 55 22 88 aa aa aa aa 55 99 aa aa aa aa aa aa aa
- hex aa 66 55 aa aa aa aa aa aa aa 22 88 66 55 55 99
- hex aa 22 88 aa aa aa aa aa 66 55 aa 00 aa aa aa 00
- hex aa aa aa 00 66 55 aa 00 aa aa aa aa aa 55 99 22
- hex 88 aa aa 22 88 aa aa 22 88 aa 66 55 55 59 50 5a
- hex 5a 5a 5a 5a 5a 55 59 5a 5a 5a 5a 5a 5a 5a 55 5a
- hex 5a 5a 56 55 55 59 5a 5a 5a 52 58 5a 5a 56 55 52
- hex 58 5a 5a 5a 5a 55 59 5a 5a 5a 5a 5a 5a 5a 5a 56
- hex 55 5a 5a 5a 5a 5a 5a 5a 56 59 56 55 55 59 5a 52
- hex 58 5a 5a 5a 5a 5a 56 55 5a 55 50 50 50 50 50 50
- hex 50 50 50 50 55 55 55 55 5a 5a 5a 55 59 56 59 5a
- hex 5a 56 59 5a 5a 56 59 5a 56 55 05 05 05 05 05 05
+ hex 55 55 55 aa aa aa aa aa aa aa 55 99 aa aa aa aa
+ hex aa aa aa aa aa aa 55 55 55 aa aa aa aa 66 55 55
+ hex 55 55 55 55 55 55 99 aa aa aa aa aa aa 66 aa aa
+ hex 66 55 aa aa aa aa aa 66 55 aa aa aa aa 66 55 aa
+ hex aa aa aa aa aa aa aa aa 55 99 aa aa aa aa aa aa
+ hex aa aa aa aa aa aa aa aa aa 22 88 aa aa 55 99 22
+ hex 88 aa aa aa 66 55 55 99 aa aa aa 22 88 aa aa 66
+ hex 55 aa 00 aa aa aa 00 aa 55 99 22 88 aa aa 22 88
+ hex aa aa 22 88 55 55 55 22 88 aa aa 66 55 aa 22 88
+ hex aa aa aa 55 99 aa 22 88 aa aa aa 66 5a 5a 56 55
+ hex 5a 5a 5a 5a 5a 56 55 5a 5a 5a 5a 56 55 5a 5a 5a
+ hex 5a 5a 5a 5a 5a 5a 55 59 5a 5a 5a 5a 5a 5a 5a 5a
+ hex 5a 5a 5a 5a 5a 5a 5a 56 59 5a 5a 55 59 56 59 5a
+ hex 5a 5a 56 55 55 59 5a 5a 5a 52 58 5a 5a 56 55 5a
+ hex 50 5a 5a 5a 50 5a 55 59 56 59 5a 5a 56 59 5a 5a
+ hex 56 59 55 55 55 52 58 5a 5a 56 55 5a 56 59 5a 5a
+ hex 5a 55 59 5a 56 59 5a 9a aa 66 05 05 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
  hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 0f 0f 0f 0f 0f 0f 0f 0f
- hex 0f 0f 05 05 05 05 05 05 05 05 05 05 05 05 05 05
- hex 05 05 05 05 05 05 05 05 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 a5 a5 aa aa aa aa 55 55
- hex 5a 5a 5a aa aa aa 55 55 55 55 a5 aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa a5 a5 55 55 aa aa aa 5a 5a 5a
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 a5 a5 aa aa aa aa 55 55
- hex 5a 5a 5a aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa aa aa 55 55 aa aa aa a5 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 aa aa aa aa aa aa 55 55
- hex 55 55 a5 aa aa aa 55 55 55 55 aa aa aa aa 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa aa aa aa a5 a5
- hex 55 55 aa aa aa 5a 5a 5a 55 55 aa aa aa a5 55 55
- hex 55 55 aa aa aa aa 55 55 55 55 aa 2a 8a aa 55 55
- hex 55 55 aa 22 88 aa 55 55 55 55 55 55 55 55 55 55
- hex 42 00 00 00 00 00 00 00 ff ff ff ff ff ff ff ff
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 56 99 aa aa aa aa a6 a1
+ hex a4 52 9a 20 80 20 80 a8 fa f6 a9 2a 8a aa 6a 5a
+ hex 58 9a 26 81 a4 aa aa aa aa 6a 5a aa aa aa aa aa
+ hex aa 5a 9a aa 0a aa aa aa aa aa aa 6a 5a aa aa aa
+ hex a0 a0 a0 a0 a0 a0 60 50 50 90 a0 a0 a0 a0 a0 20
+ hex 80 a0 60 50 a0 a0 a0 a0 a0 a0 a0 a0 a0 a0 60 50
+ hex a0 a0 a0 a0 a0 a0 a0 50 90 a0 a0 a0 a0 a0 a0 e0
+ hex f0 f0 20 80 60 50 55 99 aa aa aa aa aa aa aa 55
+ hex 99 22 88 22 88 aa ab ae aa 22 88 aa 66 55 55 99
+ hex 22 88 aa aa aa aa aa 66 55 aa aa aa aa aa aa 55
+ hex 99 aa 00 aa aa aa aa aa aa 66 55 aa aa ee ef ff
+ hex ef aa aa aa 66 55 55 99 aa aa aa aa aa 22 88 aa
+ hex 66 55 aa aa aa aa aa aa aa aa aa aa 66 55 aa aa
+ hex aa aa aa aa aa 55 99 aa aa aa aa aa aa ae aa ae
+ hex 22 88 66 55 55 99 aa aa aa aa aa aa aa 55 55 55
+ hex 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55
+ hex 55 55 55 55 55 55 55 aa aa aa aa aa aa 55 55 55
+ hex 55 55 55 55 55 55 55 55 55 aa aa ee aa aa ee aa
+ hex aa aa 66 55 55 55 55 55 55 55 55 55 55 55 55 55
+ hex aa aa aa aa aa aa aa aa aa aa 66 55 aa aa aa aa
+ hex aa aa aa 55 55 55 55 55 55 55 55 55 55 55 55 55
+ hex 55 55 55 99 00 aa aa aa aa aa aa 55 99 bf ef aa
+ hex aa aa aa aa 00 aa aa aa 66 55 55 99 aa aa aa 22
+ hex 88 aa aa 66 55 22 88 aa aa aa aa 55 99 aa aa aa
+ hex aa aa aa aa aa 66 55 aa aa aa aa aa aa aa 22 88
+ hex 66 55 55 99 aa 22 88 aa aa aa aa aa 66 55 aa 00
+ hex aa aa aa 00 aa aa aa 00 66 55 aa 00 aa aa aa aa
+ hex aa 55 99 22 88 aa aa 22 88 aa aa 22 88 aa 66 55
+ hex 55 59 50 5a 5a 5a 5a 5a 5a 55 59 5a 5a 5a 5a 5a
+ hex 5a 5a 55 5a 5a 5a 56 55 55 59 5a 5a 5a 52 58 5a
+ hex 5a 56 55 52 58 5a 5a 5a 5a 55 59 5a 5a 5a 5a 5a
+ hex 5a 5a 5a 56 55 5a 5a 5a 5a 5a 5a 5a 56 59 56 55
+ hex 55 59 5a 52 58 5a 5a 5a 5a 5a 56 55 5a 55 50 50
+ hex 50 50 50 50 50 50 50 50 55 55 55 55 5a 5a 5a 55
+ hex 59 56 59 5a 5a 56 59 5a 5a 56 59 5a 56 55 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 0f 0f 0f 0f
+ hex 0f 0f 0f 0f 0f 0f 05 05 05 05 05 05 05 05 05 05
+ hex 05 05 05 05 05 05 05 05 05 05 05 05 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 a5 a5 aa aa
+ hex aa aa 55 55 5a 5a 5a aa aa aa 55 55 55 55 a5 aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa a5 a5 55 55 aa aa
+ hex aa 5a 5a 5a 55 55 aa aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 a5 a5 aa aa
+ hex aa aa 55 55 5a 5a 5a aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa aa aa 55 55 aa aa
+ hex aa a5 55 55 55 55 aa aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 aa aa aa aa
+ hex aa aa 55 55 55 55 a5 aa aa aa 55 55 55 55 aa aa
+ hex aa aa 55 55 55 55 aa aa aa aa 55 55 55 55 aa aa
+ hex aa aa a5 a5 55 55 aa aa aa 5a 5a 5a 55 55 aa aa
+ hex aa a5 55 55 55 55 aa aa aa aa 55 55 55 55 aa 2a
+ hex 8a aa 55 55 55 55 aa 22 88 aa 55 55 55 55 55 55
+ hex 55 55 55 55 55 55 aa aa aa aa 55 55 ff ff ff ff
+ hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ hex 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
  hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
  hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
  hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
@@ -509,5 +511,3 @@
  hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
  hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
  hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
- hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
- hex ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 0c

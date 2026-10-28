@@ -212,12 +212,11 @@ import patches  # noqa: E402  (asm/patches.py)
 registry = {e["sha1_full"]: n for n, e in patches.CARTS.items()}
 import hashlib  # noqa: E402
 
-# The rebuild is now intentionally byte-identical to the target dump (Beta 1):
-# see LEGAL.md "Cartridge-derived bytes (exception)" and journal 17. This is the
-# desired outcome, not a leak, so the old "must differ" assertion no longer
-# applies. What we still guard against is a rebuild that matches a *different*
-# dump than the target, which would mean the build drifted off Beta 1.
-target_name = "beta1"
+# The rebuild is intentionally byte-identical to the target dump. On this
+# branch that dump is the retail cart (`release`). The `beta1` tag is the
+# tree that matches Beta 1. A rebuild that matches some other registered
+# dump has drifted off the cart this branch claims to rebuild.
+target_name = patches.DEFAULT_CART
 target_sha = None
 for sha, name in registry.items():
     if name == target_name:
@@ -227,9 +226,9 @@ for f in rebuilt:
     h = hashlib.sha1(data).hexdigest()
     if h in registry and registry[h] != target_name:
         raise AssertionError(f"{f} matches {registry[h]}, not the target {target_name}")
-check("the generated rebuild matches the target dump (beta1) byte for byte",
+check(f"the generated rebuild matches the target dump ({target_name}) byte for byte",
       any(hashlib.sha1((ROOT / f).read_bytes()).hexdigest() == target_sha for f in rebuilt),
-      "rebuilt .nes does not match beta1")
+      f"rebuilt .nes does not match {target_name}")
 
 # =====================================================================================
 # C+D. The guard, exercised. A synthetic index, so the real one is never touched and
