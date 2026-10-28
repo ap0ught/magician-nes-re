@@ -19,3 +19,11 @@ Before enabling public releases, verify you have the rights to distribute the re
 ## Verification
 
 The workflow validates iNES signature, exact 262,160-byte size, and Beta 1 header fields; it prints SHA-256. Full assembly correctness remains the responsibility of `make rom`, `make check-py`, and the project's emulator tests. The workflow has **not been executed on a runner yet**.
+
+## Retail IPS included in releases
+
+The workflow also decodes the committed text asset `ips/retail-modules.ips.b64` into `retail-modules.ips`, validates its SHA-256 and the 23 IPS records / 662 payload bytes, and uploads it as a separate workflow artifact and release asset. The asset is the user's supplied 785-byte retail patch, not a rebuilt Beta 1 patch. The encoded patch SHA-256 is `11f0b4e51e41086a4e8f1c3cd261df9b8da831f8f24ba3369abf338abb9911a5`.
+
+**Compatibility:** This IPS applies to the unmodified **retail** `Magician (USA).nes` with full-file SHA-1 `7b0da149c3892b9aec3e97400b79e1089cb8cc47`; the expected patched ROM SHA-1 is `ef8bb81bd6da2af0ee4b82671a636ba3a506e8eb`. It does **not** apply to the Beta 1 `magician-rebuilt.nes` produced by the current HUD branch. The IPS represents seven retail-addressed modules; it does not hook Inspect and is not a complete new HUD. See the supplied `21-retail-ips-howto.md` for the distinct `baseline/release-ips` branch procedure. That branch was not available in the linked GitHub repository at integration time, so the workflow packages the exact supplied patch rather than claiming to regenerate it from that branch.
+
+**Release outputs:** `magician-rebuilt.nes` (Beta 1 based) and `retail-modules.ips` (retail-only patch) are separate assets. Do not apply the IPS to the rebuilt ROM. The GitHub workflow was not executed during this change; a configured self-hosted runner is still required for `make rom`.
