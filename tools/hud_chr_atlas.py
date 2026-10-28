@@ -37,7 +37,7 @@ def atlas_ppm(data: bytes, columns: int = 16, scale: int = 2) -> bytes:
     tiles = [decode_tile(data[i:i + 16]) for i in range(0, len(data), 16)]
     rows = (len(tiles) + columns - 1) // columns
     width, height = columns * 8 * scale, rows * 8 * scale
-    out = bytearray(f"P6\\n{width} {height}\\n255\\n".encode("ascii"))
+    out = bytearray(f"P6\n{width} {height}\n255\n".encode("ascii"))
     for y in range(height):
         tile_row, tile_y = divmod(y // scale, 8)
         for x in range(width):
@@ -74,7 +74,7 @@ def scan(dat: Path, out: Path, columns: int = 16, scale: int = 2) -> dict:
         "warning": "CHR RAM is loaded dynamically; file-local indices do not establish live banks or palettes",
         "files": inventory,
     }
-    (out / "inventory.json").write_text(json.dumps(result, indent=2) + "\\n")
+    (out / "inventory.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
 
