@@ -60,6 +60,22 @@ jobs:
           print("ROM SHA-256:", hashlib.sha256(data).hexdigest())
           PY
 
+      - name: Decode and verify retail IPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          base64 --decode ips/retail-modules.ips.b64 > dist/retail-modules.ips
+          python3 tools/verify_retail_ips.py dist/retail-modules.ips
+
+      - name: Upload retail IPS workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: retail-modules-${{ github.sha }}
+          path: dist/retail-modules.ips
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload private workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -80,6 +96,11 @@ jobs:
         with:
           name: magician-rebuilt-${{ github.sha }}
 
+      - name: Download retail IPS
+        uses: actions/download-artifact@v4
+        with:
+          name: retail-modules-${{ github.sha }}
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -93,4 +114,4 @@ jobs:
             exit 1
           fi
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "Magician NES $TAG" --notes "Non-commercial source rebuild. Requires rights to use and redistribute the game assets."
-          gh release upload "$TAG" magician-rebuilt.nes --clobber
+          gh release upload "$TAG" magician-rebuilt.nes retail-modules.ips --clobber
