@@ -1019,6 +1019,9 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     banks = frozenset({"b"}) if bank_groups else frozenset()
     image = bytearray(PRG_SIZE)
     asm = cls(image, SRC, [SRC, SRC_MAG, SRC_MAG_OUT], verbose=verbose)
+    # X7.PDS ends with `end`. That closes Eurocom's program. The modules in
+    # src/magician/ are assembled after it on purpose.
+    asm.stop_at_end = False
     asm.force_conditions = {"0=1": x7_table}
     asm.prebank_symbols = banks
     asm.prebank_split = split_banks
@@ -1153,6 +1156,9 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
     for attempt in range(2 if x7_vector else 1):
         image = bytearray(PRG_SIZE)
         asm = cls(image, SRC, [SRC, SRC_MAG, SRC_MAG_OUT], verbose=verbose)
+        # X7.PDS ends with `end`. That closes Eurocom's program. The modules
+        # in src/magician/ are assembled after it on purpose.
+        asm.stop_at_end = False
         asm.force_conditions = {"0=1": x7_table}
         asm.prebank_symbols = banks
         asm.prebank_split = split_banks

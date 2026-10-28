@@ -24,7 +24,7 @@ OUR_SRC := $(wildcard $(ROOT)/src/magician/*.PDS $(ROOT)/src/magician/*.SRC)
 
 all: $(ROOT)/asm/out/prg.bin
 
-$(ROOT)/asm/out/prg.bin: $(ROOT)/tools/pds_extract.py $(ROOT)/asm/build.py $(ROOT)/asm/pds6502.py $(OUR_SRC)
+$(ROOT)/asm/out/prg.bin: $(ROOT)/tools/pds_extract.py $(ROOT)/asm/build.py $(ROOT)/asm/pds6502.py $(wildcard $(ROOT)/../pds6502/pds6502.py) $(OUR_SRC)
 	$(PYTHON) $(ROOT)/asm/build.py
 
 rom: $(ROOT)/asm/out/magician-rebuilt.nes
