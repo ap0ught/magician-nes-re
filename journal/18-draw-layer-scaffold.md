@@ -387,12 +387,17 @@ after `mptrh`). `$00` and `$FF` both mean off.
 
 The mark follows the object, so it changes when he does. Control bits 3-2
 clear means nobody is there and nothing is drawn. Otherwise obaggro gates
-the colour. Level 1 is a 2×2 of tile `$B2`: green when he is friendly,
-red once he is aggressive. The segmented bar is level 2. Tile `$B2` is the
-solid block in the sprite banks `setspr` installs (`s120-3`). Gameplay
-loads `spr.pal`. Palette 3 colour 3 is green `$3A` (attribute `$03`) and
-palette 1 colour 3 is red `$36` (attribute `$01`). Palette 2 colour 3 is
-still white `$30`, and that is the bar. A column whose X+8 would
+the colour. Level 1 is a 2×2 of tile `$B2`. `$0745` counts 1..60: the glow
+is drawn for 1..30 and left off for 31..60, so the dim half is his own
+colours. The latch stays set. Tile `$B2` is the solid block in the sprite
+banks `setspr` installs (`s120-3`): 55 pixels of colour index 3. Friendly
+uses attribute `$03`, and palette 3 colour 3 is green `$3A`. Hostile uses
+that same attribute and, on the bright half, queues `$06` and `$16` into
+`cursprpal` palette 3. Measured on this machine's QuickNES palette, `$16`
+is (150, 18, 1) and `$36` — palette 1's colour 3 — is (214, 159, 152),
+which is why attribute `$01` stayed his ordinary robe. The dim half and a
+friendly frame copy those two bytes back from `orgsprpal`. Palette 2
+colour 3 stays `$30`, and that is the bar. A column whose X+8 would
 pass `$FF` is not drawn, so a bar anchored at `$F8` is one segment and
 the glow keeps its left column.
 

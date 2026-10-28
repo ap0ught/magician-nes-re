@@ -17,38 +17,44 @@
 ;     * obaggro = 0 with a control set is friendly. obaggro = 1 is the
 ;       attack control with the count run out
 ;
-;   The glow is a 2x2 of tile $B2, the solid block in the sprite banks
-;   `setspr` installs (`ldy #s120-3` in x5.pds). Bank $47 tile $32 is
-;   that block: 55 pixels of colour index 3 and a 9-pixel index-2 stripe.
+;   The glow is his own sprites, not a block drawn above him. The monk's
+;   standing frame is ten tiles, $74-$7D, a 16x40 of two columns and five
+;   rows (slot 5 frame header $A372: x offsets $F8/$00, y offsets
+;   $EC/$F4/$FC/$04/$0C). frame (slot 2 $9759) plants those at
+;   (obxl-mapx, obyl-mapy) before this hook runs, and facing right
+;   subtracts another 8 from the x origin first, so the columns sit at
+;   x-16 and x-8. A bright frame ORs attribute $03 onto those sprites
+;   and leaves the flip bits. Tile $B2 is not drawn for the glow.
+;
 ;   Gameplay loads spal00, which is spr.pal, through movepal with X=$1F:
 ;
 ;     pal 0 ($3F10)  $0F $0F $27 $37   the player ($27 is his tunic)
-;     pal 1 ($3F14)  $0F $0F $26 $36   $36 is (214,159,152), pale salmon
+;     pal 1 ($3F14)  $0F $0F $26 $36   his robe. Attribute $01 is this
 ;     pal 2 ($3F18)  $0F $0F $10 $30   the white bar. Not written here
-;     pal 3 ($3F1C)  $0F $0F $2A $3A   friendly, colour 3 is green $3A
+;     pal 3 ($3F1C)  $0F $0F $2A $3A   the pulse. Friendly stays green
 ;
 ;   Measured on this machine's QuickNES palette (block 7): $36 is
-;   (214,159,152) and $26 is (224,90,72). Pointing the glow at attribute
-;   $01 leaves that pale fill, which is his ordinary robe. $16 is
-;   (150,18,1), a real red; $06 is (82,0,0), the dark stripe. $15 is
-;   (153,0,92), magenta, so the fill is $16.
+;   (214,159,152) and $26 is (224,90,72), so attribute $01 does not
+;   change the robe. $16 is (150,18,1) and $06 is (82,0,0). Both pulses
+;   share attribute $03. A hostile bright frame queues $06/$16 into
+;   cursprpal palette 3, which nmi0 copies at vblank; a friendly frame
+;   leaves the green. Nothing here writes $2006/$2007. The dim half, a
+;   friendly frame, and a cleared red flag copy those two bytes back
+;   from orgsprpal. Palette 0 and palette 2 are not touched, so the
+;   player and the white bar stay. Sprites whose tile is outside
+;   $74-$7D are not recolored, which is what keeps the player. Title
+;   entry runs initcols, which clears cursprpal, so a red left over
+;   when the latch drops does not survive the title.
 ;
-;   Friendly keeps attribute $03 and the green bytes. Hostile bright
-;   uses the same attribute and queues $06/$16 into cursprpal palette 3
-;   (the bytes nmi0 copies to $3F00). Nothing here writes $2006/$2007.
-;   The dim half and a friendly frame copy those two bytes back from
-;   orgsprpal. Palette 0 and palette 2 are not touched, so the player
-;   and the white bar stay. Title entry runs initcols, which clears
-;   cursprpal, so a red left over when the latch drops does not survive
-;   the title.
-;
-;   inspph ($0745) counts 1..60: 1..30 draws the glow, 31..60 does not,
-;   so the dim half is his own colours. $FF starts the count at 1.
-;   The latch stays set. insppal ($0747) is $5A while the red is queued.
+;   inspph ($0745) counts 1..60: 1..30 recolors the body, 31..60 does
+;   not, and the sprite list was rebuilt this frame in his own colours.
+;   $FF starts the count at 1. The latch stays set. insppal ($0747) is
+;   $5A while the red is queued.
 ;
 ;   insppow (written by obinspect from firespell's t2, which is 1..4):
 ;
-;     * 1: the glow only. A zero obhbar draws no bar, and the glow stays
+;     * 1: the body recolor only. A zero obhbar draws no bar, and the
+;       recolor stays
 ;     * 2: the glow, then obhbar copies of tile $B2 when that count is
 ;       not zero, then one tile $D8 when obven is not zero. That is the
 ;       harm path's own test (x4.pds, lda obven,x / beq), not a 0-20 scale
@@ -72,7 +78,7 @@
 ;   that did not fit is the complete one on the next frame.
 ;
 ;   IN:  none. Called by farjsr67, so rts returns to it.
-;   OUT: sprites added above each marked object
+;   OUT: marked bodies recolored; bars and pips added for powers 2..4
 ;   USES: A, X, Y, t0..t7
 ;
 ;   Written by us. Eurocom's source is read-only and pinned; see README.md.
@@ -81,7 +87,8 @@ bar_tile   equ $b2
 mark_attr  equ $02
 grn_attr   equ $03
 mark_above equ $18
-glow_above equ $38
+body_lo    equ $74
+body_hi    equ $7e
 ven_tile   equ $d8
 tile_eth   equ $c8
 tile_exp   equ $d8
@@ -144,55 +151,15 @@ ib_mark jsr obaggro
         sta t4
         lda t1
         sta t7
-        sec
-        sbc #glow_above
-        bcs ib_gy
-        plp
-        jmp ib_ret
-ib_gy   sta t5
         lda inspph
         cmp #31
         bcs ib_dim
         plp
-        beq ib_col
+        beq ib_hue
         jsr ib_red
-ib_col  lda #grn_attr
-        sta t3
-        lda #bar_tile
-        sta t2
-        lda t5
-        sta t1
-        jsr addspr
-        lda t4
-        clc
-        adc #8
-        bcs ib_bl
-        sta t0
-        lda t5
-        sta t1
-        jsr addspr
-        lda t4
-        sta t0
-        lda t5
-        clc
-        adc #8
-        sta t1
-        jsr addspr
-        lda t4
-        clc
-        adc #8
-        sta t0
-        jsr addspr
+ib_hue  jsr ib_tint
         jmp ib_lv
 ib_dim  plp
-        jmp ib_lv
-ib_bl   lda t4
-        sta t0
-        lda t5
-        clc
-        adc #8
-        sta t1
-        jsr addspr
 ib_lv   lda insppow
         cmp #2
         bcc ib_ret
@@ -315,6 +282,55 @@ im_put  sta t2
         sta t3
         jsr addspr
 im_out  rts
+
+; OR attribute $03 onto this object's standing sprites. X survives.
+; t4 is the screen x, t7 the screen y. Columns are x-16, x-8 and x
+; (the two the frame uses, plus the facing-right shift). Rows are
+; y-20, y-12, y-4, y+4 and y+12. Flip bits stay. Any other tile,
+; including the player and tile $B2, is left where the game put it.
+ib_tint ldy #0
+it_n    cpy sprind
+        beq it_out
+        tya
+        pha
+        asl
+        asl
+        tay
+        lda spr+1,y
+        cmp #body_lo
+        bcc it_sk
+        cmp #body_hi
+        bcs it_sk
+        lda spr+3,y
+        sec
+        sbc t4
+        cmp #$f0
+        beq it_yy
+        cmp #$f8
+        beq it_yy
+        cmp #$00
+        bne it_sk
+it_yy   lda spr,y
+        sec
+        sbc t7
+        cmp #$ec
+        beq it_ok
+        cmp #$f4
+        beq it_ok
+        cmp #$fc
+        beq it_ok
+        cmp #$04
+        beq it_ok
+        cmp #$0c
+        bne it_sk
+it_ok   lda spr+2,y
+        ora #grn_attr
+        sta spr+2,y
+it_sk   pla
+        tay
+        iny
+        bne it_n
+it_out  rts
 
 ; SEC when t6 more sprites would make nine or more on y = t1.
 ; X survives. t7 is free: the anchor y is already in t5.

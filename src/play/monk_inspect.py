@@ -38,6 +38,7 @@ STATE = ROOT / "logs" / "saves" / "monk-before-cast.state"
 # The latch bytes are the slack under x0.pds's RAM-overflow guard.
 LATCH = ram.f("insplatch").addr
 POWER = ram.f("insppow").addr
+PULSE = ram.f("inspph").addr
 LATCH_ON = 0x5A
 MONK = 0x11
 DOOR_X = 0x0EA8
@@ -256,6 +257,40 @@ def reach_monk(emu: BizHawk, obtyp: int, obchr: int, obxl: int, obxh: int):
     return found
 
 
+def describe_sprites(img: bytes) -> str:
+    """OAM tiles $74-$7D and anything else parked above the monk.
+
+    spr is $0200 and sprind is $00B0. ram.f does not export those two;
+    they are the sprite buffer, not a named gameplay field.
+    """
+    n = img[0x00B0]
+    spr = 0x0200
+    pal = img[0x04F2:0x04F4].hex()
+    rows = [f"pal3={pal} sprind={n}"]
+    for i in range(min(n, 64)):
+        o = spr + i * 4
+        y, tile, attr, x = img[o], img[o + 1], img[o + 2], img[o + 3]
+        if 0x74 <= tile <= 0x7D or y < 0x60:
+            rows.append(f"  {i}: y=${y:02X} t=${tile:02X} a=${attr:02X} x=${x:02X}")
+    return "\n".join(rows)
+
+
+def wait_bright(emu: BizHawk) -> int:
+    """Step until the pulse is inside the bright half, past its first frame.
+
+    The palette and the glow are uploaded at the next vblank, so phase 1
+    is still showing the previous frame. Phase 2..20 has already been
+    bright for a frame.
+    """
+    for _ in range(80):
+        phase = emu.work_ram()[PULSE]
+        if 2 <= phase <= 20:
+            return phase
+        emu.step((), 1)
+    fail(emu, f"the pulse never went bright (phase=${emu.work_ram()[PULSE]:02X})")
+    return 0
+
+
 def wait_latch(emu: BizHawk) -> None:
     for _ in range(200):
         emu.step((), 1)
@@ -311,7 +346,10 @@ def main() -> int:
         img = emu.work_ram()
         if img[obchr + slot] & 0x03 != 0x01:
             fail(emu, "the cast changed his count")
+        phase = wait_bright(emu)
         friendly = emu.screenshot("monk-friendly")
+        say(f"friendly phase=${phase:02X}")
+        say(describe_sprites(emu.work_ram()))
         if img[POWER] != 1:
             fail(emu, f"level-1 cast stored power ${img[POWER]:02X}")
         say(f"friendly mark, obchr=${img[obchr + slot]:02X} "
@@ -336,15 +374,18 @@ def main() -> int:
         if img[LATCH] != LATCH_ON:
             fail(emu, "the latch dropped when he turned")
         emu.step((), 8)
+        phase = wait_bright(emu)
         hostile = emu.screenshot("monk-bar")
-        say(f"bar, obchr=${img[obchr + slot]:02X}")
+        say(f"bar, obchr=${emu.work_ram()[obchr + slot]:02X} phase=${phase:02X}")
+        say(describe_sprites(emu.work_ram()))
 
         journal = ROOT / "journal"
-        for src, name in ((friendly, "18-monk-friendly.png"),
-                          (hostile, "18-monk-bar.png")):
-            dest = journal / name
-            shutil.copyfile(src, dest)
-            say(f"copied {dest}")
+        bar_dest = journal / "18-monk-bar.png"
+        friendly_dest = journal / "18-monk-friendly.png"
+        shutil.copyfile(hostile, bar_dest)
+        shutil.copyfile(friendly, friendly_dest)
+        say(f"copied {bar_dest}")
+        say(f"copied {friendly_dest}")
         say(f"shots {before} {friendly} {hostile}")
     return 0
 

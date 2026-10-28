@@ -14,13 +14,16 @@ A cast costs spelmana[slot] times the power firespell builds with `iny`
 byte and the high byte, which firespell loads from mul8's Y. For this
 spell that is 1, 2, 3, 4.
 
-The drawer is executed. The glow is on for inspph 1..30 and off for
-31..60, so the dim half leaves his own colours. Hostile bright queues
-$06/$16 into cursprpal palette 3 (index 2 and 3); friendly leaves the
-spr.pal green $2A/$3A. The bar stays on palette 2. Level 2 adds a pip
-when obven is not zero (the harm path's beq). Level 3 adds a pip per
-shield byte that is not zero; those counters are write-only, so the
-pip is the stored byte. Level 4 adds one tile from obweak's four exits.
+The drawer is executed. The body recolor is on for inspph 1..30 and
+off for 31..60, so the dim half leaves his own colours. Both pulses
+OR attribute $03 onto his 10 standing sprites (tiles $74-$7D). Hostile
+bright queues $06/$16 into cursprpal palette 3 (index 2 and 3);
+friendly leaves the spr.pal green $2A/$3A. Neither adds a sprite, and
+tile $B2 is not drawn above him. The bar stays on palette 2. Level 2
+adds a pip when obven is not zero (the harm path's beq). Level 3 adds
+a pip per shield byte that is not zero; those counters are write-only,
+so the pip is the stored byte. Level 4 adds one tile from obweak's
+four exits.
 """
 
 import sys
@@ -143,19 +146,40 @@ for name, addr in (
 BAR = 0xB2
 VEN = 0xD8
 ATTR = 0x02
-GRN = 0x03
-# Hostile uses the same attribute as friendly. The red is cursprpal,
-# not a second attribute: palette 1's $36 is pale salmon, not red.
-RED = 0x03
+# His robe is palette 1 with the horizontal flip the frame stores.
+# The pulse ORs on palette 3 and leaves the flip bit.
+ROBE = 0x41
+GLOW = 0x43
 ORG = 0x04C4
 CUR = 0x04E4
 # spr.pal through movepal, X=$1F. Palette 3 is the last four bytes.
 SPR = bytes.fromhex("0F0F2737 0F0F2636 0F0F1030 0F0F2A3A")
-# 2x2 glow above the bar. Screen y $80, raised by $38.
-GLOW_Y = (0x48, 0x48, 0x50, 0x50)
-GLOW_X = (0x40, 0x48, 0x40, 0x48)
 # obweak exits: ethereal, explode-only, neither, damage.
 CLASS = {0x8C: 0xC8, 0x0C: 0xD8, 0x2C: 0xD0, 0x1C: 0xDE}
+# Standing frame: two columns, five rows, tiles $74-$7D. A $74 that is
+# not on that body, and one player sprite, must keep their attributes.
+DECOY = [(0x08, 0x30, 0x74, 0x01), (0x18, 0x28, 0x12, 0x00)]
+
+
+def standing(x, y, attr):
+    """The monk's 10 sprites, in the order frame draws them."""
+    rows = (0xEC, 0xF4, 0xFC, 0x04, 0x0C)
+    cols = (0xF8, 0x00)
+    out = []
+    tile = 0x74
+    for dy in rows:
+        for dx in cols:
+            out.append(((x + dx) & 0xFF, (y + dy) & 0xFF, tile, attr))
+            tile += 1
+    return out
+
+
+def glowed(x=0x40, y=0x80):
+    return standing(x, y, GLOW) + DECOY
+
+
+def robed(x=0x40, y=0x80):
+    return standing(x, y, ROBE) + DECOY
 
 
 last_phase = 0
@@ -185,6 +209,15 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
     ram[need("insppal")] = flag
     ram[ORG:ORG + 16] = SPR
     ram[CUR:CUR + 16] = SPR if cur is None else cur
+    seed = standing(x, y, ROBE) + DECOY
+    ram[need("sprind")] = len(seed)
+    spr0 = need("spr")
+    for i, (sx, sy, tile, attr) in enumerate(seed):
+        o = spr0 + i * 4
+        ram[o] = sy
+        ram[o + 1] = tile
+        ram[o + 2] = attr
+        ram[o + 3] = sx
     if x2 is not None:
         ram[need("obtyp") + 1] = 0x11
         ram[need("obchr") + 1] = obchr
@@ -215,66 +248,61 @@ def draw(obchr, power, obhel=0xFF, obven=0, shields=(0, 0, 0, 0),
     return out
 
 
-def tiles(sprites):
-    return [s[2] for s in sprites]
-
-
-def glow(attr):
-    return [(GLOW_X[i], GLOW_Y[i], BAR, attr) for i in range(4)]
-
-
-RED_GLOW = glow(RED)
-GRN_GLOW = glow(GRN)
 BAR_ROW = [(0x40 + 8 * i, 0x68, BAR, ATTR) for i in range(7)]
+SEEDED = len(glowed())
 
 angry = draw(0x1C, 1)
-check("level 1 aggressive is the red glow and not the bar",
-      angry == RED_GLOW and all(s[1] != 0x68 for s in angry)
+check("level 1 hostile recolors his 10 sprites and adds none above him",
+      angry == glowed() and len(angry) == SEEDED
+      and [s[2] for s in angry[:10]] == list(range(0x74, 0x7E))
+      and all(s[2] != BAR for s in angry)
+      and all(s[3] == GLOW for s in angry[:10])
+      and angry[10:] == DECOY
       and last_phase == 1 and last_flag == 0x5A
       and last_pal[0x0E] == 0x06 and last_pal[0x0F] == 0x16
       and last_pal[0x02:0x04] == bytes((0x27, 0x37))
       and last_pal[0x0A:0x0C] == bytes((0x10, 0x30)),
       f"{angry} phase={last_phase:02X} flag={last_flag:02X} pal={last_pal.hex()}")
 friendly = draw(0x1D, 1)
-check("level 1 friendly is the green glow and not a plus",
-      friendly == GRN_GLOW and len(friendly) == 4
+check("level 1 friendly recolors the same sprites and leaves palette 3 green",
+      friendly == glowed() and len(friendly) == SEEDED
       and last_flag == 0 and last_pal[0x0E:0x10] == bytes((0x2A, 0x3A)),
       f"{friendly} flag={last_flag:02X} pal={last_pal.hex()}")
 dim = draw(0x1C, 1, phase=30, flag=0x5A,
            cur=bytes.fromhex("0F0F2737 0F0F2636 0F0F1030 0F0F0616"))
-check("level 1 dim drops the glow, restores the green, and advances",
-      dim == [] and last_phase == 31 and last_flag == 0
+check("level 1 dim leaves his robe, restores the green, and advances",
+      dim == robed() and last_phase == 31 and last_flag == 0
       and last_pal[0x0E:0x10] == bytes((0x2A, 0x3A)),
       f"{dim} phase={last_phase:02X} flag={last_flag:02X} pal={last_pal.hex()}")
 check("a phase of $FF starts the bright half",
-      draw(0x1D, 1, phase=0xFF) == GRN_GLOW and last_phase == 1)
+      draw(0x1D, 1, phase=0xFF) == glowed() and last_phase == 1)
 check("a phase of 60 wraps back to the bright half",
-      draw(0x1C, 1, phase=60) == RED_GLOW and last_phase == 1
+      draw(0x1C, 1, phase=60) == glowed() and last_phase == 1
       and last_pal[0x0F] == 0x16)
 dim_bar = draw(0x1C, 2, phase=30)
-check("level 2 dim leaves the white bar and draws no glow",
-      dim_bar == BAR_ROW and last_phase == 31
+check("level 2 dim leaves the white bar and does not recolor him",
+      dim_bar == robed() + BAR_ROW and last_phase == 31
       and last_pal[0x0A:0x0C] == bytes((0x10, 0x30)),
       str(dim_bar))
-check("level 2 adds the white bar under the red glow",
-      draw(0x1C, 2, obven=0) == RED_GLOW + BAR_ROW,
+check("level 2 adds the white bar under the recolored body",
+      draw(0x1C, 2, obven=0) == glowed() + BAR_ROW,
       str(draw(0x1C, 2, obven=0)))
-check("level 2 adds the white bar under the green glow too",
-      draw(0x1D, 2) == GRN_GLOW + BAR_ROW, str(draw(0x1D, 2)))
+check("level 2 adds the white bar under the friendly body too",
+      draw(0x1D, 2) == glowed() + BAR_ROW, str(draw(0x1D, 2)))
 ven = draw(0x1C, 2, obven=1)
 check("level 2 adds one venom pip under the bar when obven is set",
-      ven == RED_GLOW + BAR_ROW + [(0x40, 0x70, VEN, ATTR)], str(ven))
+      ven == glowed() + BAR_ROW + [(0x40, 0x70, VEN, ATTR)], str(ven))
 
 one = draw(0x1C, 3, shields=(0xFF, 0, 0, 0))
 check("level 3 adds one pip for a non-zero shield byte",
-      one == RED_GLOW + BAR_ROW + [(0x40, 0x60, BAR, ATTR)], str(one))
+      one == glowed() + BAR_ROW + [(0x40, 0x60, BAR, ATTR)], str(one))
 four = draw(0x1C, 3, shields=(0xFF, 1, 2, 0xFF))
 check("level 3 adds one pip per non-zero shield, in order",
-      four[len(RED_GLOW) + 7:] == [(0x40 + 8 * i, 0x60, BAR, ATTR)
-                                   for i in range(4)],
-      str(four[len(RED_GLOW) + 7:]))
-check("level 3 with every shield clear adds only the glow and the bar",
-      draw(0x1C, 3) == RED_GLOW + BAR_ROW, str(draw(0x1C, 3)))
+      four[SEEDED + 7:] == [(0x40 + 8 * i, 0x60, BAR, ATTR)
+                            for i in range(4)],
+      str(four[SEEDED + 7:]))
+check("level 3 with every shield clear adds only the body and the bar",
+      draw(0x1C, 3) == glowed() + BAR_ROW, str(draw(0x1C, 3)))
 
 for obchr, tile in CLASS.items():
     got = draw(obchr, 4)
@@ -282,29 +310,28 @@ for obchr, tile in CLASS.items():
     check(f"level 4 obchr ${obchr:02X} adds tile ${tile:02X}",
           mark == [(0x40, 0x58, tile, ATTR)], str(got))
 
-check("a zero obhbar keeps the glow and draws no bar",
-      draw(0x1C, 2, obhel=0x1F) == RED_GLOW,
+check("a zero obhbar keeps the recolor and draws no bar",
+      draw(0x1C, 2, obhel=0x1F) == glowed(),
       str(draw(0x1C, 2, obhel=0x1F)))
 check("a zero obhbar at level 4 still adds venom, shields and the class",
       draw(0x1C, 4, obhel=0x1F, obven=9, shields=(0xFF,) * 4) ==
-      RED_GLOW
+      glowed()
       + [(0x40, 0x70, VEN, ATTR)]
       + [(0x40 + 8 * i, 0x60, BAR, ATTR) for i in range(4)]
       + [(0x40, 0x58, 0xDE, ATTR)],
       str(draw(0x1C, 4, obhel=0x1F, obven=9, shields=(0xFF,) * 4)))
 check("an object with no interact control is not marked",
-      draw(0x00, 4) == [], str(draw(0x00, 4)))
+      draw(0x00, 4) == robed(), str(draw(0x00, 4)))
 check("an object on the next screen is not marked",
-      draw(0x1C, 4, xh=1) == [], str(draw(0x1C, 4, xh=1)))
+      draw(0x1C, 4, xh=1) == robed(), str(draw(0x1C, 4, xh=1)))
 edge = draw(0x1C, 2, x=0xF8)
-check("x=$F8 keeps the glow's left column and does not wrap the bar",
-      edge == [(0xF8, 0x48, BAR, RED), (0xF8, 0x50, BAR, RED),
-               (0xF8, 0x68, BAR, ATTR)],
+check("x=$F8 recolors the body and does not wrap the bar",
+      edge == glowed(0xF8) + [(0xF8, 0x68, BAR, ATTR)]
+      and all(s[2] != BAR or s[1] == 0x68 for s in edge),
       str(edge))
 edge3 = draw(0x1C, 3, x=0xF8, shields=(0xFF, 0xFF, 0xFF, 0xFF))
 check("power 3 at x=$F8 draws the first shield pip and does not wrap",
-      edge3 == [(0xF8, 0x48, BAR, RED), (0xF8, 0x50, BAR, RED),
-                (0xF8, 0x68, BAR, ATTR), (0xF8, 0x60, BAR, ATTR)]
+      edge3 == glowed(0xF8) + [(0xF8, 0x68, BAR, ATTR), (0xF8, 0x60, BAR, ATTR)]
       and all(s[0] != 0x00 for s in edge3),
       str(edge3))
 edge4 = draw(0x1C, 4, x=0xF8, shields=(0xFF, 0xFF, 0xFF, 0xFF))
@@ -321,7 +348,8 @@ def bars_at(sprites, y=0x68):
 shared = draw(0x1C, 2, x2=0x80)
 check("two full bars on one y draw seven tiles and not a clipped eighth",
       bars_at(shared) == BAR_ROW
-      and sum(1 for s in shared if s[1] == 0x48) == 4,
+      and shared[:SEEDED] == glowed()
+      and all(s[1] != 0x48 for s in shared),
       str(bars_at(shared)))
 other = draw(0x1C, 2, x2=0x80, turn=0x00)
 check("the next frame draws the other object's complete bar",
