@@ -1001,11 +1001,12 @@ def match_score(image: bytearray, cart: bytes, offsets) -> tuple[int, int]:
     return hits, total
 
 
-def assemble_prg(cart_prg: bytes, verbose: bool,
+def assemble_prg(cart_prg: bytes | None, verbose: bool,
                   x7_table: bool = True, assume_banks: bool = True,
                   bank_groups: bool = True, seq_src: bool = True,
                   x7_vector: bool = True, split_banks: bool = True,
-                  ours: bool = True, asm_cls=None
+                  ours: bool = True, asm_cls=None,
+                  reset_vector: int | None = None,
                   ) -> tuple[bytearray, Assembler, list[str], list[str]]:
     # `asm_cls` exists so tools/whowrote.py can subclass the Assembler and keep a
     # per-module footprint of which PRG offsets each bank wrote. The build itself
@@ -1058,11 +1059,44 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
                 slots.append(None)
                 continue
             slots.append(slot)
-            hits, total = match_score(image, cart_prg, asm.data_offsets)
             why = PINNED_WHY.get(module, "PINNED (not searched)")
-            log.append(f"{module}: 8 KiB slot {slot:2d}  {hits:6d}/{total:6d} DAT "
-                       f"bytes match ({100.0 * hits / total if total else 0:5.1f}%)"
-                       f"  {why}")
+            if cart_prg is None:
+                log.append(f"{module}: 8 KiB slot {slot:2d}  (no cartridge)  {why}")
+            else:
+                hits, total = match_score(image, cart_prg, asm.data_offsets)
+                log.append(f"{module}: 8 KiB slot {slot:2d}  {hits:6d}/{total:6d} DAT "
+                           f"bytes match ({100.0 * hits / total if total else 0:5.1f}%)"
+                           f"  {why}")
+            continue
+        if cart_prg is None:
+            # No dump to score against. The pinned modules were handled above.
+            # The rest keep the slots the search falls through to when it finds
+            # no winner, which is what a cart-present build already does for
+            # these files.
+            slot = ASSUMED_SLOTS.get(module) if assume_banks else None
+            if slot is None:
+                log.append(f"{module}: *** SLOT NOT DETERMINED - not assembled ***")
+                unplaced.append(module)
+                slots.append(None)
+                continue
+            asm.restore(snap)
+            asm.emitted = {}
+            asm.data_offsets = set()
+            try:
+                asm.run_file(path, slot=slot,
+                             origin=MODULE_ORIGINS.get(module),
+                             window_slots=MODULE_WINDOW_SLOTS.get(module))
+            except Exception as exc:                    # noqa: BLE001
+                log.append(f"{module}: ASSUMED slot {slot:2d} DID NOT "
+                           f"ASSEMBLE: {type(exc).__name__}: {exc}")
+                unplaced.append(module)
+                slots.append(None)
+                continue
+            slots.append(slot)
+            tail = ("and is CHAINED onto the previous module in the project "
+                    "pass" if module in CHAINED else "")
+            log.append(f"{module}: 8 KiB slot {slot:2d}  *** ASSUMED, no cartridge "
+                       f"to score *** {tail}")
             continue
         best = None
         # Why each slot was rejected. Without this the search silently discards
@@ -1254,13 +1288,20 @@ def assemble_prg(cart_prg: bytes, verbose: bool,
         reset, slot15 = asm.sym.get("reset"), PINNED_SLOTS["X7.PDS"]
         if reset is None:
             break
-        want = cart_prg[0x1FFFC] | (cart_prg[0x1FFFD] << 8)
+        if cart_prg is not None:
+            want = cart_prg[0x1FFFC] | (cart_prg[0x1FFFD] << 8)
+            whose = "cartridge's reset"
+        elif reset_vector is not None:
+            want = reset_vector
+            whose = "recorded reset"
+        else:
+            break
         if attempt == 0:
             x7_off = reset - Assembler.slot_origin(slot15)
             x7_base = want - x7_off
             log.append(f"X7.PDS: reset is ${x7_off:04X} bytes into the module and "
-                       f"the cartridge's reset")
-            log.append(f"         vector is ${want:04X}, so the cartridge's X7 "
+                       f"the {whose}")
+            log.append(f"         vector is ${want:04X}, so X7 "
                        f"begins at ${x7_base:04X} --")
             log.append(f"         not ${Assembler.slot_origin(slot15):04X}. "
                        f"Re-running with x7 anchored there.")
@@ -1660,7 +1701,7 @@ def dat_file(name: str) -> pathlib.Path:
     raise SystemExit(f"no DAT file for {name!r} under {SRC / 'DAT'}")
 
 
-def build_chr(cart_chr: bytes, verbose: bool) -> tuple[bytearray, list[str]]:
+def build_chr(cart_chr: bytes | None, verbose: bool) -> tuple[bytearray, list[str]]:
     image = bytearray(CHR_SIZE)
     entries: list[tuple[pathlib.Path, int | None]] = []
     for name, _slot in CHR_SEND_ORDER:
@@ -1684,10 +1725,14 @@ def build_chr(cart_chr: bytes, verbose: bool) -> tuple[bytearray, list[str]]:
             continue
         image[off:off + len(data)] = data
         cursor = off + len(data)
-        if verbose:
+        if verbose and cart_chr is not None:
             same = cart_chr[off:off + len(data)] == data
             log.append(f"  chr {path.name:14s} at {off:#06x} "
                        f"{'exact' if same else 'differs'}")
+
+    if cart_chr is None:
+        log.append(f"CHR: {CHR_SIZE} bytes packed from DAT/, no cartridge to compare")
+        return image, log
 
     # Report how much of the rebuilt CHR agrees with the cartridge, page by page.
     exact = differ = 0
@@ -1717,6 +1762,13 @@ def main() -> int:
     ap.add_argument("--no-patches", action="store_true",
                     help="do not apply asm/patches.manifest; report the source-only "
                          "image. Useful for asking what the source alone achieves.")
+    ap.add_argument("--no-cart", action="store_true",
+                    help="do not open a cartridge dump. Modules land in the pinned "
+                         "and assumed slots, X7 is anchored to the reset vector "
+                         "recorded in asm/patches.py, and CHR is packed from DAT/. "
+                         "Every byte in the image comes from the vendored source. "
+                         "Pass --no-ours as well for a ROM that can be released: "
+                         "src/magician/SLOT*.PDS are transcriptions of Beta 1.")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--x7-level-table", choices=("on", "off"), default="on",
                     help="x7's `if 0=1` branch. On by default: it holds 27640 bytes "
@@ -1762,7 +1814,14 @@ def main() -> int:
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
-    cart_prg, cart_chr = read_cart(args.cart)
+    if args.no_cart:
+        cart_prg = cart_chr = None
+        # nmi, reset, irq. The reset half is the anchor X7 is fitted to. It is
+        # recorded in this repo; the dump is not opened.
+        reset_vector = int(patches.CARTS[patches.DEFAULT_CART]["vectors"][1])
+    else:
+        cart_prg, cart_chr = read_cart(args.cart)
+        reset_vector = None
 
     ours = not args.no_ours
     problems = check_our_manifest() if ours else []
@@ -1785,7 +1844,8 @@ def main() -> int:
         seq_src=(args.seq_src == "on"),
         x7_vector=(args.x7_vector == "on"),
         split_banks=(args.x7_bank_split == "on"),
-        ours=ours)
+        ours=ours,
+        reset_vector=reset_vector)
     if ours:
         prg_log = prep_log + prg_log
         verify_our_scenes(asm, prg, packed, prg_log)
@@ -1803,7 +1863,8 @@ def main() -> int:
     # then the manifest is applied, and both numbers are printed with the regions
     # that produced the difference. `asm/mkrom.py` applies the same manifest, so
     # the ROM and these numbers describe the same image.
-    source_only = sum(1 for a, b in zip(prg, cart_prg) if a == b)
+    source_only = (sum(1 for a, b in zip(prg, cart_prg) if a == b)
+                   if cart_prg is not None else len(prg))
     prg_log = list(prg_log)
     patch_report = None
     if args.no_patches:
@@ -1836,13 +1897,18 @@ def main() -> int:
         for key in sorted(asm.sym):
             fh.write(f"{key} = ${asm.sym[key]:04X}\n")
 
-    hits = sum(1 for a, b in zip(prg, cart_prg) if a == b)
+    hits = (sum(1 for a, b in zip(prg, cart_prg) if a == b)
+            if cart_prg is not None else len(prg))
     print("\n".join(prg_log))
     print("\n".join(chr_log))
-    print(f"\nPRG: {hits}/{len(prg)} bytes identical to the cartridge "
-          f"({100.0 * hits / len(prg):.1f}%)")
-    print(f"  of which from the source alone : {source_only} "
-          f"({100.0 * source_only / len(prg):.1f}%)")
+    if cart_prg is None:
+        print(f"\nPRG: {len(prg)} bytes assembled from the source, "
+              "no cartridge compared")
+    else:
+        print(f"\nPRG: {hits}/{len(prg)} bytes identical to the cartridge "
+              f"({100.0 * hits / len(prg):.1f}%)")
+        print(f"  of which from the source alone : {source_only} "
+              f"({100.0 * source_only / len(prg):.1f}%)")
     if patch_report is not None and patch_report.applied:
         filled = patch_report.matched_after
         print(f"  of which from the patch manifest: {filled} "

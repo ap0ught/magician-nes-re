@@ -1,0 +1,52 @@
+name: Source ROM
+
+# Builds a .nes from vendor/Magician-NES and nothing else. The cartridge dump
+# is not a build input. *.nes stays git-ignored; the file is a workflow artifact,
+# and a published release asset when this runs on a v* tag.
+#
+# Shrigley's terms still apply: educational use, not for sale. See LEGAL.md.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "asm/**"
+      - "vendor/Magician-NES/**"
+      - ".github/workflows/source-rom.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  source-rom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ap0ught/pds6502
+          ref: 0110a549cf7985a892b3d2914f4269c886dbd003
+          path: pds6502
+      - name: Assemble from the vendored source
+        env:
+          PDS6502_HOME: ${{ github.workspace }}/pds6502
+        run: make -C asm source-rom
+      - name: Upload the ROM
+        uses: actions/upload-artifact@v4
+        with:
+          name: magician-source
+          path: asm/out/magician-source.nes
+          if-no-files-found: error
+      - name: Publish a release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" asm/out/magician-source.nes \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Built from Eurocom's released PDS source with pds6502. No cartridge dump is an input. Chris Shrigley released that source for educational use. Do not sell this ROM or anything derived from it. https://shrigley.com/source_code_archive/" \
+            --latest
