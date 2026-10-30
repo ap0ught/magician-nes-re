@@ -20,7 +20,7 @@ ROOT   := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 # possible way to lose them.
 OUR_SRC := $(wildcard $(ROOT)/src/magician/*.PDS $(ROOT)/src/magician/*.SRC)
 
-.PHONY: all rom check verbose extract clean
+.PHONY: all rom check verbose extract clean source-rom
 
 all: $(ROOT)/asm/out/prg.bin
 
@@ -31,6 +31,13 @@ rom: $(ROOT)/asm/out/magician-rebuilt.nes
 
 $(ROOT)/asm/out/magician-rebuilt.nes: $(ROOT)/asm/out/prg.bin $(ROOT)/asm/mkrom.py
 	$(PYTHON) $(ROOT)/asm/mkrom.py
+
+# A ROM whose bytes all come from vendor/Magician-NES. No cartridge is opened.
+# src/magician/ is left out: SLOT*.PDS there are transcriptions of Beta 1.
+# The file is git-ignored (*.nes). `make source-rom` is what a release builds.
+source-rom:
+	$(PYTHON) $(ROOT)/asm/build.py --no-cart --no-ours --no-patches
+	$(PYTHON) $(ROOT)/asm/mkrom.py --no-patches --rom $(ROOT)/asm/out/magician-source.nes
 
 verbose:
 	$(PYTHON) $(ROOT)/asm/build.py --verbose
